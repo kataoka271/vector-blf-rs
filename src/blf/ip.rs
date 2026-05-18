@@ -1,4 +1,5 @@
 use super::error::{ParseError, ParseResult};
+use super::transport::Transport;
 use std::io::Read;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,10 @@ pub struct Ipv4 {
 }
 
 impl Ipv4 {
+    pub fn parse_transport(&self) -> ParseResult<Transport> {
+        Transport::parse(self.protocol, &self.data)
+    }
+
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {
         let version_ihl = read_u8(&mut r)?;
         if version_ihl >> 4 != 4 {
@@ -109,6 +114,10 @@ pub struct Ipv6 {
 }
 
 impl Ipv6 {
+    pub fn parse_transport(&self) -> ParseResult<Transport> {
+        Transport::parse(self.next_header, &self.data)
+    }
+
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {
         let mut word = [0u8; 4];
         r.read_exact(&mut word)?;

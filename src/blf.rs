@@ -5,6 +5,7 @@ pub mod message;
 mod object;
 mod objtype;
 pub mod raw;
+pub mod someip;
 pub mod transport;
 
 use encoder::{Decoder, Encoder};
@@ -16,6 +17,7 @@ use std::io::{Read, Seek, Write};
 pub use encoder::Timestamp;
 pub use error::ParseError;
 pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
+pub use someip::{MessageType, ReturnCode, SomeIp};
 pub use transport::{Tcp, TcpFlags, Transport, Udp};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan};
 pub use object::FileHeader;

@@ -1,5 +1,6 @@
 use super::error::{ParseError, ParseResult};
 use super::ip::IpProtocol;
+use super::someip::SomeIp;
 use std::io::Read;
 
 #[derive(Debug)]
@@ -28,6 +29,10 @@ pub struct Tcp {
 }
 
 impl Tcp {
+    pub fn parse_someip(&self) -> ParseResult<SomeIp> {
+        SomeIp::parse(self.data.as_slice())
+    }
+
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {
         let src_port = read_u16_be(&mut r)?;
         let dst_port = read_u16_be(&mut r)?;
@@ -71,6 +76,10 @@ pub struct Udp {
 }
 
 impl Udp {
+    pub fn parse_someip(&self) -> ParseResult<SomeIp> {
+        SomeIp::parse(self.data.as_slice())
+    }
+
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {
         let src_port = read_u16_be(&mut r)?;
         let dst_port = read_u16_be(&mut r)?;

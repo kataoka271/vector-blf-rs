@@ -1,3 +1,4 @@
+use super::doip::DoIp;
 use super::error::{ParseError, ParseResult};
 use super::ip::IpProtocol;
 use super::someip::SomeIp;
@@ -31,6 +32,10 @@ pub struct Tcp {
 impl Tcp {
     pub fn parse_someip(&self) -> ParseResult<SomeIp> {
         SomeIp::parse(self.data.as_slice())
+    }
+
+    pub fn parse_doip(&self) -> ParseResult<DoIp> {
+        DoIp::parse(self.data.as_slice())
     }
 
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {
@@ -78,6 +83,10 @@ pub struct Udp {
 impl Udp {
     pub fn parse_someip(&self) -> ParseResult<SomeIp> {
         SomeIp::parse(self.data.as_slice())
+    }
+
+    pub fn parse_doip(&self) -> ParseResult<DoIp> {
+        DoIp::parse(self.data.as_slice())
     }
 
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {

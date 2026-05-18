@@ -1,5 +1,6 @@
 mod encoder;
 mod error;
+pub mod doip;
 pub mod ip;
 pub mod message;
 mod object;
@@ -14,6 +15,7 @@ use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use object::{BaseObjectHeader, LogContainerHeader, ObjectHeaderV1, ObjectHeaderV2};
 use std::io::{Read, Seek, Write};
 
+pub use doip::{DiagMessage, DoIp, PayloadType};
 pub use encoder::Timestamp;
 pub use error::ParseError;
 pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};

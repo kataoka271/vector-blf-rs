@@ -1,6 +1,7 @@
 use super::encoder::{Decoder, Encoder};
 use super::error::ParseResult;
 use super::ip::Ip;
+use super::isotp::IsoTpFrame;
 use super::objtype::ObjType;
 use super::raw;
 use std::io::{Read, Write};
@@ -74,6 +75,12 @@ pub struct Can {
     pub data: Vec<u8>,
 }
 
+impl Can {
+    pub fn parse_isotp(&self) -> ParseResult<IsoTpFrame> {
+        IsoTpFrame::parse(&self.data)
+    }
+}
+
 #[derive(Debug)]
 pub struct CanFd {
     pub channel: u16,
@@ -88,6 +95,12 @@ pub struct CanFd {
     pub data: Vec<u8>,
 }
 
+impl CanFd {
+    pub fn parse_isotp(&self) -> ParseResult<IsoTpFrame> {
+        IsoTpFrame::parse(&self.data)
+    }
+}
+
 #[derive(Debug)]
 pub struct CanFd64 {
     pub channel: u8,
@@ -100,6 +113,12 @@ pub struct CanFd64 {
     pub esi: bool,
     pub dlc: u8,
     pub data: Vec<u8>,
+}
+
+impl CanFd64 {
+    pub fn parse_isotp(&self) -> ParseResult<IsoTpFrame> {
+        IsoTpFrame::parse(&self.data)
+    }
 }
 
 #[derive(Debug)]

@@ -1,5 +1,6 @@
 use super::encoder::{Decoder, Encoder};
 use super::error::ParseResult;
+use super::ip::Ip;
 use super::objtype::ObjType;
 use super::raw;
 use std::io::{Read, Write};
@@ -112,6 +113,12 @@ pub struct Ethernet {
     pub data: Vec<u8>,
 }
 
+impl Ethernet {
+    pub fn parse_ip(&self) -> ParseResult<Ip> {
+        Ip::parse(self.ether_type, &self.data)
+    }
+}
+
 #[derive(Debug)]
 pub struct EthernetEx {
     pub channel: u16,
@@ -121,6 +128,12 @@ pub struct EthernetEx {
     pub vlan: Option<Vlan>,
     pub ether_type: u16,
     pub data: Vec<u8>,
+}
+
+impl EthernetEx {
+    pub fn parse_ip(&self) -> ParseResult<Ip> {
+        Ip::parse(self.ether_type, &self.data)
+    }
 }
 
 #[derive(Debug)]

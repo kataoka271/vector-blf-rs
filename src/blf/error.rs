@@ -22,6 +22,9 @@ pub enum ParseError {
 
     #[error("Zlib error")]
     ZlibError,
+
+    #[error("Invalid data")]
+    InvalidData,
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;

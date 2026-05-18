@@ -1,5 +1,6 @@
 mod encoder;
 mod error;
+pub mod ip;
 pub mod message;
 mod object;
 mod objtype;
@@ -13,6 +14,7 @@ use std::io::{Read, Seek, Write};
 
 pub use encoder::Timestamp;
 pub use error::ParseError;
+pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan};
 pub use object::FileHeader;
 pub use objtype::ObjType;

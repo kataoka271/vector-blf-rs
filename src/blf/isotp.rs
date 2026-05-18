@@ -1,4 +1,5 @@
 use super::error::{ParseError, ParseResult};
+use super::uds::Uds;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowStatus {
@@ -45,6 +46,15 @@ pub enum IsoTpFrame {
 }
 
 impl IsoTpFrame {
+    /// Parse a UDS message from a SingleFrame. Returns InvalidData for all
+    /// other frame types — multi-frame payloads require a Reassembler.
+    pub fn parse_uds(&self) -> ParseResult<Uds> {
+        match self {
+            IsoTpFrame::SingleFrame { data } => Uds::parse(data),
+            _ => Err(ParseError::InvalidData),
+        }
+    }
+
     pub fn parse(data: &[u8]) -> ParseResult<Self> {
         if data.is_empty() {
             return Err(ParseError::InvalidData);
@@ -117,5 +127,67 @@ impl IsoTpFrame {
             block_size: data[1],
             min_separation_time: data[2],
         })
+    }
+}
+
+/// Stateful ISO-TP reassembler for a single sender/receiver pair.
+///
+/// Feed frames in order with `push()`; when it returns `Some(uds)` the
+/// multi-frame message is complete and the reassembler resets automatically.
+#[derive(Debug, Default)]
+pub struct Reassembler {
+    total_length: u32,
+    next_sn: u8,
+    buf: Vec<u8>,
+}
+
+impl Reassembler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed the next ISO-TP frame. Returns a complete UDS payload when the
+    /// last ConsecutiveFrame arrives, or `None` if more frames are needed.
+    /// Returns `Err` if a frame is out of sequence or the data is malformed.
+    pub fn push(&mut self, frame: &IsoTpFrame) -> ParseResult<Option<Uds>> {
+        match frame {
+            IsoTpFrame::SingleFrame { data } => {
+                self.reset();
+                Ok(Some(Uds::parse(data)?))
+            }
+            IsoTpFrame::FirstFrame { total_length, data } => {
+                self.reset();
+                self.total_length = *total_length;
+                self.next_sn = 1;
+                self.buf.extend_from_slice(data);
+                Ok(None)
+            }
+            IsoTpFrame::ConsecutiveFrame { sequence_number, data } => {
+                if self.total_length == 0 {
+                    return Err(ParseError::InvalidData);
+                }
+                if *sequence_number != self.next_sn {
+                    self.reset();
+                    return Err(ParseError::InvalidData);
+                }
+                self.next_sn = (self.next_sn + 1) & 0x0F;
+                let remaining = self.total_length as usize - self.buf.len();
+                self.buf.extend_from_slice(&data[..remaining.min(data.len())]);
+                if self.buf.len() >= self.total_length as usize {
+                    let payload = std::mem::take(&mut self.buf);
+                    self.reset();
+                    Ok(Some(Uds::parse(&payload)?))
+                } else {
+                    Ok(None)
+                }
+            }
+            IsoTpFrame::FlowControl { .. } => Ok(None),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.total_length = 0;
+        self.next_sn = 0;
+        self.buf.clear();
     }
 }

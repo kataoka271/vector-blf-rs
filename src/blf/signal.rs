@@ -1,3 +1,7 @@
+use super::error::{ParseError, ParseResult};
+use std::collections::HashMap;
+use std::io::BufRead;
+
 /// Bit ordering convention for signal extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteOrder {
@@ -92,6 +96,104 @@ fn sign_extend(value: u64, bit_length: u32) -> i64 {
     }
 }
 
+/// A named signal bound to a specific CAN message ID.
+#[derive(Debug, Clone)]
+pub struct SignalDef {
+    pub name: String,
+    pub message_id: u32,
+    pub signal: Signal,
+}
+
+impl SignalDef {
+    pub fn decode(&self, data: &[u8]) -> Option<f64> {
+        self.signal.decode(data)
+    }
+}
+
+/// A collection of signal definitions keyed by CAN message ID, loadable from CSV.
+///
+/// CSV format (header required):
+/// ```text
+/// message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+/// 0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
+/// 0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+/// ```
+/// `message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`
+/// (case-insensitive). `is_signed` accepts `true`/`false` or `1`/`0`.
+#[derive(Debug, Default)]
+pub struct SignalDb {
+    map: HashMap<u32, Vec<SignalDef>>,
+}
+
+impl SignalDb {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_csv<R: std::io::Read>(reader: R) -> ParseResult<Self> {
+        let mut db = Self::new();
+        for line in std::io::BufReader::new(reader).lines() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with("message_id") {
+                continue;
+            }
+            let p: Vec<&str> = line.splitn(8, ',').map(str::trim).collect();
+            if p.len() < 8 {
+                return Err(ParseError::InvalidData);
+            }
+            let message_id = parse_u32(p[0])?;
+            let name = p[1].to_string();
+            let start_bit = parse_u32(p[2])?;
+            let bit_length = parse_u32(p[3])?;
+            let byte_order = match p[4].to_lowercase().as_str() {
+                "intel" => ByteOrder::Intel,
+                "motorola" => ByteOrder::Motorola,
+                _ => return Err(ParseError::InvalidData),
+            };
+            let is_signed = match p[5].to_lowercase().as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => return Err(ParseError::InvalidData),
+            };
+            let scale = p[6].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
+            let offset = p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
+            db.insert(SignalDef {
+                name,
+                message_id,
+                signal: Signal { start_bit, bit_length, byte_order, is_signed, scale, offset },
+            });
+        }
+        Ok(db)
+    }
+
+    pub fn insert(&mut self, def: SignalDef) {
+        self.map.entry(def.message_id).or_default().push(def);
+    }
+
+    /// All signal definitions for the given message ID.
+    pub fn signals(&self, message_id: u32) -> &[SignalDef] {
+        self.map.get(&message_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Decode all signals for `message_id` from `data`. Signals that extend
+    /// outside `data` are silently skipped.
+    pub fn extract(&self, message_id: u32, data: &[u8]) -> Vec<(&str, f64)> {
+        self.signals(message_id)
+            .iter()
+            .filter_map(|def| def.signal.decode(data).map(|v| (def.name.as_str(), v)))
+            .collect()
+    }
+}
+
+fn parse_u32(s: &str) -> ParseResult<u32> {
+    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"));
+    match hex {
+        Some(h) => u32::from_str_radix(h, 16).map_err(|_| ParseError::InvalidData),
+        None => s.parse::<u32>().map_err(|_| ParseError::InvalidData),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +246,43 @@ mod tests {
         };
         // raw=100 → 100*0.5 - 40 = 10.0
         assert_eq!(s.decode(&[100]), Some(10.0));
+    }
+
+    #[test]
+    fn csv_round_trip() {
+        let csv = "\
+message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
+0x100,Throttle,16,8,Intel,false,0.4,0.0
+0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+";
+        let db = SignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(0x100).len(), 2);
+        assert_eq!(db.signals(0x200).len(), 1);
+        assert_eq!(db.signals(0x300).len(), 0);
+
+        // EngineSpeed: raw=0x0100 → 256 * 0.25 = 64.0
+        let data = [0x00u8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let vals = db.extract(0x100, &data);
+        let speed = vals.iter().find(|(n, _)| *n == "EngineSpeed").map(|(_, v)| *v);
+        assert_eq!(speed, Some(64.0));
+    }
+
+    #[test]
+    fn csv_decimal_id() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   256,Sig,0,8,Intel,false,1.0,0.0\n";
+        let db = SignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(256).len(), 1); // 256 == 0x100
+    }
+
+    #[test]
+    fn csv_skips_comments_and_blanks() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   # this is a comment\n\
+                   \n\
+                   0x10,Voltage,0,8,Intel,false,0.1,0.0\n";
+        let db = SignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(0x10).len(), 1);
     }
 }

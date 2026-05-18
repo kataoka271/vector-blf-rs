@@ -22,7 +22,7 @@ pub use encoder::Timestamp;
 pub use error::ParseError;
 pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
 pub use isotp::{FlowStatus, IsoTpFrame, Reassembler};
-pub use signal::{ByteOrder, Signal};
+pub use signal::{ByteOrder, Signal, SignalDb, SignalDef};
 pub use someip::{MessageType, ReturnCode, SomeIp};
 pub use uds::{Nrc, ServiceId, Uds};
 pub use transport::{Tcp, TcpFlags, Transport, Udp};

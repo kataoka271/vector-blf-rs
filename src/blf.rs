@@ -187,7 +187,7 @@ impl<W: Write + Seek> Writer<W> {
             obj_size: self.tmp.len() as u32 + OBJECT_HEADER_SIZE,
             obj_type: obj.message.obj_type(),
         };
-        let obj_header = ObjectHeaderV2 {
+        let obj_header = ObjectHeaderV1 {
             timestamp: obj.timestamp,
         };
         base_header.encode(&mut self.buf)?;

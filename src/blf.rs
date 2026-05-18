@@ -8,6 +8,7 @@ mod objtype;
 pub mod raw;
 pub mod someip;
 pub mod transport;
+pub mod uds;
 
 use encoder::{Decoder, Encoder};
 use error::ParseResult;
@@ -20,6 +21,7 @@ pub use encoder::Timestamp;
 pub use error::ParseError;
 pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
 pub use someip::{MessageType, ReturnCode, SomeIp};
+pub use uds::{Nrc, ServiceId, Uds};
 pub use transport::{Tcp, TcpFlags, Transport, Udp};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan};
 pub use object::FileHeader;

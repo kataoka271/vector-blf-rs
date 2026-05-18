@@ -1,4 +1,5 @@
 use super::error::{ParseError, ParseResult};
+use super::uds::Uds;
 use std::io::Read;
 
 /// DoIP standard port (ISO 13400-2).
@@ -115,6 +116,12 @@ pub struct DiagMessage {
     pub src_addr: u16,
     pub target_addr: u16,
     pub data: Vec<u8>,
+}
+
+impl DiagMessage {
+    pub fn parse_uds(&self) -> ParseResult<Uds> {
+        Uds::parse(&self.data)
+    }
 }
 
 fn read_u8<R: Read>(r: &mut R) -> ParseResult<u8> {

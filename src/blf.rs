@@ -6,7 +6,6 @@ pub mod isotp;
 pub mod message;
 mod object;
 mod objtype;
-pub mod raw;
 pub mod signal;
 pub mod someip;
 pub mod transport;

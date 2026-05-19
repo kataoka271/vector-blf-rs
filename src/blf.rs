@@ -38,6 +38,137 @@ const BASE_OBJECT_HEADER_SIZE: u32 = 16;
 const ZLIB_DEFLATE: u16 = 2;
 const BUF_SIZE: usize = 4096;
 
+// Reads one LogContainer from `r` at its current position, appending
+// the decompressed payload into `out`. `tmp` is a reusable scratch buffer.
+fn decompress_container<R: Read>(
+    r: &mut R,
+    out: &mut Vec<u8>,
+    tmp: &mut Vec<u8>,
+) -> ParseResult<()> {
+    let base_header = BaseObjectHeader::decode(&mut *r)?;
+    if base_header.obj_type != ObjType::LogContainer {
+        return Err(ParseError::UnexpectedObjType(base_header.obj_type));
+    }
+    let lc_header = LogContainerHeader::decode(&mut *r)?;
+    let data_size = (base_header.obj_size - OBJECT_HEADER_SIZE) as usize;
+    if tmp.len() < data_size {
+        tmp.resize(data_size, 0);
+    }
+    r.read_exact(&mut tmp[..data_size])?;
+    let padding_size = data_size % 4;
+    if padding_size > 0 {
+        let mut padding = [0u8; 4];
+        r.read_exact(&mut padding[..padding_size])?;
+    }
+    if lc_header.compression_method == ZLIB_DEFLATE {
+        let mut z = ZlibDecoder::new(&tmp[..data_size]);
+        let mut chunk = [0u8; BUF_SIZE];
+        let mut uncompressed = 0usize;
+        loop {
+            let n = z.read(&mut chunk).map_err(|_| ParseError::ZlibError)?;
+            if n == 0 {
+                break;
+            }
+            uncompressed += n;
+            out.write_all(&chunk[..n])?;
+        }
+        if lc_header.uncompressed_size as usize != uncompressed {
+            return Err(ParseError::UncompressedSizeMismatch);
+        }
+    } else {
+        out.write_all(&tmp[..data_size])?;
+    }
+    Ok(())
+}
+
+// Parses as many complete BaseObjects as possible from `buf`, appending
+// them to `out`. Consumed bytes are drained from `buf`. Stops cleanly
+// when the buffer is exhausted (not treated as an error).
+fn parse_objects_from_buf(
+    buf: &mut Vec<u8>,
+    tmp: &mut Vec<u8>,
+    out: &mut Vec<BaseObject>,
+) -> ParseResult<()> {
+    loop {
+        let mut r = &buf[..];
+        let base_header = match BaseObjectHeader::decode(&mut r) {
+            Err(_) => break,
+            Ok(h) => h,
+        };
+        let data_size = (base_header.obj_size - BASE_OBJECT_HEADER_SIZE) as usize;
+        if tmp.len() < data_size {
+            tmp.resize(data_size, 0);
+        }
+        if r.read_exact(&mut tmp[..data_size]).is_err() {
+            break;
+        }
+        let padding_size = base_header.obj_size as usize % 4;
+        if padding_size > 0 && base_header.obj_type.is_padding_needed() {
+            let mut padding = [0u8; 4];
+            if r.read_exact(&mut padding[..padding_size]).is_err() {
+                break;
+            }
+        }
+        if !r.is_empty() {
+            log::info!("log container data remaining: {} bytes", r.len());
+        }
+        buf.drain(0..buf.len() - r.len());
+        let mut payload = &tmp[..data_size];
+        let timestamp = if base_header.version == 1 {
+            ObjectHeaderV1::decode(&mut payload)?.timestamp
+        } else {
+            ObjectHeaderV2::decode(&mut payload)?.timestamp
+        };
+        let msg_size = base_header.obj_size - OBJECT_HEADER_SIZE;
+        let message = Message::decode(&mut payload, base_header.obj_type, msg_size)?;
+        if !payload.is_empty() {
+            log::warn!("base object data remaining: {} bytes", payload.len());
+        }
+        out.push(BaseObject { timestamp, message });
+    }
+    Ok(())
+}
+
+/// Returns the byte offset of every LogContainer in the file.
+/// Reads only the 16-byte `BaseObjectHeader` of each container (no decompression).
+pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<Vec<u64>> {
+    FileHeader::decode(&mut *r)?;
+    let mut offsets = Vec::new();
+    loop {
+        let pos = r.stream_position()?;
+        let base_header = match BaseObjectHeader::decode(&mut *r) {
+            Err(ParseError::Eof) => break,
+            Err(ParseError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
+            Ok(h) => h,
+        };
+        if base_header.obj_type != ObjType::LogContainer {
+            return Err(ParseError::UnexpectedObjType(base_header.obj_type));
+        }
+        offsets.push(pos);
+        // Skip LogContainerHeader (16) + data + padding, then continue to next container.
+        let data_size = (base_header.obj_size - OBJECT_HEADER_SIZE) as i64;
+        let padding = data_size % 4;
+        r.seek(std::io::SeekFrom::Current(16 + data_size + padding))?;
+    }
+    Ok(offsets)
+}
+
+/// Seeks to each offset in `offsets`, decompresses the LogContainer there,
+/// and parses every BaseObject from it. Returns all objects in file order.
+pub fn parse_at<R: Read + Seek>(r: &mut R, offsets: &[u64]) -> ParseResult<Vec<BaseObject>> {
+    let mut buf = Vec::new();
+    let mut tmp = Vec::new();
+    let mut out = Vec::new();
+    for &offset in offsets {
+        r.seek(std::io::SeekFrom::Start(offset))?;
+        buf.clear();
+        decompress_container(&mut *r, &mut buf, &mut tmp)?;
+        parse_objects_from_buf(&mut buf, &mut tmp, &mut out)?;
+    }
+    Ok(out)
+}
+
 pub struct Reader<R: Read + Seek> {
     pub header: FileHeader,
     r: R,
@@ -59,40 +190,7 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     fn read_log_container(&mut self) -> ParseResult<()> {
-        let base_header = BaseObjectHeader::decode(&mut self.r)?;
-        if base_header.obj_type != ObjType::LogContainer {
-            return Err(ParseError::UnexpectedObjType(base_header.obj_type));
-        }
-        let lc_header = LogContainerHeader::decode(&mut self.r)?;
-        let data_size = (base_header.obj_size - OBJECT_HEADER_SIZE) as usize;
-        if self.tmp.len() < data_size {
-            self.tmp.resize(data_size, 0);
-        }
-        self.r.read_exact(&mut self.tmp[..data_size])?;
-        let padding_size = data_size % 4;
-        if padding_size > 0 {
-            let mut padding = [0u8; 4];
-            self.r.read_exact(&mut padding[..padding_size])?;
-        }
-        if lc_header.compression_method == ZLIB_DEFLATE {
-            let mut z = ZlibDecoder::new(&self.tmp[..data_size]);
-            let mut chunk = [0u8; BUF_SIZE];
-            let mut uncompressed = 0usize;
-            loop {
-                let n = z.read(&mut chunk).map_err(|_| ParseError::ZlibError)?;
-                if n == 0 {
-                    break;
-                }
-                uncompressed += n;
-                self.buf.write_all(&chunk[..n])?;
-            }
-            if lc_header.uncompressed_size as usize != uncompressed {
-                return Err(ParseError::UncompressedSizeMismatch);
-            }
-        } else {
-            self.buf.write_all(&self.tmp[..data_size])?;
-        }
-        Ok(())
+        decompress_container(&mut self.r, &mut self.buf, &mut self.tmp)
     }
 
     pub fn read_base_object(&mut self) -> ParseResult<BaseObject> {

@@ -1,7 +1,7 @@
-use super::doip::DoIp;
+use super::diag::doip::DoIp;
+use super::diag::someip::SomeIp;
 use super::error::{ParseError, ParseResult};
 use super::ip::IpProtocol;
-use super::someip::SomeIp;
 use std::io::Read;
 
 #[derive(Debug)]

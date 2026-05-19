@@ -1,7 +1,7 @@
 use super::encoder::{Decoder, Encoder};
 use super::error::ParseResult;
 use super::ip::Ip;
-use super::isotp::IsoTpFrame;
+use super::diag::isotp::IsoTpFrame;
 use super::objtype::ObjType;
 use std::io::{Read, Write};
 

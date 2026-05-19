@@ -1,4 +1,4 @@
-use super::error::{ParseError, ParseResult};
+use super::super::error::{ParseError, ParseResult};
 use super::uds::Uds;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

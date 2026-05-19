@@ -1,4 +1,4 @@
-use super::error::{ParseError, ParseResult};
+use super::super::error::{ParseError, ParseResult};
 
 const POSITIVE_RESPONSE_MASK: u8 = 0x40;
 const NEGATIVE_RESPONSE_SID: u8 = 0x7F;

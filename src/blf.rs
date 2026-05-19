@@ -1,15 +1,12 @@
 mod encoder;
 mod error;
-pub mod doip;
+pub mod diag;
 pub mod ip;
-pub mod isotp;
 pub mod message;
 mod object;
 mod objtype;
 pub mod signal;
-pub mod someip;
 pub mod transport;
-pub mod uds;
 
 use encoder::{Decoder, Encoder};
 use error::ParseResult;
@@ -17,18 +14,18 @@ use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use object::{BaseObjectHeader, LogContainerHeader, ObjectHeaderV1, ObjectHeaderV2};
 use std::io::{Read, Seek, Write};
 
-pub use doip::{DiagMessage, DoIp, PayloadType};
+pub use diag::doip::{DiagMessage, DoIp, PayloadType};
+pub use diag::isotp::{FlowStatus, IsoTpFrame, Reassembler};
+pub use diag::someip::{MessageType, ReturnCode, SomeIp};
+pub use diag::uds::{Nrc, ServiceId, Uds};
 pub use encoder::Timestamp;
 pub use error::ParseError;
 pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
-pub use isotp::{FlowStatus, IsoTpFrame, Reassembler};
-pub use signal::{ByteOrder, Signal, SignalDb, SignalDef};
-pub use someip::{MessageType, ReturnCode, SomeIp};
-pub use uds::{Nrc, ServiceId, Uds};
-pub use transport::{Tcp, TcpFlags, Transport, Udp};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan};
 pub use object::FileHeader;
 pub use objtype::ObjType;
+pub use signal::{ByteOrder, Signal, SignalDb, SignalDef};
+pub use transport::{Tcp, TcpFlags, Transport, Udp};
 
 #[derive(Debug)]
 pub struct BaseObject {

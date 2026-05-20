@@ -12,28 +12,55 @@ fn ts_ns(ts: Timestamp) -> u64 {
     }
 }
 
+fn mac_str(addr: &[u8; 6]) -> String {
+    format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
+    )
+}
+
 fn write_csv_raw<W: Write>(
     w: &mut W,
     objects: &[BaseObject],
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    writeln!(w, "timestamp_ns,channel,id,ext_id,dir,dlc,data")?;
+    writeln!(w, "timestamp_ns,type,channel,dir,src_mac,dst_mac,ether_type,vlan_vid,id,ext_id,dlc,data")?;
     let mut count = 0usize;
     for obj in objects {
         let ns = ts_ns(obj.timestamp);
         match &obj.message {
             Message::Can(m) => {
                 let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
-                writeln!(w, "{},{},0x{:X},{},{:?},{},{}", ns, m.channel, m.id, m.is_ext_id, m.dir, m.dlc, hex)?;
+                writeln!(w, "{},CAN,{},{:?},,,,0x{:X},{},{},{}", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc, hex)?;
                 count += 1;
             }
             Message::CanFd(m) => {
                 let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
-                writeln!(w, "{},{},0x{:X},{},{:?},{},{}", ns, m.channel, m.id, m.is_ext_id, m.dir, m.dlc, hex)?;
+                writeln!(w, "{},CAN-FD,{},{:?},,,,0x{:X},{},{},{}", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc, hex)?;
                 count += 1;
             }
             Message::CanFd64(m) => {
                 let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
-                writeln!(w, "{},{},0x{:X},{},{:?},{},{}", ns, m.channel, m.id, m.is_ext_id, m.dir, m.dlc, hex)?;
+                writeln!(w, "{},CAN-FD64,{},{:?},,,,0x{:X},{},{},{}", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc, hex)?;
+                count += 1;
+            }
+            Message::Ethernet(m) => {
+                let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
+                let vlan_vid = m.vlan.as_ref().map(|v| v.vid.to_string()).unwrap_or_default();
+                writeln!(
+                    w, "{},Ethernet,{},{:?},{},{},0x{:04X},{},,,,{}",
+                    ns, m.channel, m.dir, mac_str(&m.src_addr), mac_str(&m.dst_addr),
+                    m.ether_type, vlan_vid, hex
+                )?;
+                count += 1;
+            }
+            Message::EthernetEx(m) => {
+                let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
+                let vlan_vid = m.vlan.as_ref().map(|v| v.vid.to_string()).unwrap_or_default();
+                writeln!(
+                    w, "{},EthernetEx,{},{:?},{},{},0x{:04X},{},,,,{}",
+                    ns, m.channel, m.dir, mac_str(&m.src_addr), mac_str(&m.dst_addr),
+                    m.ether_type, vlan_vid, hex
+                )?;
                 count += 1;
             }
             _ => {}

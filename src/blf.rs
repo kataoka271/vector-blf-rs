@@ -61,18 +61,12 @@ fn decompress_container<R: Read>(
         r.read_exact(&mut padding[..padding_size])?;
     }
     if lc_header.compression_method == ZLIB_DEFLATE {
+        let expected = lc_header.uncompressed_size as usize;
+        out.reserve(expected);
+        let before = out.len();
         let mut z = ZlibDecoder::new(&tmp[..data_size]);
-        let mut chunk = [0u8; BUF_SIZE];
-        let mut uncompressed = 0usize;
-        loop {
-            let n = z.read(&mut chunk).map_err(|_| ParseError::ZlibError)?;
-            if n == 0 {
-                break;
-            }
-            uncompressed += n;
-            out.write_all(&chunk[..n])?;
-        }
-        if lc_header.uncompressed_size as usize != uncompressed {
+        z.read_to_end(out).map_err(|_| ParseError::ZlibError)?;
+        if out.len() - before != expected {
             return Err(ParseError::UncompressedSizeMismatch);
         }
     } else {
@@ -82,15 +76,17 @@ fn decompress_container<R: Read>(
 }
 
 // Parses as many complete BaseObjects as possible from `buf`, appending
-// them to `out`. Consumed bytes are drained from `buf`. Stops cleanly
-// when the buffer is exhausted (not treated as an error).
+// them to `out`. Advances a cursor rather than draining on every object to
+// avoid the O(n²) byte-shifting cost; drains once at the end.
 fn parse_objects_from_buf(
     buf: &mut Vec<u8>,
     tmp: &mut Vec<u8>,
     out: &mut Vec<BaseObject>,
 ) -> ParseResult<()> {
+    let mut cursor = 0usize;
     loop {
-        let mut r = &buf[..];
+        let mut r = &buf[cursor..];
+        let before = r.len();
         let base_header = match BaseObjectHeader::decode(&mut r) {
             Err(_) => break,
             Ok(h) => h,
@@ -109,10 +105,10 @@ fn parse_objects_from_buf(
                 break;
             }
         }
+        cursor += before - r.len();
         if !r.is_empty() {
             log::info!("log container data remaining: {} bytes", r.len());
         }
-        buf.drain(0..buf.len() - r.len());
         let mut payload = &tmp[..data_size];
         let timestamp = if base_header.version == 1 {
             ObjectHeaderV1::decode(&mut payload)?.timestamp
@@ -126,6 +122,7 @@ fn parse_objects_from_buf(
         }
         out.push(BaseObject { timestamp, message });
     }
+    buf.drain(0..cursor);
     Ok(())
 }
 
@@ -174,6 +171,7 @@ pub struct Reader<R: Read + Seek> {
     r: R,
     buf: Vec<u8>,
     tmp: Vec<u8>,
+    cursor: usize,
 }
 
 impl<R: Read + Seek> Reader<R> {
@@ -184,17 +182,22 @@ impl<R: Read + Seek> Reader<R> {
             r,
             buf: Vec::new(),
             tmp: Vec::new(),
+            cursor: 0,
         };
-        reader.read_log_container()?;
+        reader.load_next_container()?;
         Ok(reader)
     }
 
-    fn read_log_container(&mut self) -> ParseResult<()> {
+    fn load_next_container(&mut self) -> ParseResult<()> {
+        // Discard all cleanly-consumed bytes in one shot, then append the next container.
+        self.buf.drain(0..self.cursor);
+        self.cursor = 0;
         decompress_container(&mut self.r, &mut self.buf, &mut self.tmp)
     }
 
     pub fn read_base_object(&mut self) -> ParseResult<BaseObject> {
-        let mut r = &self.buf[..];
+        let mut r = &self.buf[self.cursor..];
+        let before = r.len();
         let base_header = match BaseObjectHeader::decode(&mut r) {
             Err(_) => return self.retry_read_base_object(),
             Ok(h) => h,
@@ -213,10 +216,10 @@ impl<R: Read + Seek> Reader<R> {
                 return self.retry_read_base_object();
             }
         }
+        self.cursor += before - r.len();
         if !r.is_empty() {
             log::info!("log container data remaining: {} bytes", r.len());
         }
-        self.buf.drain(0..self.buf.len() - r.len());
         let mut payload = &self.tmp[..data_size];
         let timestamp = if base_header.version == 1 {
             ObjectHeaderV1::decode(&mut payload)?.timestamp
@@ -232,7 +235,7 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     fn retry_read_base_object(&mut self) -> ParseResult<BaseObject> {
-        match self.read_log_container() {
+        match self.load_next_container() {
             Err(ParseError::Eof) => Err(ParseError::Eof),
             Err(ParseError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 Err(ParseError::Eof)
@@ -285,6 +288,9 @@ impl<W: Write + Seek> Writer<W> {
         let obj_header = ObjectHeaderV1 {
             timestamp: obj.timestamp,
         };
+        // Record the position before this object so we can flush up to here,
+        // ensuring every container boundary falls on an object boundary.
+        let obj_start = self.buf.len();
         base_header.encode(&mut self.buf)?;
         obj_header.encode(&mut self.buf)?;
         self.buf.write_all(&self.tmp)?;
@@ -294,9 +300,13 @@ impl<W: Write + Seek> Writer<W> {
         }
         self.header.object_count += 1;
         if self.buf.len() >= BUF_SIZE {
-            self.header.uncompressed_size += BUF_SIZE as u64;
-            let data: Vec<u8> = self.buf.drain(..BUF_SIZE).collect();
-            self.write_log_container(&data)?;
+            // Flush everything before the current object (obj_start bytes).
+            // If obj_start == 0 the object alone exceeds BUF_SIZE; flush it whole.
+            let flush_end = if obj_start > 0 { obj_start } else { self.buf.len() };
+            self.header.uncompressed_size += flush_end as u64;
+            let mut flush_data = std::mem::take(&mut self.buf);
+            self.buf = flush_data.split_off(flush_end);
+            self.write_log_container(&flush_data)?;
         }
         Ok(())
     }
@@ -328,7 +338,7 @@ impl<W: Write + Seek> Writer<W> {
 
     pub fn finish(&mut self) -> ParseResult<()> {
         self.header.uncompressed_size += self.buf.len() as u64;
-        let remaining: Vec<u8> = self.buf.drain(..).collect();
+        let remaining = std::mem::take(&mut self.buf);
         self.write_log_container(&remaining)?;
         let pos = self.w.stream_position()?;
         self.header.file_size = pos;

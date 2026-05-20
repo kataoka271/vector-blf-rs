@@ -12,13 +12,6 @@ fn ts_ns(ts: Timestamp) -> u64 {
     }
 }
 
-fn mac_str(addr: &[u8; 6]) -> String {
-    format!(
-        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
-    )
-}
-
 fn write_csv_raw<W: Write>(
     w: &mut W,
     objects: &[BaseObject],
@@ -29,38 +22,47 @@ fn write_csv_raw<W: Write>(
         let ns = ts_ns(obj.timestamp);
         match &obj.message {
             Message::Can(m) => {
-                let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
-                writeln!(w, "{},CAN,{},{:?},,,,0x{:X},{},{},{}", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc, hex)?;
+                write!(w, "{},CAN,{},{:?},,,,0x{:X},{},{},", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc)?;
+                for b in &m.data { write!(w, "{:02X}", b)?; }
+                writeln!(w)?;
                 count += 1;
             }
             Message::CanFd(m) => {
-                let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
-                writeln!(w, "{},CAN-FD,{},{:?},,,,0x{:X},{},{},{}", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc, hex)?;
+                write!(w, "{},CAN-FD,{},{:?},,,,0x{:X},{},{},", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc)?;
+                for b in &m.data { write!(w, "{:02X}", b)?; }
+                writeln!(w)?;
                 count += 1;
             }
             Message::CanFd64(m) => {
-                let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
-                writeln!(w, "{},CAN-FD64,{},{:?},,,,0x{:X},{},{},{}", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc, hex)?;
+                write!(w, "{},CAN-FD64,{},{:?},,,,0x{:X},{},{},", ns, m.channel, m.dir, m.id, m.is_ext_id, m.dlc)?;
+                for b in &m.data { write!(w, "{:02X}", b)?; }
+                writeln!(w)?;
                 count += 1;
             }
             Message::Ethernet(m) => {
-                let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
+                let a = &m.src_addr;
+                let b = &m.dst_addr;
                 let vlan_vid = m.vlan.as_ref().map(|v| v.vid.to_string()).unwrap_or_default();
-                writeln!(
-                    w, "{},Ethernet,{},{:?},{},{},0x{:04X},{},,,,{}",
-                    ns, m.channel, m.dir, mac_str(&m.src_addr), mac_str(&m.dst_addr),
-                    m.ether_type, vlan_vid, hex
-                )?;
+                write!(w, "{},Ethernet,{},{:?},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},0x{:04X},{},,,,",
+                    ns, m.channel, m.dir,
+                    a[0], a[1], a[2], a[3], a[4], a[5],
+                    b[0], b[1], b[2], b[3], b[4], b[5],
+                    m.ether_type, vlan_vid)?;
+                for byte in &m.data { write!(w, "{:02X}", byte)?; }
+                writeln!(w)?;
                 count += 1;
             }
             Message::EthernetEx(m) => {
-                let hex: String = m.data.iter().map(|b| format!("{:02X}", b)).collect();
+                let a = &m.src_addr;
+                let b = &m.dst_addr;
                 let vlan_vid = m.vlan.as_ref().map(|v| v.vid.to_string()).unwrap_or_default();
-                writeln!(
-                    w, "{},EthernetEx,{},{:?},{},{},0x{:04X},{},,,,{}",
-                    ns, m.channel, m.dir, mac_str(&m.src_addr), mac_str(&m.dst_addr),
-                    m.ether_type, vlan_vid, hex
-                )?;
+                write!(w, "{},EthernetEx,{},{:?},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},0x{:04X},{},,,,",
+                    ns, m.channel, m.dir,
+                    a[0], a[1], a[2], a[3], a[4], a[5],
+                    b[0], b[1], b[2], b[3], b[4], b[5],
+                    m.ether_type, vlan_vid)?;
+                for byte in &m.data { write!(w, "{:02X}", byte)?; }
+                writeln!(w)?;
                 count += 1;
             }
             _ => {}
@@ -134,8 +136,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Scan phase: index LogContainer offsets without decompression.
     let t = time::Instant::now();
     let offsets = {
-        let mut f = File::open(input)?;
-        blf::scan_containers(&mut f)?
+        let f = File::open(input)?;
+        blf::scan_containers(&mut BufReader::new(f))?
     };
     println!(
         "found {} containers in {:.3}s",

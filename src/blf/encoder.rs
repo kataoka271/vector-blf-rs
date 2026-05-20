@@ -132,9 +132,10 @@ impl<R: Read> Decoder<R> for Timestamp {
     type Item = Timestamp;
 
     fn decode(mut r: R) -> ParseResult<Self::Item> {
-        let tm = (0..8)
-            .map(|_| u16::decode(&mut r))
-            .collect::<ParseResult<Vec<_>>>()?;
+        let mut tm = [0u16; 8];
+        for v in &mut tm {
+            *v = u16::decode(&mut r)?;
+        }
         let year = tm[0] as i32;
         let month = tm[1] as u32;
         let _weekday = tm[2];

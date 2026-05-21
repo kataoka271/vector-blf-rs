@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "vector-blf"
+version = "0.1.0"
+description = "Python bindings for vector-blf-rs: read Vector BLF automotive log files"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+features = ["python"]
+module-name = "vector_blf"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.13.3",
+]

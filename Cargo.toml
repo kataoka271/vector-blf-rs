@@ -3,12 +3,20 @@ name = "vector-blf-rs"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "vector_blf"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 chrono = "0.4.33"
 env_logger = "0.11.1"
 flate2 = { version = "1.0.28", features = ["zlib"], default-features = false }
 log = "0.4.20"
 thiserror = "1.0.56"
+pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
+
+[features]
+python = ["pyo3"]
 
 [[bin]]
 name = "vector-blf-rs"

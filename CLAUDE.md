@@ -15,6 +15,16 @@ cargo clippy                         # lint
 cargo run -- <input.blf> [options]   # run the CLI
 ```
 
+### Python bindings (PyO3 + maturin)
+
+```bash
+uv run maturin develop --features python   # build & install into the uv venv (dev/editable)
+uv run python <script.py>                  # run a script against the installed bindings
+```
+
+`maturin` is a dev dependency in `pyproject.toml` and is available via `uv run`.
+The `python` Cargo feature gates all PyO3 code; omit it for pure-Rust builds.
+
 ## Project Overview
 
 A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format — the standard for logging automotive network traffic (CAN, CAN-FD, Ethernet, diagnostic protocols).
@@ -63,6 +73,21 @@ vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--th
 - BLF→BLF: copy with optional repetition count
 - BLF→CSV: raw message export (timestamp_ns, channel, id, ext_id, dir, dlc, data)
 - BLF→CSV+signals: decode signals using a DBC-like CSV signal database
+
+### Python Module (`src/python.rs`)
+
+PyO3 bindings exposed as the `vector_blf` Python extension module:
+
+| Python class | Rust source |
+|---|---|
+| `Reader(path)` | wraps `blf::Reader<BufReader<File>>`, implements `__iter__`/`__next__` |
+| `BaseObject` | `.timestamp_ns: int`, `.message: Can \| CanFd \| CanFd64 \| Ethernet \| EthernetEx \| None` |
+| `Can` | channel, id, is_ext_id, dir, rtr, dlc, data |
+| `CanFd` | + fdf, brs, esi |
+| `CanFd64` | same as CanFd but channel is u8 |
+| `Ethernet` / `EthernetEx` | channel, dir, src_addr, dst_addr, ether_type, data |
+
+`dir` is exposed as a raw `u8` (0=Tx, 1=Rx, 2=TxRq). `Message::Other` variants map to `None`.
 
 ### Test Fixtures
 

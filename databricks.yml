@@ -1,0 +1,134 @@
+# Databricks Asset Bundle — vector-blf-ingestion
+#
+# Automates:
+#   1. maturin build  →  Linux wheel (vector_blf-*.whl)
+#   2. Upload wheel + DLT notebook to Databricks workspace
+#   3. Create / update the DLT pipeline resource
+#
+# Prerequisites
+# -------------
+#   databricks CLI ≥ 0.205  (brew install databricks  /  pip install databricks-cli)
+#   databricks configure     (sets host + token in ~/.databrickscfg)
+#
+# Cross-compilation note (Windows / macOS)
+# ----------------------------------------
+# Databricks clusters run Linux, so the wheel must target manylinux.
+# maturin handles this automatically with --manylinux auto IF Docker Desktop
+# is running.  Alternative (no Docker):
+#   cargo install cargo-zigbuild
+#   rustup target add x86_64-unknown-linux-gnu
+#   maturin build --release --features python \
+#       --target x86_64-unknown-linux-gnu --zig
+#
+# Workflow
+# --------
+#   databricks bundle validate          # check YAML + resolve substitutions
+#   databricks bundle deploy            # build wheel, upload, deploy (dev)
+#   databricks bundle deploy -t prod    # deploy to production
+#   databricks bundle run blf_ingestion # trigger a pipeline run
+#   databricks bundle destroy           # tear down all managed resources
+
+bundle:
+  name: vector-blf-ingestion
+
+# ── artifact: maturin wheel ───────────────────────────────────────────────────
+
+artifacts:
+  vector_blf:
+    type: whl
+    # Runs locally before upload; produces target/wheels/vector_blf-*.whl
+    build: maturin build --release --features python --manylinux auto
+    path: target/wheels   # directory DAB scans for the resulting .whl file
+
+# ── shared variables (overridable per target) ─────────────────────────────────
+
+variables:
+  blf_source_path:
+    description: >
+      Unity Catalog Volume path that contains the *.blf source files.
+      Auto Loader monitors this directory for new files.
+    default: /Volumes/main/blf/raw
+
+  target_catalog:
+    description: Unity Catalog catalog for output Delta tables.
+    default: main
+
+  target_schema:
+    description: Unity Catalog schema (database) for output Delta tables.
+    default: blf
+
+  node_type_id:
+    description: >
+      Worker instance type for the DLT cluster.
+      AWS  → m5.xlarge  |  Azure → Standard_DS3_v2  |  GCP → n1-standard-4
+    default: m5.xlarge
+
+  min_workers:
+    default: "1"
+
+  max_workers:
+    default: "4"
+
+# ── DLT pipeline resource ─────────────────────────────────────────────────────
+
+resources:
+  pipelines:
+    blf_ingestion:
+      name: vector-blf-ingestion-${bundle.target}
+
+      # Unity Catalog output location
+      catalog: ${var.target_catalog}
+      target: ${var.target_schema}
+
+      # Pipeline parameters — consumed by spark.conf.get() in the Python file
+      configuration:
+        blf.source_path:    ${var.blf_source_path}
+        blf.target_catalog: ${var.target_catalog}
+        blf.target_schema:  ${var.target_schema}
+
+      libraries:
+        # DLT pipeline definition (uploaded as a workspace notebook)
+        - notebook:
+            path: ./databricks/dlt_blf_pipeline.py
+        # Compiled Rust extension wheel (built by the artifact above)
+        - whl: ${artifacts.vector_blf}
+
+      clusters:
+        - label: default
+          node_type_id: ${var.node_type_id}
+          autoscale:
+            min_workers: ${var.min_workers}
+            max_workers: ${var.max_workers}
+
+      channel: CURRENT    # use the latest DLT runtime
+      edition: ADVANCED   # required for Auto Loader + expectations
+
+      # Overridden per target below
+      continuous:   false
+      development:  true
+
+# ── deployment targets ────────────────────────────────────────────────────────
+
+targets:
+  # ── dev ──────────────────────────────────────────────────────────────────
+  # Default target.  Pipeline runs in development mode (no auto-restart,
+  # cheaper cluster, DAB prefixes the name with your username automatically).
+  dev:
+    mode: development
+    default: true
+    variables:
+      blf_source_path: /Volumes/main/blf_dev/raw
+      target_schema:   blf_dev
+
+  # ── prod ─────────────────────────────────────────────────────────────────
+  # Continuous pipeline: restarts automatically, runs in production mode.
+  prod:
+    mode: production
+    resources:
+      pipelines:
+        blf_ingestion:
+          continuous:  true
+          development: false
+    variables:
+      blf_source_path: /Volumes/main/blf/raw
+      target_schema:   blf

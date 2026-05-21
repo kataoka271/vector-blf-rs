@@ -388,4 +388,55 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
         let db = SignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x10).len(), 1);
     }
+
+    #[test]
+    fn someip_csv_round_trip() {
+        let csv = "\
+service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
+0x0064,0x0001,Pressure,16,8,Intel,false,1.0,0.0
+0x0064,0x0002,Speed,0,16,Motorola,false,0.5,0.0
+";
+        let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(0x0064, 0x0001).len(), 2);
+        assert_eq!(db.signals(0x0064, 0x0002).len(), 1);
+        assert_eq!(db.signals(0x0064, 0x0003).len(), 0);
+
+        // Temperature: raw=0x0190 (400) → 400 * 0.01 = 4.0
+        // Pressure: raw=0x32 (50) → 50 * 1.0 = 50.0
+        let payload = [0x90u8, 0x01, 0x32];
+        let vals = db.extract(0x0064, 0x0001, &payload);
+        let temp = vals.iter().find(|(n, _)| *n == "Temperature").map(|(_, v)| *v);
+        let pres = vals.iter().find(|(n, _)| *n == "Pressure").map(|(_, v)| *v);
+        assert_eq!(temp, Some(4.0));
+        assert_eq!(pres, Some(50.0));
+    }
+
+    #[test]
+    fn someip_csv_decimal_ids() {
+        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   100,1,Sig,0,8,Intel,false,1.0,0.0\n";
+        let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(100, 1).len(), 1); // 100 == 0x64, 1 == 0x01
+    }
+
+    #[test]
+    fn someip_csv_skips_header_and_blanks() {
+        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   # comment\n\
+                   \n\
+                   0x0001,0x0002,Sig,0,8,Intel,false,1.0,0.0\n";
+        let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(0x0001, 0x0002).len(), 1);
+    }
+
+    #[test]
+    fn someip_csv_signed_scale_offset() {
+        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x0010,0x0003,Temp,0,8,Intel,true,0.5,-40.0\n";
+        let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
+        // raw=0xFF = -1 signed → -1 * 0.5 - 40.0 = -40.5
+        let vals = db.extract(0x0010, 0x0003, &[0xFF]);
+        assert_eq!(vals.first().map(|(_, v)| *v), Some(-40.5));
+    }
 }

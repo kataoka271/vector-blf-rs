@@ -1,7 +1,6 @@
-use super::diag::doip::DoIp;
-use super::diag::someip::SomeIp;
 use super::error::{ParseError, ParseResult};
 use super::ip::IpProtocol;
+use super::read_util::{read_u16_be, read_u32_be};
 use std::io::Read;
 
 #[derive(Debug)]
@@ -30,14 +29,6 @@ pub struct Tcp {
 }
 
 impl Tcp {
-    pub fn parse_someip(&self) -> ParseResult<SomeIp> {
-        SomeIp::parse(self.data.as_slice())
-    }
-
-    pub fn parse_doip(&self) -> ParseResult<DoIp> {
-        DoIp::parse(self.data.as_slice())
-    }
-
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {
         let src_port = read_u16_be(&mut r)?;
         let dst_port = read_u16_be(&mut r)?;
@@ -81,14 +72,6 @@ pub struct Udp {
 }
 
 impl Udp {
-    pub fn parse_someip(&self) -> ParseResult<SomeIp> {
-        SomeIp::parse(self.data.as_slice())
-    }
-
-    pub fn parse_doip(&self) -> ParseResult<DoIp> {
-        DoIp::parse(self.data.as_slice())
-    }
-
     pub fn parse<R: Read>(mut r: R) -> ParseResult<Self> {
         let src_port = read_u16_be(&mut r)?;
         let dst_port = read_u16_be(&mut r)?;
@@ -117,14 +100,3 @@ impl Transport {
     }
 }
 
-fn read_u16_be<R: Read>(r: &mut R) -> ParseResult<u16> {
-    let mut b = [0u8; 2];
-    r.read_exact(&mut b)?;
-    Ok(((b[0] as u16) << 8) | b[1] as u16)
-}
-
-fn read_u32_be<R: Read>(r: &mut R) -> ParseResult<u32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
-    Ok(((b[0] as u32) << 24) | ((b[1] as u32) << 16) | ((b[2] as u32) << 8) | b[3] as u32)
-}

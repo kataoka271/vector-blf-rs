@@ -1,4 +1,5 @@
 use super::error::{ParseError, ParseResult};
+use super::read_util::{read_u8, read_u16_be};
 use super::transport::Transport;
 use std::io::Read;
 
@@ -164,14 +165,3 @@ impl Ip {
     }
 }
 
-fn read_u8<R: Read>(r: &mut R) -> ParseResult<u8> {
-    let mut b = [0u8; 1];
-    r.read_exact(&mut b)?;
-    Ok(b[0])
-}
-
-fn read_u16_be<R: Read>(r: &mut R) -> ParseResult<u16> {
-    let mut b = [0u8; 2];
-    r.read_exact(&mut b)?;
-    Ok(((b[0] as u16) << 8) | b[1] as u16)
-}

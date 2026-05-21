@@ -1,6 +1,6 @@
 pub mod blf;
 
-use blf::{BaseObject, Message, ParseError, SignalDb, Timestamp, Writer};
+use blf::{BaseObject, Ip, Message, ParseError, SignalDb, SomeIpSignalDb, Timestamp, Transport, Writer};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::time;
@@ -71,24 +71,76 @@ fn write_csv_raw<W: Write>(
     Ok(count)
 }
 
+fn try_someip_signals<'a>(
+    ether_type: u16,
+    data: &[u8],
+    db: &'a SomeIpSignalDb,
+) -> Option<(u16, u16, Vec<(&'a str, f64)>)> {
+    let ip = Ip::parse(ether_type, data).ok()?;
+    let transport = match &ip {
+        Ip::V4(v4) => v4.parse_transport().ok()?,
+        Ip::V6(v6) => v6.parse_transport().ok()?,
+    };
+    let someip = match &transport {
+        Transport::Udp(udp) => udp.parse_someip().ok()?,
+        Transport::Tcp(tcp) => tcp.parse_someip().ok()?,
+    };
+    let vals = db.extract(someip.service_id, someip.method_id, &someip.payload);
+    if vals.is_empty() { None } else { Some((someip.service_id, someip.method_id, vals)) }
+}
+
 fn write_csv_signals<W: Write>(
     w: &mut W,
     objects: &[BaseObject],
     db: &SignalDb,
+    someip_db: Option<&SomeIpSignalDb>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     writeln!(w, "timestamp_ns,channel,message_id,signal_name,value")?;
     let mut count = 0usize;
     for obj in objects {
         let ns = ts_ns(obj.timestamp);
-        let (channel, id, data) = match &obj.message {
-            Message::Can(m) => (m.channel as u32, m.id, m.data.as_slice()),
-            Message::CanFd(m) => (m.channel as u32, m.id, m.data.as_slice()),
-            Message::CanFd64(m) => (m.channel as u32, m.id, m.data.as_slice()),
-            _ => continue,
-        };
-        for (name, value) in db.extract(id, data) {
-            writeln!(w, "{},{},0x{:X},{},{}", ns, channel, id, name, value)?;
-            count += 1;
+        match &obj.message {
+            Message::Can(m) => {
+                for (name, value) in db.extract(m.id, &m.data) {
+                    writeln!(w, "{},{},0x{:X},{},{}", ns, m.channel, m.id, name, value)?;
+                    count += 1;
+                }
+            }
+            Message::CanFd(m) => {
+                for (name, value) in db.extract(m.id, &m.data) {
+                    writeln!(w, "{},{},0x{:X},{},{}", ns, m.channel, m.id, name, value)?;
+                    count += 1;
+                }
+            }
+            Message::CanFd64(m) => {
+                for (name, value) in db.extract(m.id, &m.data) {
+                    writeln!(w, "{},{},0x{:X},{},{}", ns, m.channel as u32, m.id, name, value)?;
+                    count += 1;
+                }
+            }
+            Message::Ethernet(m) => {
+                if let Some(sdb) = someip_db {
+                    if let Some((svc, mth, vals)) = try_someip_signals(m.ether_type, &m.data, sdb) {
+                        let msg_id = ((svc as u32) << 16) | (mth as u32);
+                        for (name, value) in vals {
+                            writeln!(w, "{},{},0x{:08X},{},{}", ns, m.channel, msg_id, name, value)?;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            Message::EthernetEx(m) => {
+                if let Some(sdb) = someip_db {
+                    if let Some((svc, mth, vals)) = try_someip_signals(m.ether_type, &m.data, sdb) {
+                        let msg_id = ((svc as u32) << 16) | (mth as u32);
+                        for (name, value) in vals {
+                            writeln!(w, "{},{},0x{:08X},{},{}", ns, m.channel, msg_id, name, value)?;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     Ok(count)
@@ -117,13 +169,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     env_logger::init();
 
-    // Parse --threads N and collect remaining positional args.
+    // Parse --threads N, --someip-signals <file>, and collect remaining positional args.
     let mut n_threads: usize = 1;
+    let mut someip_signals_path: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut iter = args[1..].iter();
     while let Some(arg) = iter.next() {
         if arg == "--threads" {
             n_threads = iter.next().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+        } else if arg == "--someip-signals" {
+            someip_signals_path = iter.next().cloned();
         } else {
             positional.push(arg.clone());
         }
@@ -186,7 +241,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut w = BufWriter::new(File::create(output)?);
             let count = if let Some(signals_path) = positional.get(2) {
                 let db = SignalDb::from_csv(BufReader::new(File::open(signals_path)?))?;
-                write_csv_signals(&mut w, &objects, &db)?
+                let someip_db = someip_signals_path
+                    .as_deref()
+                    .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
+                    .transpose()?;
+                write_csv_signals(&mut w, &objects, &db, someip_db.as_ref())?
             } else {
                 write_csv_raw(&mut w, &objects)?
             };

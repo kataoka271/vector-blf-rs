@@ -194,6 +194,109 @@ fn parse_u32(s: &str) -> ParseResult<u32> {
     }
 }
 
+fn parse_u16(s: &str) -> ParseResult<u16> {
+    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"));
+    match hex {
+        Some(h) => u16::from_str_radix(h, 16).map_err(|_| ParseError::InvalidData),
+        None => s.parse::<u16>().map_err(|_| ParseError::InvalidData),
+    }
+}
+
+/// A named signal bound to a specific SOME/IP (service_id, method_id) pair.
+#[derive(Debug, Clone)]
+pub struct SomeIpSignalDef {
+    pub name: String,
+    pub service_id: u16,
+    pub method_id: u16,
+    pub signal: Signal,
+}
+
+impl SomeIpSignalDef {
+    pub fn decode(&self, data: &[u8]) -> Option<f64> {
+        self.signal.decode(data)
+    }
+}
+
+/// Signal definitions for SOME/IP messages, keyed by (service_id, method_id).
+///
+/// CSV format (header required):
+/// ```text
+/// service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+/// 0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
+/// ```
+/// `service_id` and `method_id` accept hex (`0x…`) or decimal.
+/// Signals are decoded from the SOME/IP payload (bytes after the 16-byte header).
+#[derive(Debug, Default)]
+pub struct SomeIpSignalDb {
+    map: HashMap<(u16, u16), Vec<SomeIpSignalDef>>,
+}
+
+impl SomeIpSignalDb {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_csv<R: std::io::Read>(reader: R) -> ParseResult<Self> {
+        let mut db = Self::new();
+        for line in std::io::BufReader::new(reader).lines() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with("service_id") {
+                continue;
+            }
+            let p: Vec<&str> = line.splitn(9, ',').map(str::trim).collect();
+            if p.len() < 9 {
+                return Err(ParseError::InvalidData);
+            }
+            let service_id = parse_u16(p[0])?;
+            let method_id = parse_u16(p[1])?;
+            let name = p[2].to_string();
+            let start_bit = parse_u32(p[3])?;
+            let bit_length = parse_u32(p[4])?;
+            let byte_order = match p[5].to_lowercase().as_str() {
+                "intel" => ByteOrder::Intel,
+                "motorola" => ByteOrder::Motorola,
+                _ => return Err(ParseError::InvalidData),
+            };
+            let is_signed = match p[6].to_lowercase().as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => return Err(ParseError::InvalidData),
+            };
+            let scale = p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
+            let offset = p[8].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
+            db.insert(SomeIpSignalDef {
+                name,
+                service_id,
+                method_id,
+                signal: Signal { start_bit, bit_length, byte_order, is_signed, scale, offset },
+            });
+        }
+        Ok(db)
+    }
+
+    pub fn insert(&mut self, def: SomeIpSignalDef) {
+        self.map.entry((def.service_id, def.method_id)).or_default().push(def);
+    }
+
+    /// All signal definitions for the given (service_id, method_id) pair.
+    pub fn signals(&self, service_id: u16, method_id: u16) -> &[SomeIpSignalDef] {
+        self.map.get(&(service_id, method_id)).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Decode all signals for `(service_id, method_id)` from `payload`.
+    pub fn extract(&self, service_id: u16, method_id: u16, payload: &[u8]) -> Vec<(&str, f64)> {
+        self.signals(service_id, method_id)
+            .iter()
+            .filter_map(|def| def.signal.decode(payload).map(|v| (def.name.as_str(), v)))
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

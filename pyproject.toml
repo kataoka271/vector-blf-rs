@@ -19,4 +19,5 @@ module-name = "vector_blf"
 [dependency-groups]
 dev = [
     "maturin>=1.13.3",
+    "python-can>=4.5.0",
 ]

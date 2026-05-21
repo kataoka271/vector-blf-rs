@@ -15,16 +15,15 @@ RUNS = 3
 
 
 def bench(label, fn):
-    # warm-up
-    fn()
+    fn()  # warm-up
     times = []
     for _ in range(RUNS):
         t0 = time.perf_counter()
         count = fn()
         times.append(time.perf_counter() - t0)
     best = min(times)
-    print(f"  {label:<22} {count:>9,} msgs  {best:.3f}s  {count/best:>12,.0f} msg/s  {file_size_mb/best:>6.1f} MB/s")
-    return best
+    print(f"  {label:<36} {count:>9,} msgs  {best:.3f}s  {count/best:>12,.0f} msg/s  {file_size_mb/best:>6.1f} MB/s")
+    return best, count
 
 
 # ── python-can ───────────────────────────────────────────────────────────────
@@ -40,7 +39,7 @@ def run_python_can():
 
 # ── vector_blf ───────────────────────────────────────────────────────────────
 
-def run_vector_blf():
+def run_vector_blf_all():
     import vector_blf
     count = 0
     for _ in vector_blf.Reader(BLF_FILE):
@@ -48,12 +47,23 @@ def run_vector_blf():
     return count
 
 
-def run_vector_blf_can_only():
+def run_vector_blf_python_filter():
+    """CAN filter in Python (isinstance after full decode)."""
     import vector_blf
+    CAN_TYPES = (vector_blf.Can, vector_blf.CanFd, vector_blf.CanFd64)
     count = 0
     for obj in vector_blf.Reader(BLF_FILE):
-        if isinstance(obj.message, (vector_blf.Can, vector_blf.CanFd, vector_blf.CanFd64)):
+        if isinstance(obj.message, CAN_TYPES):
             count += 1
+    return count
+
+
+def run_vector_blf_rust_filter():
+    """CAN filter in Rust (no Python objects allocated for other types)."""
+    import vector_blf
+    count = 0
+    for _ in vector_blf.Reader(BLF_FILE, types=["Can", "CanFd", "CanFd64"]):
+        count += 1
     return count
 
 
@@ -62,8 +72,12 @@ def run_vector_blf_can_only():
 print(f"File : {BLF_FILE}  ({file_size_mb:.1f} MB)")
 print(f"Runs : {RUNS} (best of {RUNS} reported)\n")
 
-t_can = bench("python-can", run_python_can)
-t_vblf = bench("vector_blf (all)", run_vector_blf)
-t_vblf_can = bench("vector_blf (CAN only)", run_vector_blf_can_only)
+t_can,  _  = bench("python-can (CAN messages)",         run_python_can)
+t_all,  _  = bench("vector_blf  all types",             run_vector_blf_all)
+t_pyf,  _  = bench("vector_blf  CAN  python filter",    run_vector_blf_python_filter)
+t_rsf,  _  = bench("vector_blf  CAN  rust filter",      run_vector_blf_rust_filter)
 
-print(f"\n  Speedup (all msgs) : {t_can/t_vblf:.1f}x")
+print()
+print(f"  vector_blf all      vs python-can : {t_can/t_all:.1f}x faster")
+print(f"  rust filter         vs python-can : {t_can/t_rsf:.1f}x faster")
+print(f"  rust filter         vs python filter : {t_pyf/t_rsf:.1f}x faster")

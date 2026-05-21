@@ -147,29 +147,79 @@ impl BaseObject {
     }
 }
 
+// ── message-type filter ──────────────────────────────────────────────────────
+
+const F_CAN: u8       = 1 << 0;
+const F_CANFD: u8     = 1 << 1;
+const F_CANFD64: u8   = 1 << 2;
+const F_ETHERNET: u8  = 1 << 3;
+const F_ETHERNETEX: u8 = 1 << 4;
+const F_OTHER: u8     = 1 << 5;
+
+fn message_bit(msg: &blf::Message) -> u8 {
+    match msg {
+        blf::Message::Can(_)        => F_CAN,
+        blf::Message::CanFd(_)      => F_CANFD,
+        blf::Message::CanFd64(_)    => F_CANFD64,
+        blf::Message::Ethernet(_)   => F_ETHERNET,
+        blf::Message::EthernetEx(_) => F_ETHERNETEX,
+        blf::Message::Other(_, _)   => F_OTHER,
+    }
+}
+
+fn parse_filter(types: Option<Vec<String>>) -> PyResult<u8> {
+    let Some(list) = types else { return Ok(0) };
+    let mut mask = 0u8;
+    for s in &list {
+        mask |= match s.to_lowercase().as_str() {
+            "can"         => F_CAN,
+            "canfd"       => F_CANFD,
+            "canfd64"     => F_CANFD64,
+            "ethernet"    => F_ETHERNET,
+            "ethernetex"  => F_ETHERNETEX,
+            "other"       => F_OTHER,
+            other => return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown message type {other:?}; valid: Can, CanFd, CanFd64, Ethernet, EthernetEx, Other"
+            ))),
+        };
+    }
+    Ok(mask)
+}
+
 // ── Reader ───────────────────────────────────────────────────────────────────
 
 /// Iterator over BaseObjects in a BLF file.
 ///
-/// Usage::
+/// Parameters
+/// ----------
+/// path : str
+///     Path to the BLF file.
+/// types : list[str] | None
+///     Optional allowlist of message types to yield. Filtering happens in
+///     Rust before any Python object is allocated. Valid values (case-
+///     insensitive): ``"Can"``, ``"CanFd"``, ``"CanFd64"``, ``"Ethernet"``,
+///     ``"EthernetEx"``, ``"Other"``. If omitted, all types are yielded.
+///
+/// Example::
 ///
 ///     import vector_blf
-///     for obj in vector_blf.Reader("path/to/file.blf"):
-///         if isinstance(obj.message, vector_blf.Can):
-///             print(obj.timestamp_ns, obj.message.id)
+///     for obj in vector_blf.Reader("file.blf", types=["Can", "CanFd"]):
+///         print(obj.timestamp_ns, obj.message.id)
 #[pyclass]
 pub struct Reader {
     inner: blf::Reader<BufReader<File>>,
+    filter: u8,
 }
 
 #[pymethods]
 impl Reader {
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
+    #[pyo3(signature = (path, types=None))]
+    fn new(path: &str, types: Option<Vec<String>>) -> PyResult<Self> {
         let f = File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         let r = blf::Reader::new(BufReader::new(f))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner: r })
+        Ok(Self { inner: r, filter: parse_filter(types)? })
     }
 
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -177,10 +227,17 @@ impl Reader {
     }
 
     fn __next__(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<BaseObject> {
-        match slf.inner.next() {
-            None => Err(PyStopIteration::new_err(())),
-            Some(Err(e)) => Err(pyo3::exceptions::PyValueError::new_err(e.to_string())),
-            Some(Ok(obj)) => Ok(convert_base_object(py, obj)),
+        loop {
+            match slf.inner.next() {
+                None => return Err(PyStopIteration::new_err(())),
+                Some(Err(e)) => return Err(pyo3::exceptions::PyValueError::new_err(e.to_string())),
+                Some(Ok(obj)) => {
+                    if slf.filter == 0 || slf.filter & message_bit(&obj.message) != 0 {
+                        return Ok(convert_base_object(py, obj));
+                    }
+                    // filtered out — loop to next object without crossing into Python
+                }
+            }
         }
     }
 }

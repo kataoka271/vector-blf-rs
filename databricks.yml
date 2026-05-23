@@ -43,12 +43,6 @@ artifacts:
 # ── shared variables (overridable per target) ─────────────────────────────────
 
 variables:
-  blf_source_path:
-    description: >
-      Unity Catalog Volume path that contains the *.blf source files.
-      Auto Loader monitors this directory for new files.
-    default: /Volumes/main/blf/raw
-
   target_catalog:
     description: Unity Catalog catalog for output Delta tables.
     default: main
@@ -57,19 +51,25 @@ variables:
     description: Unity Catalog schema (database) for output Delta tables.
     default: blf
 
+  blf_source_path:
+    description: >
+      Unity Catalog Volume path that contains the *.blf source files.
+      Auto Loader monitors this directory for new files.
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/raw
+
   signals_path:
     description: >
       Unity Catalog Volume path to the signal definitions CSV.
       If empty, blf_silver_can_signals will be empty.
       Format: message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-    default: ""
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/can_signals.csv
 
   someip_signals_path:
     description: >
       Unity Catalog Volume path to the SOME/IP signal definitions CSV.
       If empty, blf_silver_someip_signals will be empty.
       Format: service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-    default: ""
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/someip_signals.csv
 
 # ── DLT pipeline resource ─────────────────────────────────────────────────────
 
@@ -118,10 +118,7 @@ targets:
     mode: development
     default: true
     variables:
-      blf_source_path: /Volumes/main/blf_dev/raw
-      target_schema:   blf_dev
-      signals_path:         /Volumes/main/blf_dev/signals/can_signals.csv
-      someip_signals_path:  /Volumes/main/blf_dev/signals/someip_signals.csv
+      target_schema: blf_dev
 
   # ── prod ─────────────────────────────────────────────────────────────────
   # Continuous pipeline: restarts automatically, runs in production mode.
@@ -133,7 +130,4 @@ targets:
           continuous:  true
           development: false
     variables:
-      blf_source_path: /Volumes/main/blf/raw
-      target_schema:   blf
-      signals_path:        /Volumes/main/blf/signals/can_signals.csv
-      someip_signals_path: /Volumes/main/blf/signals/someip_signals.csv
+      target_schema: blf

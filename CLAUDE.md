@@ -108,17 +108,19 @@ databricks bundle run blf_ingestion   # trigger a pipeline run
 databricks bundle destroy             # tear down all managed resources
 
 # Upload signal definitions to the spec volume (dev)
-databricks fs cp assets/signals.csv dbfs:/Volumes/main/blf_dev/spec/signals.csv --overwrite
+databricks fs cp assets/signals.csv       dbfs:/Volumes/main/blf_dev/spec/signals.csv       --overwrite
+databricks fs cp assets/someip_signals.csv dbfs:/Volumes/main/blf_dev/spec/someip_signals.csv --overwrite
 ```
 
-The pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.source_path`), parses them with the `vector_blf` wheel using a pandas UDF, and writes partitioned Delta tables. Signal definitions live in the `spec` volume (`blf.signals_path`); when present, physical values are decoded into `blf_silver_can_signals`.
+The pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.source_path`), parses them with the `vector_blf` wheel using a pandas UDF, and writes partitioned Delta tables. Signal definitions live in the `spec` volume (`blf.signals_path` for CAN, `blf.someip_signals_path` for SOME/IP); when present, physical values are decoded into `blf_silver_can_signals` and `blf_silver_someip_signals` respectively.
 
 **Volume layout (dev):**
 
 | Volume | Path | Contents |
 |--------|------|----------|
 | `main.blf_dev.raw` | `/Volumes/main/blf_dev/raw/` | Source `*.blf` files (Auto Loader input) |
-| `main.blf_dev.spec` | `/Volumes/main/blf_dev/spec/signals.csv` | Signal definitions CSV |
+| `main.blf_dev.spec` | `/Volumes/main/blf_dev/spec/signals.csv` | CAN signal definitions CSV |
+| `main.blf_dev.spec` | `/Volumes/main/blf_dev/spec/someip_signals.csv` | SOME/IP signal definitions CSV |
 
 **Cross-compilation note:** Databricks Serverless runs Linux ARM64 (`aarch64`). `build_wheel.sh` uses Docker + zig to cross-compile from Windows/macOS without a Linux machine.
 

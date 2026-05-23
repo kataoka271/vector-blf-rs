@@ -1,0 +1,11 @@
+service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x0064,0x0001,MotorSpeed_rpm,0,16,Intel,false,1.0,0.0
+0x0064,0x0001,MotorTorque_Nm,16,16,Intel,true,0.1,0.0
+0x0064,0x0001,MotorTemp_degC,32,8,Intel,true,1.0,-40.0
+0x00C8,0x0001,BattVoltage_V,0,16,Intel,false,0.001,0.0
+0x00C8,0x0001,BattCurrent_A,16,16,Intel,true,0.1,0.0
+0x00C8,0x0001,BattSoC_pct,32,8,Intel,false,0.4,0.0
+0x012C,0x0001,VehicleSpeed_kmh,0,16,Intel,false,0.01,0.0
+0x012C,0x0001,YawRate_degps,16,16,Intel,true,0.01,0.0
+0x012C,0x0002,SteeringAngle_deg,0,16,Intel,true,0.1,0.0
+0x012C,0x0002,LateralAccel_mps2,16,12,Intel,true,0.01,0.0

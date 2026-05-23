@@ -7,10 +7,12 @@ extension (PyO3/maturin), and writes structured Delta tables.
 
 Layer layout
 ------------
-  blf_bronze             streaming table — one row per log object, all message types
-  blf_silver_can         streaming table — CAN / CAN-FD / CAN-FD64 messages
-  blf_silver_eth         streaming table — Ethernet / EthernetEx messages
-  blf_silver_can_signals streaming table — decoded physical signal values (long format)
+  blf_bronze               streaming table — one row per log object, all message types
+  blf_silver_can           streaming table — CAN / CAN-FD / CAN-FD64 messages
+  blf_silver_eth           streaming table — Ethernet / EthernetEx messages
+  blf_silver_can_signals   streaming table — decoded physical signal values (long format)
+  blf_silver_eth_signals   streaming table — IP/TCP/UDP protocol fields as signals (long format)
+  blf_gold_signals         streaming table — CAN + Ethernet signals merged into one schema
 
 Setup
 -----
@@ -525,3 +527,200 @@ def blf_silver_eth():
             "data",
         )
     )
+
+
+# ── silver layer — parsed Ethernet payload signals ────────────────────────────
+
+_ETH_SIGNAL_RESULT_SCHEMA = ArrayType(
+    StructType([
+        StructField("signal_name", StringType(), nullable=False),
+        StructField("signal_value", DoubleType()),   # numeric fields (ports, TTL, …)
+        StructField("signal_str", StringType()),      # address strings (IPs)
+    ])
+)
+
+
+def _eth_parse_tcp(data: bytes, out: list) -> None:
+    if len(data) < 20:
+        return
+    out.extend([
+        {"signal_name": "tcp.src_port",  "signal_value": float((data[0] << 8) | data[1]), "signal_str": None},
+        {"signal_name": "tcp.dst_port",  "signal_value": float((data[2] << 8) | data[3]), "signal_str": None},
+        {"signal_name": "tcp.flags",     "signal_value": float(data[13] & 0x3F),           "signal_str": None},
+    ])
+
+
+def _eth_parse_udp(data: bytes, out: list) -> None:
+    if len(data) < 8:
+        return
+    out.extend([
+        {"signal_name": "udp.src_port",      "signal_value": float((data[0] << 8) | data[1]), "signal_str": None},
+        {"signal_name": "udp.dst_port",      "signal_value": float((data[2] << 8) | data[3]), "signal_str": None},
+        {"signal_name": "udp.payload_bytes", "signal_value": float(((data[4] << 8) | data[5]) - 8), "signal_str": None},
+    ])
+
+
+def _eth_parse_ipv4(data: bytes, out: list) -> None:
+    if len(data) < 20:
+        return
+    ihl = (data[0] & 0x0F) * 4
+    protocol = data[9]
+    out.extend([
+        {"signal_name": "ip.protocol",    "signal_value": float(protocol),                              "signal_str": None},
+        {"signal_name": "ip.ttl",         "signal_value": float(data[8]),                               "signal_str": None},
+        {"signal_name": "ip.total_len",   "signal_value": float((data[2] << 8) | data[3]),              "signal_str": None},
+        {"signal_name": "ip.src",         "signal_value": None, "signal_str": ".".join(str(b) for b in data[12:16])},
+        {"signal_name": "ip.dst",         "signal_value": None, "signal_str": ".".join(str(b) for b in data[16:20])},
+    ])
+    transport = data[ihl:] if ihl <= len(data) else b""
+    if protocol == 6:
+        _eth_parse_tcp(transport, out)
+    elif protocol == 17:
+        _eth_parse_udp(transport, out)
+
+
+def _eth_parse_ipv6(data: bytes, out: list) -> None:
+    if len(data) < 40:
+        return
+    next_header = data[6]
+    out.extend([
+        {"signal_name": "ip.protocol",   "signal_value": float(next_header), "signal_str": None},
+        {"signal_name": "ip.hop_limit",  "signal_value": float(data[7]),     "signal_str": None},
+        {
+            "signal_name": "ip.src", "signal_value": None,
+            "signal_str": ":".join(f"{(data[8  + i*2] << 8 | data[9  + i*2]):04x}" for i in range(8)),
+        },
+        {
+            "signal_name": "ip.dst", "signal_value": None,
+            "signal_str": ":".join(f"{(data[24 + i*2] << 8 | data[25 + i*2]):04x}" for i in range(8)),
+        },
+    ])
+    transport = data[40:]
+    if next_header == 6:
+        _eth_parse_tcp(transport, out)
+    elif next_header == 17:
+        _eth_parse_udp(transport, out)
+
+
+@pandas_udf(_ETH_SIGNAL_RESULT_SCHEMA)
+def _parse_eth_payload(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
+    """Extract IP/TCP/UDP header fields from the Ethernet payload as named signals."""
+    result = []
+    for ether_type, data in zip(ether_types, data_col):
+        signals: list = []
+        if data is not None:
+            raw = bytes(data)
+            if ether_type == 0x0800:
+                _eth_parse_ipv4(raw, signals)
+            elif ether_type == 0x86DD:
+                _eth_parse_ipv6(raw, signals)
+        result.append(signals)
+    return pd.Series(result)
+
+
+@dlt.table(
+    name="blf_silver_eth_signals",
+    comment=(
+        "Protocol-layer fields parsed from Ethernet payload data. "
+        "Long format: one row per (message, signal). "
+        "Covers IPv4/IPv6 headers (ip.src, ip.dst, ip.protocol, ip.ttl) "
+        "and TCP/UDP transport (src_port, dst_port, tcp.flags, udp.payload_bytes). "
+        "Numeric fields in signal_value; address strings in signal_str."
+    ),
+    table_properties={
+        "quality": "silver",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+    partition_cols=["message_type"],
+)
+def blf_silver_eth_signals():
+    return (
+        dlt.read_stream("blf_silver_eth")
+        .withColumn("_signals", _parse_eth_payload(F.col("ether_type"), F.col("data")))
+        .filter(F.size("_signals") > 0)
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "dir",
+            "src_mac",
+            "dst_mac",
+            "ether_type",
+            "ether_type_hex",
+            F.explode("_signals").alias("_s"),
+        )
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "dir",
+            "src_mac",
+            "dst_mac",
+            "ether_type",
+            "ether_type_hex",
+            F.col("_s.signal_name"),
+            F.col("_s.signal_value"),
+            F.col("_s.signal_str"),
+        )
+    )
+
+
+# ── gold layer — merged CAN + Ethernet signals ────────────────────────────────
+
+@dlt.table(
+    name="blf_gold_signals",
+    comment=(
+        "Unified signal table merging CAN decoded signals and Ethernet protocol fields. "
+        "One row per (message, signal). "
+        "signal_source distinguishes 'CAN' from 'ETH'. "
+        "message_id_str holds can_id_hex for CAN rows and ether_type_hex for ETH rows. "
+        "signal_value for numeric signals; signal_str for address strings."
+    ),
+    table_properties={
+        "quality": "gold",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+    partition_cols=["signal_source"],
+)
+def blf_gold_signals():
+    can = (
+        dlt.read_stream("blf_silver_can_signals")
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            F.lit("CAN").alias("signal_source"),
+            F.col("can_id_hex").alias("message_id_str"),
+            "dir",
+            "signal_name",
+            "signal_value",
+            F.lit(None).cast(StringType()).alias("signal_str"),
+        )
+    )
+    eth = (
+        dlt.read_stream("blf_silver_eth_signals")
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            F.lit("ETH").alias("signal_source"),
+            F.col("ether_type_hex").alias("message_id_str"),
+            "dir",
+            "signal_name",
+            "signal_value",
+            "signal_str",
+        )
+    )
+    return can.union(eth)

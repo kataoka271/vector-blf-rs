@@ -306,7 +306,11 @@ impl CanSignalDb {
         data: &[u8],
         long_header: bool,
     ) -> Vec<(String, f64)> {
-        let header = if long_header { ContainerHeader::Long } else { ContainerHeader::Short };
+        let header = if long_header {
+            ContainerHeader::Long
+        } else {
+            ContainerHeader::Short
+        };
         self.inner
             .extract_container(message_id, data, header)
             .into_iter()

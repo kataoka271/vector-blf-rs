@@ -166,7 +166,11 @@ pub fn write_csv_signals<W: Write>(
             Message::CanFd64(m) => {
                 let vals = can_extract(db, m.id, &m.data);
                 for (name, value) in vals {
-                    writeln!(w, "{},{},0x{:X},{},{}", ns, m.channel as u32, m.id, name, value)?;
+                    writeln!(
+                        w,
+                        "{},{},0x{:X},{},{}",
+                        ns, m.channel as u32, m.id, name, value
+                    )?;
                     count += 1;
                 }
             }

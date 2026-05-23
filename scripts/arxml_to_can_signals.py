@@ -34,7 +34,7 @@ from autosar_data.abstraction.communication import (
 # ---------------------------------------------------------------------------
 
 
-def child_text(elem, tag: str) -> Optional[str]:
+def child_text(elem: autosar_data.Element, tag: str) -> Optional[str]:
     c = elem.get_sub_element(tag)
     if c is None:
         return None
@@ -42,7 +42,7 @@ def child_text(elem, tag: str) -> Optional[str]:
     return str(d) if d is not None else None
 
 
-def child_int(elem, tag: str) -> Optional[int]:
+def child_int(elem: autosar_data.Element, tag: str) -> Optional[int]:
     c = elem.get_sub_element(tag)
     if c is None:
         return None
@@ -53,12 +53,12 @@ def child_int(elem, tag: str) -> Optional[int]:
         return None
 
 
-def follow_ref(elem, tag: str) -> Optional[object]:
+def follow_ref(elem: autosar_data.Element, tag: str) -> Optional[autosar_data.Element]:
     ref = elem.get_sub_element(tag)
     if ref is None:
         return None
     try:
-        return ref.reference_target()
+        return ref.reference_target
     except Exception:
         return None
 
@@ -68,9 +68,9 @@ def follow_ref(elem, tag: str) -> Optional[object]:
 # ---------------------------------------------------------------------------
 
 
-def _collect_v_values(elem) -> list[float]:
+def _collect_v_values(elem: autosar_data.Element) -> list[float]:
     values: list[float] = []
-    for child in elem.sub_elements():
+    for child in elem.sub_elements:
         if child.element_name == "V":
             try:
                 values.append(float(str(child.character_data)))
@@ -79,7 +79,7 @@ def _collect_v_values(elem) -> list[float]:
     return values
 
 
-def parse_compu_method(compu_method) -> tuple[float, float]:
+def parse_compu_method(compu_method: autosar_data.Element) -> tuple[float, float]:
     """Return (scale, offset) from a LINEAR or RATIONAL COMPU-METHOD."""
     try:
         internal = compu_method.get_sub_element("COMPU-INTERNAL-TO-PHYS")
@@ -137,7 +137,7 @@ _PROPS_PATH = [
 ]
 
 
-def _find_props_conditional(container):
+def _find_props_conditional(container: autosar_data.Element) -> Optional[autosar_data.Element]:
     for path in _PROPS_PATH:
         elem = container
         for tag in path:
@@ -149,7 +149,7 @@ def _find_props_conditional(container):
     return None
 
 
-def _get_sw_props(isignal):
+def _get_sw_props(isignal: autosar_data.Element) -> Optional[autosar_data.Element]:
     for wrapper_tag in ("I-SIGNAL-PROPS", "NETWORK-REPRESENTATION-PROPS"):
         wrapper = isignal.get_sub_element(wrapper_tag)
         if wrapper is not None:
@@ -159,7 +159,7 @@ def _get_sw_props(isignal):
     return None
 
 
-def get_is_signed(isignal) -> bool:
+def get_is_signed(isignal: autosar_data.Element) -> bool:
     cond = _get_sw_props(isignal)
     if cond is None:
         return False
@@ -170,7 +170,7 @@ def get_is_signed(isignal) -> bool:
     return encoding is not None and encoding.upper() == "2S-COMPLEMENT"
 
 
-def get_compu_method(isignal):
+def get_compu_method(isignal: autosar_data.Element) -> Optional[autosar_data.Element]:
     cond = _get_sw_props(isignal)
     if cond is None:
         return None
@@ -183,19 +183,19 @@ def get_compu_method(isignal):
 
 
 def _signals_from_isignal_ipdu(
-    pdu_elem,
+    pdu_elem: autosar_data.Element,
     can_id: int,
     pdu_byte_offset: int,
-    seen: set,
+    seen: set[tuple[int, Optional[int], str]],
     pdu_id: Optional[int] = None,
-) -> list[dict]:
+) -> list[dict[str, str | int | float]]:
     """Extract signal rows from one I-SIGNAL-I-PDU element.
 
     pdu_byte_offset: byte offset of this PDU within the CAN frame (0 for container I-PDUs,
                      since start_bit is relative to the I-PDU payload after demux).
     pdu_id:         when set, the row gets a ninth 'pdu_id' column (container frame signal).
     """
-    rows: list[dict] = []
+    rows: list[dict[str, str | int | float]] = []
 
     sig_mappings_container = pdu_elem.get_sub_element(
         "I-SIGNAL-TO-PDU-MAPPINGS"
@@ -203,7 +203,7 @@ def _signals_from_isignal_ipdu(
     if sig_mappings_container is None:
         return rows
 
-    for sig_mapping in sig_mappings_container.sub_elements():
+    for sig_mapping in sig_mappings_container.sub_elements:
         if "I-SIGNAL-TO" not in sig_mapping.element_name:
             continue
 
@@ -237,7 +237,7 @@ def _signals_from_isignal_ipdu(
             continue
         seen.add(key)
 
-        row: dict = {
+        row: dict[str, str | int | float] = {
             "message_id": f"0x{can_id:X}",
             "signal_name": signal_name,
             "start_bit": start_bit,
@@ -261,13 +261,13 @@ def _signals_from_isignal_ipdu(
 
 
 def _signals_from_container_ipdu(
-    pdu_elem,
+    pdu_elem: autosar_data.Element,
     can_id: int,
-    seen: set,
+    seen: set[tuple[int, Optional[int], str]],
     verbose: bool = False,
-) -> list[dict]:
+) -> list[dict[str, str | int | float]]:
     """Demux a CONTAINER-I-PDU and extract signals from each contained I-SIGNAL-I-PDU."""
-    rows: list[dict] = []
+    rows: list[dict[str, str | int | float]] = []
     try:
         container = ContainerIPdu(pdu_elem)
         header_type = container.header_type
@@ -323,11 +323,11 @@ def _signals_from_container_ipdu(
 # ---------------------------------------------------------------------------
 
 
-def extract_signals(model, verbose: bool = False) -> list[dict]:
-    rows: list[dict] = []
-    seen: set[tuple] = set()
+def extract_signals(model: autosar_data.AutosarModel, verbose: bool = False) -> list[dict[str, str | int | float]]:
+    rows: list[dict[str, str | int | float]] = []
+    seen: set[tuple[int, Optional[int], str]] = set()
 
-    for elem in model.elements_dfs():
+    for _depth, elem in model.elements_dfs:
         if elem.element_name != "CAN-FRAME-TRIGGERING":
             continue
 
@@ -343,7 +343,7 @@ def extract_signals(model, verbose: bool = False) -> list[dict]:
         if pdu_frame_mappings is None:
             continue
 
-        for pdu_mapping in pdu_frame_mappings.sub_elements():
+        for pdu_mapping in pdu_frame_mappings.sub_elements:
             if pdu_mapping.element_name != "PDU-TO-FRAME-MAPPING":
                 continue
 

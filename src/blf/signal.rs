@@ -79,7 +79,11 @@ fn extract_motorola(data: &[u8], start_bit: u32, bit_length: u32) -> Option<u64>
         let bit_val = (data[byte_idx] >> bit_idx) as u64 & 1;
         // MSB goes into the highest output bit
         raw |= bit_val << (bit_length - 1 - i);
-        pos = if pos.is_multiple_of(8) { pos + 15 } else { pos - 1 };
+        pos = if pos.is_multiple_of(8) {
+            pos + 15
+        } else {
+            pos - 1
+        };
     }
     Some(raw)
 }
@@ -127,8 +131,14 @@ pub fn demux_container(data: &[u8], header: ContainerHeader) -> Vec<(u32, &[u8])
                 if pos + 8 > data.len() {
                     break;
                 }
-                let id = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-                let len = u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]) as usize;
+                let id =
+                    u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                let len = u32::from_be_bytes([
+                    data[pos + 4],
+                    data[pos + 5],
+                    data[pos + 6],
+                    data[pos + 7],
+                ]) as usize;
                 pos += 8;
                 (id, len)
             }
@@ -213,7 +223,14 @@ impl CanSignalDb {
             let def = SignalDef {
                 name,
                 message_id,
-                signal: Signal { start_bit, bit_length, byte_order, is_signed, scale, offset },
+                signal: Signal {
+                    start_bit,
+                    bit_length,
+                    byte_order,
+                    is_signed,
+                    scale,
+                    offset,
+                },
             };
             if p.len() >= 9 && !p[8].is_empty() {
                 let pdu_id = parse_u32(p[8])?;
@@ -247,7 +264,10 @@ impl CanSignalDb {
 
     /// All regular-frame signal definitions for the given CAN ID.
     pub fn signals(&self, message_id: u32) -> &[SignalDef] {
-        self.frames.get(&message_id).map(Vec::as_slice).unwrap_or(&[])
+        self.frames
+            .get(&message_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Decode all regular-frame signals for `message_id` from `data`.
@@ -576,7 +596,9 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
     fn demux_short_header() {
         // Two I-PDUs: PDU 0x0010 with 2 bytes, PDU 0x0020 with 1 byte
         // [0x00, 0x10, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x20, 0x00, 0x01, 0xFF]
-        let data = [0x00u8, 0x10, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x20, 0x00, 0x01, 0xFF];
+        let data = [
+            0x00u8, 0x10, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x20, 0x00, 0x01, 0xFF,
+        ];
         let pdus = demux_container(&data, ContainerHeader::Short);
         assert_eq!(pdus.len(), 2);
         assert_eq!(pdus[0], (0x0010, [0xAB, 0xCD].as_slice()));
@@ -613,13 +635,49 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
         // Build a container frame: PDU 0x10 → [0x05, 0x0A], PDU 0x20 → [0x08]
         let frame = [
             0x00u8, 0x10, 0x00, 0x02, 0x05, 0x0A, // PDU 0x10: Sig1=5, Sig2=10
-            0x00, 0x20, 0x00, 0x01, 0x08,           // PDU 0x20: Sig3=8*0.5=4.0
+            0x00, 0x20, 0x00, 0x01, 0x08, // PDU 0x20: Sig3=8*0.5=4.0
         ];
         let vals = db.extract_container(0x200, &frame, ContainerHeader::Short);
         let get = |name: &str| vals.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
         assert_eq!(get("Sig1"), Some(5.0));
         assert_eq!(get("Sig2"), Some(20.0));
         assert_eq!(get("Sig3"), Some(4.0));
+    }
+
+    #[test]
+    fn container_pdu_order_independent() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x600,Radar_Distance_m,0,16,Intel,false,0.01,0.0,0x01\n\
+                   0x600,CabinTemp_degC,0,8,Intel,true,0.5,-40.0,0x02\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+
+        // PDU 0x01 first, then PDU 0x02
+        let frame_ab = [
+            0x00u8, 0x01, 0x00, 0x02, 0x40, 0x1F, // PDU 0x01: raw=0x1F40=8000 → 80.0 m
+            0x00, 0x02, 0x00, 0x01, 0x64, // PDU 0x02: raw=0x64=100 → 100*0.5-40=10.0 °C
+        ];
+        // PDU 0x02 first, then PDU 0x01
+        let frame_ba = [
+            0x00u8, 0x02, 0x00, 0x01, 0x64, // PDU 0x02
+            0x00, 0x01, 0x00, 0x02, 0x40, 0x1F, // PDU 0x01
+        ];
+
+        let vals_ab = db.extract_container(0x600, &frame_ab, ContainerHeader::Short);
+        let vals_ba = db.extract_container(0x600, &frame_ba, ContainerHeader::Short);
+
+        let get = |vals: &[(&str, f64)], name: &str| {
+            vals.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+        };
+        assert_eq!(get(&vals_ab, "Radar_Distance_m"), Some(80.0));
+        assert_eq!(get(&vals_ab, "CabinTemp_degC"), Some(10.0));
+        assert_eq!(
+            get(&vals_ba, "Radar_Distance_m"),
+            get(&vals_ab, "Radar_Distance_m")
+        );
+        assert_eq!(
+            get(&vals_ba, "CabinTemp_degC"),
+            get(&vals_ab, "CabinTemp_degC")
+        );
     }
 
     #[test]
@@ -632,6 +690,10 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
         assert!(db.is_container(0x200));
         assert_eq!(db.extract(0x100, &[0x42]).len(), 1);
         let frame = [0x00u8, 0x01, 0x00, 0x01, 0x07];
-        assert_eq!(db.extract_container(0x200, &frame, ContainerHeader::Short).len(), 1);
+        assert_eq!(
+            db.extract_container(0x200, &frame, ContainerHeader::Short)
+                .len(),
+            1
+        );
     }
 }

@@ -2,7 +2,7 @@
 Benchmark: python-can BLFReader vs vector_blf Reader
 
 Usage:
-    uv run python bench_python.py [path/to/file.blf]
+    uv run python scripts/bench_python.py [path/to/file.blf]
 """
 
 import os

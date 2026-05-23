@@ -12,8 +12,8 @@ Container frames (CAN-FD Container I-PDU):
     message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id
 
 Usage:
-    uv run python arxml_to_can_signals.py input.arxml [-o output.csv]
-    uv run python arxml_to_can_signals.py a.arxml b.arxml -o signals.csv
+    uv run python scripts/arxml_to_can_signals.py input.arxml [-o output.csv]
+    uv run python scripts/arxml_to_can_signals.py a.arxml b.arxml -o signals.csv
 """
 
 import argparse

@@ -138,7 +138,7 @@ Integration tests live in `tests/`; BLF test files live in `data/`. The `SharedC
 
 ## Performance Testing
 
-There is no criterion benchmark suite. Use the CLI directly against a generated large file, or `bench_python.py` to compare against python-can.
+There is no criterion benchmark suite. Use the CLI directly against a generated large file, or `scripts/bench_python.py` to compare against python-can.
 
 **1. Generate a large BLF file** (repeat a small fixture N times):
 
@@ -180,5 +180,5 @@ Output shows scan time (I/O-bound, benefits from BufReader) and parse time (zlib
 **4. Python benchmark** (vector_blf vs python-can, with/without Rust-side type filter):
 
 ```bash
-uv run python bench_python.py data/bench_large.blf
+uv run python scripts/bench_python.py data/bench_large.blf
 ```

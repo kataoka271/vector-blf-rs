@@ -96,6 +96,52 @@ fn sign_extend(value: u64, bit_length: u32) -> i64 {
     }
 }
 
+/// CAN-FD container frame header format. Both variants are big-endian (network byte order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContainerHeader {
+    /// 2-byte PDU ID + 2-byte length (4-byte overhead per I-PDU). Most common.
+    #[default]
+    Short,
+    /// 4-byte PDU ID + 4-byte length (8-byte overhead per I-PDU).
+    Long,
+}
+
+/// Demultiplex a CAN-FD container frame payload into `(pdu_id, i_pdu_payload)` pairs.
+///
+/// Stops at the first header that would extend past the end of `data`.
+pub fn demux_container(data: &[u8], header: ContainerHeader) -> Vec<(u32, &[u8])> {
+    let mut result = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        let (pdu_id, length) = match header {
+            ContainerHeader::Short => {
+                if pos + 4 > data.len() {
+                    break;
+                }
+                let id = u16::from_be_bytes([data[pos], data[pos + 1]]) as u32;
+                let len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+                pos += 4;
+                (id, len)
+            }
+            ContainerHeader::Long => {
+                if pos + 8 > data.len() {
+                    break;
+                }
+                let id = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                let len = u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]) as usize;
+                pos += 8;
+                (id, len)
+            }
+        };
+        if pos + length > data.len() {
+            break;
+        }
+        result.push((pdu_id, &data[pos..pos + length]));
+        pos += length;
+    }
+    result
+}
+
 /// A named signal bound to a specific CAN message ID.
 #[derive(Debug, Clone)]
 pub struct SignalDef {
@@ -114,15 +160,21 @@ impl SignalDef {
 ///
 /// CSV format (header required):
 /// ```text
-/// message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+/// message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset[,pdu_id]
 /// 0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
 /// 0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+/// 0x300,ContainerSig,0,8,Intel,false,1.0,0.0,0x10
 /// ```
 /// `message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`
 /// (case-insensitive). `is_signed` accepts `true`/`false` or `1`/`0`.
+/// The optional ninth column `pdu_id` marks the row as a container-frame signal;
+/// `start_bit` is then the bit offset within the I-PDU payload after demultiplexing.
 #[derive(Debug, Default)]
 pub struct CanSignalDb {
-    map: HashMap<u32, Vec<SignalDef>>,
+    /// Regular-frame signals keyed by CAN ID.
+    frames: HashMap<u32, Vec<SignalDef>>,
+    /// Container-frame signals keyed by CAN ID → PDU ID → signals.
+    containers: HashMap<u32, HashMap<u32, Vec<SignalDef>>>,
 }
 
 impl CanSignalDb {
@@ -138,7 +190,7 @@ impl CanSignalDb {
             if line.is_empty() || line.starts_with('#') || line.starts_with("message_id") {
                 continue;
             }
-            let p: Vec<&str> = line.splitn(8, ',').map(str::trim).collect();
+            let p: Vec<&str> = line.splitn(9, ',').map(str::trim).collect();
             if p.len() < 8 {
                 return Err(ParseError::InvalidData);
             }
@@ -158,38 +210,79 @@ impl CanSignalDb {
             };
             let scale = p[6].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
             let offset = p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
-            db.insert(SignalDef {
+            let def = SignalDef {
                 name,
                 message_id,
-                signal: Signal {
-                    start_bit,
-                    bit_length,
-                    byte_order,
-                    is_signed,
-                    scale,
-                    offset,
-                },
-            });
+                signal: Signal { start_bit, bit_length, byte_order, is_signed, scale, offset },
+            };
+            if p.len() >= 9 && !p[8].is_empty() {
+                let pdu_id = parse_u32(p[8])?;
+                db.insert_container(def, pdu_id);
+            } else {
+                db.insert(def);
+            }
         }
         Ok(db)
     }
 
+    /// Insert a regular-frame signal definition.
     pub fn insert(&mut self, def: SignalDef) {
-        self.map.entry(def.message_id).or_default().push(def);
+        self.frames.entry(def.message_id).or_default().push(def);
     }
 
-    /// All signal definitions for the given message ID.
+    /// Insert a container-frame signal definition bound to `pdu_id` within `can_id`.
+    pub fn insert_container(&mut self, def: SignalDef, pdu_id: u32) {
+        self.containers
+            .entry(def.message_id)
+            .or_default()
+            .entry(pdu_id)
+            .or_default()
+            .push(def);
+    }
+
+    /// Returns `true` if `can_id` is configured as a container frame.
+    pub fn is_container(&self, can_id: u32) -> bool {
+        self.containers.contains_key(&can_id)
+    }
+
+    /// All regular-frame signal definitions for the given CAN ID.
     pub fn signals(&self, message_id: u32) -> &[SignalDef] {
-        self.map.get(&message_id).map(Vec::as_slice).unwrap_or(&[])
+        self.frames.get(&message_id).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    /// Decode all signals for `message_id` from `data`. Signals that extend
-    /// outside `data` are silently skipped.
+    /// Decode all regular-frame signals for `message_id` from `data`.
+    /// Signals that extend outside `data` are silently skipped.
     pub fn extract(&self, message_id: u32, data: &[u8]) -> Vec<(&str, f64)> {
         self.signals(message_id)
             .iter()
             .filter_map(|def| def.signal.decode(data).map(|v| (def.name.as_str(), v)))
             .collect()
+    }
+
+    /// Demultiplex a container frame and decode all signals from the contained I-PDUs.
+    ///
+    /// I-PDUs whose PDU ID is not in the database are silently skipped.
+    /// Signal bit positions are relative to each I-PDU payload (after stripping the header).
+    pub fn extract_container<'a>(
+        &'a self,
+        can_id: u32,
+        data: &[u8],
+        header: ContainerHeader,
+    ) -> Vec<(&'a str, f64)> {
+        let Some(pdu_map) = self.containers.get(&can_id) else {
+            return vec![];
+        };
+        let mut result = Vec::new();
+        for (pdu_id, payload) in demux_container(data, header) {
+            if let Some(defs) = pdu_map.get(&pdu_id) {
+                for def in defs {
+                    if let Some(v) = def.signal.decode(payload) {
+                        result.push((def.name.as_str(), v));
+                    }
+                }
+            }
+        }
+        result
     }
 }
 
@@ -475,5 +568,70 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
         // raw=0xFF = -1 signed → -1 * 0.5 - 40.0 = -40.5
         let vals = db.extract(0x0010, 0x0003, &[0xFF]);
         assert_eq!(vals.first().map(|(_, v)| *v), Some(-40.5));
+    }
+
+    // ── container frame tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn demux_short_header() {
+        // Two I-PDUs: PDU 0x0010 with 2 bytes, PDU 0x0020 with 1 byte
+        // [0x00, 0x10, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x20, 0x00, 0x01, 0xFF]
+        let data = [0x00u8, 0x10, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x20, 0x00, 0x01, 0xFF];
+        let pdus = demux_container(&data, ContainerHeader::Short);
+        assert_eq!(pdus.len(), 2);
+        assert_eq!(pdus[0], (0x0010, [0xAB, 0xCD].as_slice()));
+        assert_eq!(pdus[1], (0x0020, [0xFF].as_slice()));
+    }
+
+    #[test]
+    fn demux_long_header() {
+        // PDU 0x00000010 with 2 bytes: [0x00,0x00,0x00,0x10, 0x00,0x00,0x00,0x02, 0xAB, 0xCD]
+        let data = [0x00u8, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x02, 0xAB, 0xCD];
+        let pdus = demux_container(&data, ContainerHeader::Long);
+        assert_eq!(pdus.len(), 1);
+        assert_eq!(pdus[0], (0x10u32, [0xAB, 0xCD].as_slice()));
+    }
+
+    #[test]
+    fn demux_truncated_stops_early() {
+        // Header says length=5 but only 2 bytes available after header
+        let data = [0x00u8, 0x01, 0x00, 0x05, 0xAA, 0xBB];
+        let pdus = demux_container(&data, ContainerHeader::Short);
+        assert!(pdus.is_empty());
+    }
+
+    #[test]
+    fn container_csv_round_trip() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x200,Sig1,0,8,Intel,false,1.0,0.0,0x10\n\
+                   0x200,Sig2,8,8,Intel,false,2.0,0.0,0x10\n\
+                   0x200,Sig3,0,8,Intel,false,0.5,0.0,0x20\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert!(db.is_container(0x200));
+        assert!(!db.is_container(0x100));
+
+        // Build a container frame: PDU 0x10 → [0x05, 0x0A], PDU 0x20 → [0x08]
+        let frame = [
+            0x00u8, 0x10, 0x00, 0x02, 0x05, 0x0A, // PDU 0x10: Sig1=5, Sig2=10
+            0x00, 0x20, 0x00, 0x01, 0x08,           // PDU 0x20: Sig3=8*0.5=4.0
+        ];
+        let vals = db.extract_container(0x200, &frame, ContainerHeader::Short);
+        let get = |name: &str| vals.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
+        assert_eq!(get("Sig1"), Some(5.0));
+        assert_eq!(get("Sig2"), Some(20.0));
+        assert_eq!(get("Sig3"), Some(4.0));
+    }
+
+    #[test]
+    fn container_and_regular_signals_coexist() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x100,Direct,0,8,Intel,false,1.0,0.0\n\
+                   0x200,Contained,0,8,Intel,false,1.0,0.0,0x01\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert!(!db.is_container(0x100));
+        assert!(db.is_container(0x200));
+        assert_eq!(db.extract(0x100, &[0x42]).len(), 1);
+        let frame = [0x00u8, 0x01, 0x00, 0x01, 0x07];
+        assert_eq!(db.extract_container(0x200, &frame, ContainerHeader::Short).len(), 1);
     }
 }

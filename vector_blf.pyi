@@ -82,12 +82,15 @@ class CanSignalDb:
 
     CSV format (header required)::
 
-        message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+        message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset[,pdu_id]
         0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
+        0x200,ContainerSig,0,8,Intel,false,1.0,0.0,0x10
 
     ``message_id`` accepts hex (``0x…``) or decimal.
     ``byte_order`` is ``Intel`` or ``Motorola`` (case-insensitive).
     ``is_signed`` accepts ``true``/``false`` or ``1``/``0``.
+    The optional ninth column ``pdu_id`` marks the row as a container-frame signal;
+    ``start_bit`` is then relative to the I-PDU payload after demultiplexing.
     """
 
     def __init__(self, path: str) -> None: ...
@@ -96,6 +99,20 @@ class CanSignalDb:
 
         Returns a list of ``(signal_name, value)`` tuples.
         Signals whose bit range extends outside *data* are silently skipped.
+        """
+        ...
+
+    def decode_container(
+        self,
+        message_id: int,
+        data: bytes,
+        long_header: bool = False,
+    ) -> List[Tuple[str, float]]:
+        """Demultiplex a CAN-FD container frame and decode all signals.
+
+        *data* is the raw CAN frame payload. *long_header* selects between the
+        4-byte-overhead short header (default) and the 8-byte-overhead long header.
+        Returns a list of ``(signal_name, value)`` tuples for all matched I-PDUs.
         """
         ...
 

@@ -5,12 +5,15 @@ arxml_to_can_signals.py — Convert AUTOSAR ARXML to can_signals.csv
 Extracts CAN signal definitions from one or more AUTOSAR ARXML files and
 writes them in the can_signals.csv format expected by vector-blf-rs.
 
+Regular frames:
+    message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+
+Container frames (CAN-FD Container I-PDU):
+    message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id
+
 Usage:
     uv run python arxml_to_can_signals.py input.arxml [-o output.csv]
     uv run python arxml_to_can_signals.py a.arxml b.arxml -o signals.csv
-
-Output columns:
-    message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
 """
 
 import argparse
@@ -19,10 +22,15 @@ import sys
 from typing import Optional
 
 import autosar_data
+from autosar_data.abstraction.communication import (
+    ContainerIPdu,
+    ContainerIPduHeaderType,
+    ISignalIPdu,
+)
 
 
 # ---------------------------------------------------------------------------
-# Safe navigation helpers
+# Safe navigation helpers (raw element tree)
 # ---------------------------------------------------------------------------
 
 
@@ -86,7 +94,6 @@ def parse_compu_method(compu_method) -> tuple[float, float]:
 
         rational = scale_elem.get_sub_element("COMPU-RATIONAL-COEFFS")
         if rational is None:
-            # Some schemas put COMPU-NUMERATOR directly under COMPU-SCALE
             num_elem = scale_elem.get_sub_element("COMPU-NUMERATOR")
             if num_elem is not None:
                 vs = _collect_v_values(num_elem)
@@ -123,7 +130,6 @@ def parse_compu_method(compu_method) -> tuple[float, float]:
 # I-SIGNAL props: signedness and COMPU-METHOD
 # ---------------------------------------------------------------------------
 
-# AUTOSAR nests SW-DATA-DEF-PROPS under several possible wrapper elements.
 _PROPS_PATH = [
     ["SW-DATA-DEF-PROPS", "SW-DATA-DEF-PROPS-VARIANTS", "SW-DATA-DEF-PROPS-CONDITIONAL"],
     ["SW-DATA-DEF-PROPS-VARIANTS", "SW-DATA-DEF-PROPS-CONDITIONAL"],
@@ -144,7 +150,6 @@ def _find_props_conditional(container):
 
 
 def _get_sw_props(isignal):
-    """Return the SW-DATA-DEF-PROPS-CONDITIONAL element for an I-SIGNAL."""
     for wrapper_tag in ("I-SIGNAL-PROPS", "NETWORK-REPRESENTATION-PROPS"):
         wrapper = isignal.get_sub_element(wrapper_tag)
         if wrapper is not None:
@@ -173,11 +178,152 @@ def get_compu_method(isignal):
 
 
 # ---------------------------------------------------------------------------
-# Main extraction logic
+# Signal extraction from a single I-SIGNAL-I-PDU element
 # ---------------------------------------------------------------------------
 
 
-def extract_signals(model) -> list[dict]:
+def _signals_from_isignal_ipdu(
+    pdu_elem,
+    can_id: int,
+    pdu_byte_offset: int,
+    seen: set,
+    pdu_id: Optional[int] = None,
+) -> list[dict]:
+    """Extract signal rows from one I-SIGNAL-I-PDU element.
+
+    pdu_byte_offset: byte offset of this PDU within the CAN frame (0 for container I-PDUs,
+                     since start_bit is relative to the I-PDU payload after demux).
+    pdu_id:         when set, the row gets a ninth 'pdu_id' column (container frame signal).
+    """
+    rows: list[dict] = []
+
+    sig_mappings_container = pdu_elem.get_sub_element(
+        "I-SIGNAL-TO-PDU-MAPPINGS"
+    ) or pdu_elem.get_sub_element("I-SIGNAL-TO-I-PDU-MAPPINGS")
+    if sig_mappings_container is None:
+        return rows
+
+    for sig_mapping in sig_mappings_container.sub_elements():
+        if "I-SIGNAL-TO" not in sig_mapping.element_name:
+            continue
+
+        sig_start_in_pdu = child_int(sig_mapping, "START-POSITION")
+        if sig_start_in_pdu is None:
+            continue
+
+        packing = child_text(sig_mapping, "PACKING-BYTE-ORDER") or ""
+        byte_order = "Motorola" if "FIRST" in packing.upper() else "Intel"
+
+        isignal = follow_ref(sig_mapping, "I-SIGNAL-REF")
+        if isignal is None:
+            continue
+
+        signal_name = isignal.item_name
+        if not signal_name:
+            continue
+
+        bit_length = child_int(isignal, "LENGTH")
+        if bit_length is None:
+            continue
+
+        start_bit = pdu_byte_offset * 8 + sig_start_in_pdu
+
+        compu_method = get_compu_method(isignal)
+        scale, offset = parse_compu_method(compu_method) if compu_method is not None else (1.0, 0.0)
+        is_signed = get_is_signed(isignal)
+
+        key = (can_id, pdu_id, signal_name)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        row: dict = {
+            "message_id": f"0x{can_id:X}",
+            "signal_name": signal_name,
+            "start_bit": start_bit,
+            "bit_length": bit_length,
+            "byte_order": byte_order,
+            "is_signed": str(is_signed).lower(),
+            "scale": scale,
+            "offset": offset,
+        }
+        if pdu_id is not None:
+            row["pdu_id"] = f"0x{pdu_id:X}"
+
+        rows.append(row)
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Container I-PDU handling (uses autosar_data.abstraction)
+# ---------------------------------------------------------------------------
+
+
+def _signals_from_container_ipdu(
+    pdu_elem,
+    can_id: int,
+    seen: set,
+    verbose: bool = False,
+) -> list[dict]:
+    """Demux a CONTAINER-I-PDU and extract signals from each contained I-SIGNAL-I-PDU."""
+    rows: list[dict] = []
+    try:
+        container = ContainerIPdu(pdu_elem)
+        header_type = container.header_type
+        if header_type == ContainerIPduHeaderType.NoHeader:
+            if verbose:
+                print(f"  skipping NoHeader container at CAN ID 0x{can_id:X}", file=sys.stderr)
+            return rows
+
+        for pt in container.contained_ipdu_triggerings():
+            inner = pt.pdu
+            if inner is None:
+                continue
+
+            inner_elem = inner.element
+            if inner_elem.element_name != "I-SIGNAL-I-PDU":
+                continue
+
+            # Get the PDU ID from ContainedIPduProps on the inner I-SIGNAL-I-PDU
+            try:
+                inner_isignal_ipdu = ISignalIPdu(inner_elem)
+                props = inner_isignal_ipdu.contained_ipdu_props
+            except Exception:
+                props = None
+
+            pdu_id: Optional[int] = None
+            if props is not None:
+                if header_type == ContainerIPduHeaderType.ShortHeader:
+                    pdu_id = props.header_id_short
+                elif header_type == ContainerIPduHeaderType.LongHeader:
+                    pdu_id = props.header_id_long
+
+            if pdu_id is None:
+                if verbose:
+                    name = inner_elem.item_name or "?"
+                    print(
+                        f"  no header_id for contained PDU '{name}' in container 0x{can_id:X}",
+                        file=sys.stderr,
+                    )
+                continue
+
+            # start_bit is relative to the I-PDU payload (pdu_byte_offset = 0)
+            rows.extend(_signals_from_isignal_ipdu(inner_elem, can_id, 0, seen, pdu_id=pdu_id))
+
+    except Exception as exc:
+        if verbose:
+            print(f"  error processing container at CAN ID 0x{can_id:X}: {exc}", file=sys.stderr)
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Main extraction loop
+# ---------------------------------------------------------------------------
+
+
+def extract_signals(model, verbose: bool = False) -> list[dict]:
     rows: list[dict] = []
     seen: set[tuple] = set()
 
@@ -201,70 +347,18 @@ def extract_signals(model) -> list[dict]:
             if pdu_mapping.element_name != "PDU-TO-FRAME-MAPPING":
                 continue
 
-            pdu_byte_offset = child_int(pdu_mapping, "START-POSITION") or 0
+            # START-POSITION is in bits; PDUs are byte-aligned
+            start_pos_bits = child_int(pdu_mapping, "START-POSITION") or 0
+            pdu_byte_offset = start_pos_bits // 8
 
             pdu = follow_ref(pdu_mapping, "PDU-REF")
-            if pdu is None or pdu.element_name != "I-SIGNAL-I-PDU":
+            if pdu is None:
                 continue
 
-            # Try both AUTOSAR 3.x and 4.x element names for the signal mapping list
-            sig_mappings_container = pdu.get_sub_element(
-                "I-SIGNAL-TO-PDU-MAPPINGS"
-            ) or pdu.get_sub_element("I-SIGNAL-TO-I-PDU-MAPPINGS")
-            if sig_mappings_container is None:
-                continue
-
-            for sig_mapping in sig_mappings_container.sub_elements():
-                if "I-SIGNAL-TO" not in sig_mapping.element_name:
-                    continue
-
-                sig_start_in_pdu = child_int(sig_mapping, "START-POSITION")
-                if sig_start_in_pdu is None:
-                    continue
-
-                packing = child_text(sig_mapping, "PACKING-BYTE-ORDER") or ""
-                # MOST-SIGNIFICANT-BYTE-FIRST → Motorola (big-endian)
-                # MOST-SIGNIFICANT-BYTE-LAST  → Intel   (little-endian)
-                byte_order = "Motorola" if "FIRST" in packing.upper() else "Intel"
-
-                isignal = follow_ref(sig_mapping, "I-SIGNAL-REF")
-                if isignal is None:
-                    continue
-
-                signal_name = isignal.item_name
-                if not signal_name:
-                    continue
-
-                bit_length = child_int(isignal, "LENGTH")
-                if bit_length is None:
-                    continue
-
-                # Bit position within the CAN frame
-                start_bit = pdu_byte_offset * 8 + sig_start_in_pdu
-
-                # Physical value encoding
-                compu_method = get_compu_method(isignal)
-                scale, offset = parse_compu_method(compu_method) if compu_method is not None else (1.0, 0.0)
-
-                is_signed = get_is_signed(isignal)
-
-                key = (can_id, signal_name)
-                if key in seen:
-                    continue
-                seen.add(key)
-
-                rows.append(
-                    {
-                        "message_id": f"0x{can_id:X}",
-                        "signal_name": signal_name,
-                        "start_bit": start_bit,
-                        "bit_length": bit_length,
-                        "byte_order": byte_order,
-                        "is_signed": str(is_signed).lower(),
-                        "scale": scale,
-                        "offset": offset,
-                    }
-                )
+            if pdu.element_name == "I-SIGNAL-I-PDU":
+                rows.extend(_signals_from_isignal_ipdu(pdu, can_id, pdu_byte_offset, seen))
+            elif pdu.element_name == "CONTAINER-I-PDU":
+                rows.extend(_signals_from_container_ipdu(pdu, can_id, seen, verbose=verbose))
 
     return rows
 
@@ -273,7 +367,8 @@ def extract_signals(model) -> list[dict]:
 # CLI
 # ---------------------------------------------------------------------------
 
-FIELDNAMES = ["message_id", "signal_name", "start_bit", "bit_length", "byte_order", "is_signed", "scale", "offset"]
+FIELDNAMES_BASE = ["message_id", "signal_name", "start_bit", "bit_length", "byte_order", "is_signed", "scale", "offset"]
+FIELDNAMES_CONTAINER = FIELDNAMES_BASE + ["pdu_id"]
 
 
 def main() -> int:
@@ -282,7 +377,7 @@ def main() -> int:
     )
     parser.add_argument("inputs", nargs="+", metavar="ARXML", help="Input ARXML file(s)")
     parser.add_argument("-o", "--output", metavar="CSV", help="Output CSV file (default: stdout)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Print ARXML load warnings")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print ARXML load warnings and container debug info")
     args = parser.parse_args()
 
     model = autosar_data.AutosarModel()
@@ -292,22 +387,26 @@ def main() -> int:
         except Exception as exc:
             print(f"Error loading {path}: {exc}", file=sys.stderr)
             return 1
-        if args.verbose:
+        if args.verbose and warnings:
             for w in warnings:
                 print(f"  warning: {w}", file=sys.stderr)
 
-    rows = extract_signals(model)
+    rows = extract_signals(model, verbose=args.verbose)
 
     if not rows:
         print("No CAN signals found in the provided ARXML file(s).", file=sys.stderr)
         return 1
+
+    # Use the wider fieldnames if any row has pdu_id
+    has_container = any("pdu_id" in r for r in rows)
+    fieldnames = FIELDNAMES_CONTAINER if has_container else FIELDNAMES_BASE
 
     if args.output:
         f = open(args.output, "w", newline="", encoding="utf-8")
     else:
         f = sys.stdout
 
-    writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+    writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
 

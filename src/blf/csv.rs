@@ -1,7 +1,7 @@
 use super::diag::someip::SomeIp;
 use super::ip::Ip;
 use super::message::Message;
-use super::signal::{CanSignalDb, SomeIpSignalDb};
+use super::signal::{CanSignalDb, ContainerHeader, SomeIpSignalDb};
 use super::transport::Transport;
 use super::BaseObject;
 use super::Timestamp;
@@ -130,6 +130,14 @@ pub fn write_csv_raw<W: Write>(
     Ok(count)
 }
 
+fn can_extract<'a>(db: &'a CanSignalDb, can_id: u32, data: &[u8]) -> Vec<(&'a str, f64)> {
+    if db.is_container(can_id) {
+        db.extract_container(can_id, data, ContainerHeader::Short)
+    } else {
+        db.extract(can_id, data)
+    }
+}
+
 pub fn write_csv_signals<W: Write>(
     w: &mut W,
     objects: &[BaseObject],
@@ -142,24 +150,23 @@ pub fn write_csv_signals<W: Write>(
         let ns = ts_ns(obj.timestamp);
         match &obj.message {
             Message::Can(m) => {
-                for (name, value) in db.extract(m.id, &m.data) {
+                let vals = can_extract(db, m.id, &m.data);
+                for (name, value) in vals {
                     writeln!(w, "{},{},0x{:X},{},{}", ns, m.channel, m.id, name, value)?;
                     count += 1;
                 }
             }
             Message::CanFd(m) => {
-                for (name, value) in db.extract(m.id, &m.data) {
+                let vals = can_extract(db, m.id, &m.data);
+                for (name, value) in vals {
                     writeln!(w, "{},{},0x{:X},{},{}", ns, m.channel, m.id, name, value)?;
                     count += 1;
                 }
             }
             Message::CanFd64(m) => {
-                for (name, value) in db.extract(m.id, &m.data) {
-                    writeln!(
-                        w,
-                        "{},{},0x{:X},{},{}",
-                        ns, m.channel as u32, m.id, name, value
-                    )?;
+                let vals = can_extract(db, m.id, &m.data);
+                for (name, value) in vals {
+                    writeln!(w, "{},{},0x{:X},{},{}", ns, m.channel as u32, m.id, name, value)?;
                     count += 1;
                 }
             }

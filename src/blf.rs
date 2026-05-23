@@ -27,7 +27,10 @@ pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan};
 pub use object::FileHeader;
 pub use objtype::ObjType;
-pub use signal::{ByteOrder, CanSignalDb, Signal, SignalDef, SomeIpSignalDb, SomeIpSignalDef};
+pub use signal::{
+    demux_container, ByteOrder, CanSignalDb, ContainerHeader, Signal, SignalDef, SomeIpSignalDb,
+    SomeIpSignalDef,
+};
 pub use transport::{Tcp, TcpFlags, Transport, Udp};
 
 #[derive(Debug)]

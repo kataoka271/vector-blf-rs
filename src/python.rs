@@ -1,4 +1,4 @@
-use crate::blf;
+use crate::blf::{self, ContainerHeader};
 use pyo3::exceptions::PyStopIteration;
 use pyo3::prelude::*;
 use std::fs::File;
@@ -289,6 +289,26 @@ impl CanSignalDb {
     fn decode(&self, message_id: u32, data: &[u8]) -> Vec<(String, f64)> {
         self.inner
             .extract(message_id, data)
+            .into_iter()
+            .map(|(name, val)| (name.to_string(), val))
+            .collect()
+    }
+
+    /// Demultiplex a CAN-FD container frame and decode all signals from the contained I-PDUs.
+    ///
+    /// ``data`` is the raw CAN frame payload. ``long_header`` selects between
+    /// the 4-byte-overhead short header (default) and the 8-byte-overhead long header.
+    /// Returns a list of ``(signal_name, value)`` tuples for all matched I-PDUs.
+    #[pyo3(signature = (message_id, data, long_header = false))]
+    fn decode_container(
+        &self,
+        message_id: u32,
+        data: &[u8],
+        long_header: bool,
+    ) -> Vec<(String, f64)> {
+        let header = if long_header { ContainerHeader::Long } else { ContainerHeader::Short };
+        self.inner
+            .extract_container(message_id, data, header)
             .into_iter()
             .map(|(name, val)| (name.to_string(), val))
             .collect()

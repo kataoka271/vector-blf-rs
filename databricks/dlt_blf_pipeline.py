@@ -13,6 +13,7 @@ Layer layout
   blf_silver_can_signals     streaming table — decoded physical signal values (long format)
   blf_silver_eth_signals     streaming table — IP/TCP/UDP protocol fields as signals (long format)
   blf_silver_someip_signals  streaming table — SOME/IP application signals (long format)
+  blf_silver_diag            streaming table — UDS messages merged from CAN ISO-TP and DoIP
   blf_gold_signals           streaming table — CAN + ETH + SOME/IP signals merged into one schema
 
 Setup
@@ -93,6 +94,8 @@ _IPPROTO_TCP: int = 6
 _IPPROTO_UDP: int = 17
 _SOMEIP_PROTOCOL_VERSION: int = 0x01
 _SOMEIP_SD_SERVICE_ID: int = 0xFFFF  # Service Discovery — always skip
+_DOIP_PORT: int = 13400
+_DOIP_PAYLOAD_TYPE_DIAG: int = 0x8001  # DoIP DiagMessage — carries UDS payload
 
 # ── record schema (struct returned by the parsing UDF) ────────────────────────
 
@@ -930,6 +933,437 @@ def blf_silver_someip_signals():
             F.col("_sig.someip_msg_type"),
             F.col("_sig.signal_name"),
             F.col("_sig.signal_value"),
+        )
+    )
+
+
+# ── silver layer — UDS diagnostics (CAN ISO-TP + DoIP) ───────────────────────
+#
+# UDS (ISO 14229) messages are extracted from two transport layers:
+#
+#   • CAN  — ISO-TP (ISO 15765-2) reassembly over CAN / CAN-FD / CAN-FD64
+#            frames.  Single-frame and multi-frame (FF + CF*) PDUs are handled.
+#            Reassembly is per (channel, can_id) conversation within each file.
+#            Sequence errors cause the in-progress PDU to be discarded.
+#
+#   • DOIP — DoIP (ISO 13400-2) DiagMessage (payload_type=0x8001) payloads
+#            carried over TCP port 13400.  Multiple DoIP frames per TCP
+#            segment are supported; fragmented TCP segments are not reassembled.
+#
+# UDS frame classification:
+#   Request          — first byte 0x10-0x3E (no 0x40 bit set)
+#   PositiveResponse — first byte = requested SID | 0x40
+#   NegativeResponse — first byte 0x7F, second byte = requested SID, third = NRC
+
+_UDS_RECORD_SCHEMA = StructType(
+    [
+        StructField("timestamp_ns", LongType(), nullable=False),
+        StructField("channel", IntegerType()),
+        StructField("can_id", LongType()),           # null for DOIP rows
+        StructField("dir", ByteType()),
+        StructField("transport", StringType(), nullable=False),    # "CAN" | "DOIP"
+        StructField("doip_src_addr", IntegerType()),   # null for CAN rows
+        StructField("doip_target_addr", IntegerType()), # null for CAN rows
+        StructField("uds_type", StringType(), nullable=False),
+        StructField("service_id", IntegerType(), nullable=False),
+        StructField("service_name", StringType()),
+        StructField("nrc", IntegerType()),
+        StructField("nrc_name", StringType()),
+        StructField("data", BinaryType()),
+    ]
+)
+
+_UDS_SERVICE_NAMES: dict = {
+    0x10: "DiagnosticSessionControl",
+    0x11: "EcuReset",
+    0x14: "ClearDiagnosticInformation",
+    0x19: "ReadDtcInformation",
+    0x22: "ReadDataByIdentifier",
+    0x23: "ReadMemoryByAddress",
+    0x24: "ReadScalingDataByIdentifier",
+    0x27: "SecurityAccess",
+    0x28: "CommunicationControl",
+    0x29: "Authentication",
+    0x2A: "ReadDataByPeriodicIdentifier",
+    0x2C: "DynamicallyDefineDataIdentifier",
+    0x2E: "WriteDataByIdentifier",
+    0x2F: "InputOutputControlByIdentifier",
+    0x31: "RoutineControl",
+    0x34: "RequestDownload",
+    0x35: "RequestUpload",
+    0x36: "TransferData",
+    0x37: "RequestTransferExit",
+    0x38: "RequestFileTransfer",
+    0x3D: "WriteMemoryByAddress",
+    0x3E: "TesterPresent",
+    0x83: "AccessTimingParameter",
+    0x84: "SecuredDataTransmission",
+    0x85: "ControlDtcSetting",
+    0x86: "ResponseOnEvent",
+    0x87: "LinkControl",
+}
+
+_UDS_NRC_NAMES: dict = {
+    0x10: "GeneralReject",
+    0x11: "ServiceNotSupported",
+    0x12: "SubFunctionNotSupported",
+    0x13: "IncorrectMessageLengthOrInvalidFormat",
+    0x14: "ResponseTooLong",
+    0x21: "BusyRepeatRequest",
+    0x22: "ConditionsNotCorrect",
+    0x24: "RequestSequenceError",
+    0x25: "NoResponseFromSubnetComponent",
+    0x26: "FailurePreventsExecutionOfRequestedAction",
+    0x31: "RequestOutOfRange",
+    0x33: "SecurityAccessDenied",
+    0x35: "InvalidKey",
+    0x36: "ExceededNumberOfAttempts",
+    0x37: "RequiredTimeDelayNotExpired",
+    0x70: "UploadDownloadNotAccepted",
+    0x71: "TransferDataSuspended",
+    0x72: "GeneralProgrammingFailure",
+    0x73: "WrongBlockSequenceCounter",
+    0x78: "RequestCorrectlyReceivedResponsePending",
+    0x7E: "SubFunctionNotSupportedInActiveSession",
+    0x7F: "ServiceNotSupportedInActiveSession",
+}
+
+
+def _uds_parse_payload(payload: bytes) -> dict | None:
+    """Parse a raw UDS payload into a record dict, or None if it is invalid."""
+    if not payload:
+        return None
+    sid = payload[0]
+    if sid == 0x7F:  # NegativeResponse
+        if len(payload) < 3:
+            return None
+        req_sid = payload[1]
+        nrc = payload[2]
+        return {
+            "uds_type": "NegativeResponse",
+            "service_id": req_sid,
+            "service_name": _UDS_SERVICE_NAMES.get(req_sid, f"Unknown_0x{req_sid:02X}"),
+            "nrc": nrc,
+            "nrc_name": _UDS_NRC_NAMES.get(nrc, f"Unknown_0x{nrc:02X}"),
+            "data": bytes(payload[3:]),
+        }
+    elif sid & 0x40:  # PositiveResponse
+        service_id = sid & ~0x40
+        return {
+            "uds_type": "PositiveResponse",
+            "service_id": service_id,
+            "service_name": _UDS_SERVICE_NAMES.get(service_id, f"Unknown_0x{service_id:02X}"),
+            "nrc": None,
+            "nrc_name": None,
+            "data": bytes(payload[1:]),
+        }
+    else:  # Request
+        return {
+            "uds_type": "Request",
+            "service_id": sid,
+            "service_name": _UDS_SERVICE_NAMES.get(sid, f"Unknown_0x{sid:02X}"),
+            "nrc": None,
+            "nrc_name": None,
+            "data": bytes(payload[1:]),
+        }
+
+
+def _isotp_sf_payload(data: bytes) -> bytes | None:
+    """Return the UDS payload bytes from an ISO-TP Single Frame, or None."""
+    if not data or (data[0] >> 4) != 0:
+        return None
+    sf_len = data[0] & 0x0F
+    if sf_len == 0:  # Extended SF (CAN-FD): length in second byte
+        if len(data) < 2:
+            return None
+        sf_len = data[1]
+        return bytes(data[2 : 2 + sf_len]) if len(data) >= 2 + sf_len else None
+    return bytes(data[1 : 1 + sf_len]) if len(data) >= 1 + sf_len else None
+
+
+def _isotp_ff_info(data: bytes) -> tuple | None:
+    """Return (total_length, initial_payload) from an ISO-TP First Frame, or None."""
+    if len(data) < 2 or (data[0] >> 4) != 1:
+        return None
+    total_len = ((data[0] & 0x0F) << 8) | data[1]
+    if total_len == 0:  # Extended FF (CAN-FD): 32-bit length at bytes 2-5
+        if len(data) < 6:
+            return None
+        total_len = int.from_bytes(data[2:6], "big")
+        return total_len, bytes(data[6:])
+    return total_len, bytes(data[2:])
+
+
+def _parse_uds_from_can(local_path: str, source_file: str) -> list:
+    """Read CAN/CAN-FD frames, reassemble ISO-TP PDUs, return UDS record dicts."""
+    import vector_blf  # noqa: PLC0415
+
+    conversations: dict = {}  # (channel, can_id) -> reassembly state dict
+    results: list = []
+
+    try:
+        for obj in vector_blf.Reader(local_path, types=["Can", "CanFd", "CanFd64"]):
+            msg = obj.message
+            if msg is None:
+                continue
+            data = bytes(msg.data)
+            if not data:
+                continue
+            key = (int(msg.channel), int(msg.id))
+            nibble = (data[0] >> 4) & 0xF
+
+            if nibble == 0:  # Single Frame
+                payload = _isotp_sf_payload(data)
+                if payload:
+                    rec = _uds_parse_payload(payload)
+                    if rec:
+                        results.append(
+                            dict(
+                                timestamp_ns=obj.timestamp_ns,
+                                channel=key[0],
+                                can_id=key[1],
+                                dir=msg.dir,
+                                transport="CAN",
+                                doip_src_addr=None,
+                                doip_target_addr=None,
+                                _source_file=source_file,
+                                **rec,
+                            )
+                        )
+                conversations.pop(key, None)
+
+            elif nibble == 1:  # First Frame — begin reassembly
+                ff = _isotp_ff_info(data)
+                if ff:
+                    total_len, initial = ff
+                    conversations[key] = {
+                        "total_len": total_len,
+                        "buf": bytearray(initial),
+                        "next_sn": 1,
+                        "ts": obj.timestamp_ns,
+                        "dir": msg.dir,
+                    }
+
+            elif nibble == 2:  # Consecutive Frame
+                state = conversations.get(key)
+                if state is not None:
+                    sn = data[0] & 0x0F
+                    if sn == state["next_sn"] % 16:
+                        state["buf"].extend(data[1:])
+                        state["next_sn"] += 1
+                        if len(state["buf"]) >= state["total_len"]:
+                            payload = bytes(state["buf"][: state["total_len"]])
+                            rec = _uds_parse_payload(payload)
+                            if rec:
+                                results.append(
+                                    dict(
+                                        timestamp_ns=state["ts"],
+                                        channel=key[0],
+                                        can_id=key[1],
+                                        dir=state["dir"],
+                                        transport="CAN",
+                                        doip_src_addr=None,
+                                        doip_target_addr=None,
+                                        _source_file=source_file,
+                                        **rec,
+                                    )
+                                )
+                            del conversations[key]
+                    else:
+                        del conversations[key]  # sequence error — discard PDU
+
+            # nibble == 3: Flow Control — no action needed
+
+    except Exception as exc:  # noqa: BLE001
+        print(f"[blf_pipeline] CAN/UDS parse failed for {source_file!r}: {exc}")
+
+    return results
+
+
+def _doip_strip_tcp(ether_type: int, data: bytes) -> tuple | None:
+    """Strip IP + TCP headers; return (src_port, dst_port, tcp_payload) or None."""
+    if ether_type == _ETHERTYPE_IPV4:
+        if len(data) < 20 or data[9] != _IPPROTO_TCP:
+            return None
+        ihl = (data[0] & 0x0F) * 4
+        tcp = data[ihl:]
+    elif ether_type == _ETHERTYPE_IPV6:
+        if len(data) < 40 or data[6] != _IPPROTO_TCP:
+            return None
+        tcp = data[40:]
+    else:
+        return None
+    if len(tcp) < 20:
+        return None
+    tcp_hdr_len = ((tcp[12] >> 4) & 0xF) * 4
+    return (tcp[0] << 8) | tcp[1], (tcp[2] << 8) | tcp[3], tcp[tcp_hdr_len:]
+
+
+def _doip_diag_messages(tcp_payload: bytes):
+    """Yield (src_addr, target_addr, uds_payload) for each DoIP DiagMessage in *tcp_payload*.
+
+    Handles multiple back-to-back DoIP frames within a single TCP segment.
+    """
+    pos = 0
+    while pos + 8 <= len(tcp_payload):
+        if (tcp_payload[pos] ^ tcp_payload[pos + 1]) != 0xFF:  # version/inverse check
+            break
+        ptype = (tcp_payload[pos + 2] << 8) | tcp_payload[pos + 3]
+        plen = int.from_bytes(tcp_payload[pos + 4 : pos + 8], "big")
+        if pos + 8 + plen > len(tcp_payload):
+            break
+        if ptype == _DOIP_PAYLOAD_TYPE_DIAG and plen >= 4:
+            pl = tcp_payload[pos + 8 : pos + 8 + plen]
+            yield (pl[0] << 8) | pl[1], (pl[2] << 8) | pl[3], pl[4:]
+        pos += 8 + plen
+
+
+def _parse_uds_from_doip(local_path: str, source_file: str) -> list:
+    """Read Ethernet frames, parse DoIP DiagMessages over TCP 13400, return UDS record dicts."""
+    import vector_blf  # noqa: PLC0415
+
+    results: list = []
+
+    try:
+        for obj in vector_blf.Reader(local_path, types=["Ethernet", "EthernetEx"]):
+            msg = obj.message
+            if msg is None:
+                continue
+            tcp = _doip_strip_tcp(msg.ether_type, bytes(msg.data))
+            if tcp is None:
+                continue
+            src_port, dst_port, tcp_payload = tcp
+            if src_port != _DOIP_PORT and dst_port != _DOIP_PORT:
+                continue
+            for src_addr, tgt_addr, uds_payload in _doip_diag_messages(tcp_payload):
+                rec = _uds_parse_payload(uds_payload)
+                if rec:
+                    results.append(
+                        dict(
+                            timestamp_ns=obj.timestamp_ns,
+                            channel=int(msg.channel),
+                            can_id=None,
+                            dir=msg.dir,
+                            transport="DOIP",
+                            doip_src_addr=src_addr,
+                            doip_target_addr=tgt_addr,
+                            _source_file=source_file,
+                            **rec,
+                        )
+                    )
+
+    except Exception as exc:  # noqa: BLE001
+        print(f"[blf_pipeline] DoIP/UDS parse failed for {source_file!r}: {exc}")
+
+    return results
+
+
+@pandas_udf(ArrayType(_UDS_RECORD_SCHEMA))
+def _parse_blf_file_uds(paths: pd.Series) -> pd.Series:
+    """Parse UDS diagnostic messages from one BLF file per row.
+
+    Processes both transports in a single pass each and merges the results sorted
+    by timestamp.  ISO-TP reassembly state is local to each file invocation.
+    """
+    result: list = []
+    for spark_path in paths:
+        local = _local_path(spark_path)
+        records = _parse_uds_from_can(local, spark_path)
+        records.extend(_parse_uds_from_doip(local, spark_path))
+        records.sort(key=lambda r: r["timestamp_ns"])
+        result.append(
+            [
+                {
+                    "timestamp_ns": r["timestamp_ns"],
+                    "channel": r.get("channel"),
+                    "can_id": r.get("can_id"),
+                    "dir": r.get("dir"),
+                    "transport": r["transport"],
+                    "doip_src_addr": r.get("doip_src_addr"),
+                    "doip_target_addr": r.get("doip_target_addr"),
+                    "uds_type": r["uds_type"],
+                    "service_id": r["service_id"],
+                    "service_name": r.get("service_name"),
+                    "nrc": r.get("nrc"),
+                    "nrc_name": r.get("nrc_name"),
+                    "data": r.get("data", b""),
+                }
+                for r in records
+            ]
+        )
+    return pd.Series(result)
+
+
+@dlt.table(
+    name="blf_silver_diag",
+    comment=(
+        "UDS (ISO 14229) diagnostic messages merged from two transport layers. "
+        "transport='CAN': reassembled from ISO-TP (ISO 15765-2) over CAN / CAN-FD / CAN-FD64. "
+        "transport='DOIP': extracted from DoIP DiagMessage (payload_type=0x8001) over TCP 13400. "
+        "uds_type: 'Request', 'PositiveResponse', or 'NegativeResponse'. "
+        "can_id / can_id_hex are null for DOIP rows. "
+        "doip_src_addr / doip_target_addr (DoIP logical addresses) are null for CAN rows. "
+        "One row per complete UDS PDU."
+    ),
+    table_properties={
+        "quality": "silver",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+    partition_cols=["transport", "uds_type"],
+)
+def blf_silver_diag():
+    return (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", "binaryFile")
+        .option("pathGlobFilter", "*.blf")
+        .option(
+            "cloudFiles.schemaLocation",
+            f"{SOURCE_PATH}/_autoloader_schema_diag",
+        )
+        .load(SOURCE_PATH)
+        .select(
+            F.col("path").alias("_source_file"),
+            F.col("modificationTime").alias("_file_mtime"),
+        )
+        .withColumn("_records", _parse_blf_file_uds(F.col("_source_file")))
+        .withColumn("_ingested_at", F.current_timestamp())
+        .select(
+            "_source_file",
+            "_file_mtime",
+            "_ingested_at",
+            F.explode("_records").alias("_rec"),
+        )
+        .select(
+            "_source_file",
+            "_file_mtime",
+            "_ingested_at",
+            "_rec.*",
+        )
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "timestamp_ns",
+            (F.col("timestamp_ns") / 1e9).alias("timestamp_s"),
+            "transport",
+            "channel",
+            "can_id",
+            F.when(F.col("can_id").isNotNull(), F.format_string("0x%08X", F.col("can_id"))).alias(
+                "can_id_hex"
+            ),
+            "doip_src_addr",
+            "doip_target_addr",
+            _DIR_LABEL.alias("dir"),
+            "uds_type",
+            "service_id",
+            F.format_string("0x%02X", F.col("service_id")).alias("service_id_hex"),
+            "service_name",
+            "nrc",
+            F.when(F.col("nrc").isNotNull(), F.format_string("0x%02X", F.col("nrc"))).alias(
+                "nrc_hex"
+            ),
+            "nrc_name",
+            F.hex("data").alias("data_hex"),
+            "data",
         )
     )
 

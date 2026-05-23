@@ -1,9 +1,7 @@
 use std::cell::RefCell;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::rc::Rc;
-use vector_blf_rs::blf::{
-    BaseObject, Can, CanFd, CanFd64, Dir, Message, Reader, Timestamp, Writer,
-};
+use vector_blf::blf::{BaseObject, Can, CanFd, CanFd64, Dir, Message, Reader, Timestamp, Writer};
 
 /// Shareable in-memory buffer implementing both Write+Seek and Read+Seek so
 /// the same underlying Cursor can be used for a Writer then a Reader.

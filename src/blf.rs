@@ -1,13 +1,13 @@
-mod encoder;
-mod error;
-mod message_codec;
-mod read_util;
 pub mod csv;
 pub mod diag;
+mod encoder;
+mod error;
 pub mod ip;
 pub mod message;
+mod message_codec;
 mod object;
 mod objtype;
+mod read_util;
 pub mod signal;
 pub mod transport;
 
@@ -27,7 +27,7 @@ pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan};
 pub use object::FileHeader;
 pub use objtype::ObjType;
-pub use signal::{ByteOrder, Signal, SignalDb, SignalDef, SomeIpSignalDb, SomeIpSignalDef};
+pub use signal::{ByteOrder, CanSignalDb, Signal, SignalDef, SomeIpSignalDb, SomeIpSignalDef};
 pub use transport::{Tcp, TcpFlags, Transport, Udp};
 
 #[derive(Debug)]
@@ -305,7 +305,11 @@ impl<W: Write + Seek> Writer<W> {
         if self.buf.len() >= BUF_SIZE {
             // Flush everything before the current object (obj_start bytes).
             // If obj_start == 0 the object alone exceeds BUF_SIZE; flush it whole.
-            let flush_end = if obj_start > 0 { obj_start } else { self.buf.len() };
+            let flush_end = if obj_start > 0 {
+                obj_start
+            } else {
+                self.buf.len()
+            };
             self.header.uncompressed_size += flush_end as u64;
             let mut flush_data = std::mem::take(&mut self.buf);
             self.buf = flush_data.split_off(flush_end);

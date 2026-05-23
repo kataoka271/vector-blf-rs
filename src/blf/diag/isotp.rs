@@ -162,7 +162,10 @@ impl Reassembler {
                 self.buf.extend_from_slice(data);
                 Ok(None)
             }
-            IsoTpFrame::ConsecutiveFrame { sequence_number, data } => {
+            IsoTpFrame::ConsecutiveFrame {
+                sequence_number,
+                data,
+            } => {
                 if self.total_length == 0 {
                     return Err(ParseError::InvalidData);
                 }
@@ -172,7 +175,8 @@ impl Reassembler {
                 }
                 self.next_sn = (self.next_sn + 1) & 0x0F;
                 let remaining = self.total_length as usize - self.buf.len();
-                self.buf.extend_from_slice(&data[..remaining.min(data.len())]);
+                self.buf
+                    .extend_from_slice(&data[..remaining.min(data.len())]);
                 if self.buf.len() >= self.total_length as usize {
                     let payload = std::mem::take(&mut self.buf);
                     self.reset();

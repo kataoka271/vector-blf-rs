@@ -286,20 +286,21 @@ impl<R: Read> Decoder<R> for EthernetEx {
             let mut src_addr = [0u8; 6];
             p.read_exact(&mut src_addr)?;
             let raw_etype = ((p[0] as u16) << 8) | (p[1] as u16);
-            let (vlan, ether_type) = if raw_etype == 0x8100 || raw_etype == 0x8800 || raw_etype == 0x9100 {
-                let tci = ((p[2] as u16) << 8) | (p[3] as u16);
-                let vlan = Vlan {
-                    tpid: raw_etype,
-                    pri: (tci >> 13) & 0x7,
-                    cfi: (tci >> 12) & 0x1,
-                    vid: tci & 0xFFF,
+            let (vlan, ether_type) =
+                if raw_etype == 0x8100 || raw_etype == 0x8800 || raw_etype == 0x9100 {
+                    let tci = ((p[2] as u16) << 8) | (p[3] as u16);
+                    let vlan = Vlan {
+                        tpid: raw_etype,
+                        pri: (tci >> 13) & 0x7,
+                        cfi: (tci >> 12) & 0x1,
+                        vid: tci & 0xFFF,
+                    };
+                    p = &p[4..];
+                    let etype = ((p[0] as u16) << 8) | (p[1] as u16);
+                    (Some(vlan), etype)
+                } else {
+                    (None, raw_etype)
                 };
-                p = &p[4..];
-                let etype = ((p[0] as u16) << 8) | (p[1] as u16);
-                (Some(vlan), etype)
-            } else {
-                (None, raw_etype)
-            };
             let data = p[2..].to_vec();
             (dst_addr, src_addr, vlan, ether_type, data)
         } else {

@@ -1,4 +1,4 @@
-use vector_blf_rs::blf::{FlowStatus, IsoTpFrame, ParseError, Reassembler, ServiceId};
+use vector_blf::blf::{FlowStatus, IsoTpFrame, ParseError, Reassembler, ServiceId};
 
 // ── SingleFrame ────────────────────────────────────────────────────────────────
 
@@ -41,21 +41,30 @@ fn parse_single_frame_extended_canfd() {
 
 #[test]
 fn parse_single_frame_empty_returns_error() {
-    assert!(matches!(IsoTpFrame::parse(&[]), Err(ParseError::InvalidData)));
+    assert!(matches!(
+        IsoTpFrame::parse(&[]),
+        Err(ParseError::InvalidData)
+    ));
 }
 
 #[test]
 fn parse_single_frame_truncated_returns_error() {
     // Length says 5 but only 3 bytes of payload
     let raw = [0x05, 0x01, 0x02, 0x03];
-    assert!(matches!(IsoTpFrame::parse(&raw), Err(ParseError::InvalidData)));
+    assert!(matches!(
+        IsoTpFrame::parse(&raw),
+        Err(ParseError::InvalidData)
+    ));
 }
 
 #[test]
 fn parse_single_frame_extended_too_short_returns_error() {
     // Extended SF (0x00) but only 1 byte total
     let raw = [0x00];
-    assert!(matches!(IsoTpFrame::parse(&raw), Err(ParseError::InvalidData)));
+    assert!(matches!(
+        IsoTpFrame::parse(&raw),
+        Err(ParseError::InvalidData)
+    ));
 }
 
 // ── FirstFrame ─────────────────────────────────────────────────────────────────
@@ -91,13 +100,19 @@ fn parse_first_frame_extended_canfd() {
 #[test]
 fn parse_first_frame_too_short_returns_error() {
     let raw = [0x10]; // Only 1 byte
-    assert!(matches!(IsoTpFrame::parse(&raw), Err(ParseError::InvalidData)));
+    assert!(matches!(
+        IsoTpFrame::parse(&raw),
+        Err(ParseError::InvalidData)
+    ));
 }
 
 #[test]
 fn parse_first_frame_extended_too_short_returns_error() {
     let raw = [0x10, 0x00, 0x00, 0x00]; // Extended but only 4 bytes total
-    assert!(matches!(IsoTpFrame::parse(&raw), Err(ParseError::InvalidData)));
+    assert!(matches!(
+        IsoTpFrame::parse(&raw),
+        Err(ParseError::InvalidData)
+    ));
 }
 
 // ── ConsecutiveFrame ──────────────────────────────────────────────────────────
@@ -106,7 +121,10 @@ fn parse_first_frame_extended_too_short_returns_error() {
 fn parse_consecutive_frame() {
     let raw = [0x21, 0x04, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00];
     match IsoTpFrame::parse(&raw).unwrap() {
-        IsoTpFrame::ConsecutiveFrame { sequence_number, data } => {
+        IsoTpFrame::ConsecutiveFrame {
+            sequence_number,
+            data,
+        } => {
             assert_eq!(sequence_number, 1);
             assert_eq!(data[0], 0x04);
             assert_eq!(data[1], 0x05);
@@ -120,7 +138,9 @@ fn parse_consecutive_frame_sn_wrap() {
     // SN nibble wraps 0–F
     let raw = [0x2F, 0xAA];
     match IsoTpFrame::parse(&raw).unwrap() {
-        IsoTpFrame::ConsecutiveFrame { sequence_number, .. } => assert_eq!(sequence_number, 0x0F),
+        IsoTpFrame::ConsecutiveFrame {
+            sequence_number, ..
+        } => assert_eq!(sequence_number, 0x0F),
         _ => panic!("expected ConsecutiveFrame"),
     }
 }
@@ -131,7 +151,11 @@ fn parse_consecutive_frame_sn_wrap() {
 fn parse_flow_control_cts() {
     let raw = [0x30, 0x00, 0x00]; // CTS, BS=0, ST=0
     match IsoTpFrame::parse(&raw).unwrap() {
-        IsoTpFrame::FlowControl { flow_status, block_size, min_separation_time } => {
+        IsoTpFrame::FlowControl {
+            flow_status,
+            block_size,
+            min_separation_time,
+        } => {
             assert_eq!(flow_status, FlowStatus::ContinueToSend);
             assert_eq!(block_size, 0);
             assert_eq!(min_separation_time, 0);
@@ -166,7 +190,11 @@ fn parse_flow_control_overflow() {
 fn parse_flow_control_with_params() {
     let raw = [0x30, 0x0A, 0x19]; // CTS, BS=10, ST=25ms
     match IsoTpFrame::parse(&raw).unwrap() {
-        IsoTpFrame::FlowControl { block_size, min_separation_time, .. } => {
+        IsoTpFrame::FlowControl {
+            block_size,
+            min_separation_time,
+            ..
+        } => {
             assert_eq!(block_size, 10);
             assert_eq!(min_separation_time, 25);
         }
@@ -177,7 +205,10 @@ fn parse_flow_control_with_params() {
 #[test]
 fn parse_flow_control_too_short_returns_error() {
     let raw = [0x30, 0x00]; // Missing ST byte
-    assert!(matches!(IsoTpFrame::parse(&raw), Err(ParseError::InvalidData)));
+    assert!(matches!(
+        IsoTpFrame::parse(&raw),
+        Err(ParseError::InvalidData)
+    ));
 }
 
 // ── IsoTpFrame::parse_uds ─────────────────────────────────────────────────────

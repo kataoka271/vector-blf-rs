@@ -1,5 +1,5 @@
 use super::error::{ParseError, ParseResult};
-use super::read_util::{read_u8, read_u16_be};
+use super::read_util::{read_u16_be, read_u8};
 use super::transport::Transport;
 use std::io::Read;
 
@@ -126,8 +126,7 @@ impl Ipv6 {
             return Err(ParseError::InvalidData);
         }
         let traffic_class = ((word[0] & 0xF) << 4) | (word[1] >> 4);
-        let flow_label =
-            ((word[1] as u32 & 0xF) << 16) | ((word[2] as u32) << 8) | word[3] as u32;
+        let flow_label = ((word[1] as u32 & 0xF) << 16) | ((word[2] as u32) << 8) | word[3] as u32;
         let payload_length = read_u16_be(&mut r)?;
         let next_header = IpProtocol::from_u8(read_u8(&mut r)?);
         let hop_limit = read_u8(&mut r)?;
@@ -164,4 +163,3 @@ impl Ip {
         }
     }
 }
-

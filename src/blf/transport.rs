@@ -41,7 +41,7 @@ impl Tcp {
         }
         let f = data_offset_flags & 0x1FF;
         let flags = TcpFlags {
-            ns:  f & 0x100 != 0,
+            ns: f & 0x100 != 0,
             cwr: f & 0x080 != 0,
             ece: f & 0x040 != 0,
             urg: f & 0x020 != 0,
@@ -60,7 +60,16 @@ impl Tcp {
         }
         let mut data = Vec::new();
         r.read_to_end(&mut data)?;
-        Ok(Tcp { src_port, dst_port, seq, ack, flags, window_size, urgent_ptr, data })
+        Ok(Tcp {
+            src_port,
+            dst_port,
+            seq,
+            ack,
+            flags,
+            window_size,
+            urgent_ptr,
+            data,
+        })
     }
 }
 
@@ -80,7 +89,11 @@ impl Udp {
         let data_len = (length as usize).saturating_sub(8);
         let mut data = vec![0u8; data_len];
         r.read_exact(&mut data)?;
-        Ok(Udp { src_port, dst_port, data })
+        Ok(Udp {
+            src_port,
+            dst_port,
+            data,
+        })
     }
 }
 
@@ -99,4 +112,3 @@ impl Transport {
         }
     }
 }
-

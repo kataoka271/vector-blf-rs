@@ -1,5 +1,5 @@
 use super::super::error::{ParseError, ParseResult};
-use super::super::read_util::{read_u8, read_u16_be, read_u32_be};
+use super::super::read_util::{read_u16_be, read_u32_be, read_u8};
 use super::uds::Uds;
 use std::io::Read;
 
@@ -93,7 +93,11 @@ impl DoIp {
         let payload_length = read_u32_be(&mut r)?;
         let mut payload = vec![0u8; payload_length as usize];
         r.read_exact(&mut payload)?;
-        Ok(DoIp { protocol_version, payload_type, payload })
+        Ok(DoIp {
+            protocol_version,
+            payload_type,
+            payload,
+        })
     }
 
     /// Parse payload as a diagnostic message (payload type 0x8001).
@@ -107,7 +111,11 @@ impl DoIp {
         let src_addr = ((self.payload[0] as u16) << 8) | self.payload[1] as u16;
         let target_addr = ((self.payload[2] as u16) << 8) | self.payload[3] as u16;
         let data = self.payload[4..].to_vec();
-        Ok(DiagMessage { src_addr, target_addr, data })
+        Ok(DiagMessage {
+            src_addr,
+            target_addr,
+            data,
+        })
     }
 }
 
@@ -124,4 +132,3 @@ impl DiagMessage {
         Uds::parse(&self.data)
     }
 }
-

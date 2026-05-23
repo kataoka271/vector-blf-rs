@@ -1,6 +1,6 @@
 pub mod blf;
 
-use blf::{BaseObject, ParseError, SignalDb, SomeIpSignalDb, Timestamp, Writer};
+use blf::{BaseObject, CanSignalDb, ParseError, SomeIpSignalDb, Timestamp, Writer};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::time;
@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let input = positional.get(0).expect(
+    let input = positional.first().expect(
         "usage: vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N]",
     );
 
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parallel parse phase: each thread gets its own file handle and a chunk of offsets.
     let effective_threads = n_threads.min(offsets.len().max(1));
-    let chunk_size = (offsets.len() + effective_threads - 1) / effective_threads;
+    let chunk_size = offsets.len().div_ceil(effective_threads);
 
     let t = time::Instant::now();
     let handles: Vec<_> = offsets
@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if output.ends_with(".csv") {
             let mut w = BufWriter::new(File::create(output)?);
             let count = if let Some(signals_path) = positional.get(2) {
-                let db = SignalDb::from_csv(BufReader::new(File::open(signals_path)?))?;
+                let db = CanSignalDb::from_csv(BufReader::new(File::open(signals_path)?))?;
                 let someip_db = someip_signals_path
                     .as_deref()
                     .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
@@ -127,7 +127,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             writer.finish()?;
-            println!("wrote {} objects in {:.3}s", count, t.elapsed().as_secs_f32());
+            println!(
+                "wrote {} objects in {:.3}s",
+                count,
+                t.elapsed().as_secs_f32()
+            );
         }
     }
 

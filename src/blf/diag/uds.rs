@@ -163,18 +163,9 @@ impl Nrc {
 /// A parsed UDS message (ISO 14229-1).
 #[derive(Debug)]
 pub enum Uds {
-    Request {
-        service: ServiceId,
-        data: Vec<u8>,
-    },
-    PositiveResponse {
-        service: ServiceId,
-        data: Vec<u8>,
-    },
-    NegativeResponse {
-        service: ServiceId,
-        nrc: Nrc,
-    },
+    Request { service: ServiceId, data: Vec<u8> },
+    PositiveResponse { service: ServiceId, data: Vec<u8> },
+    NegativeResponse { service: ServiceId, nrc: Nrc },
 }
 
 impl Uds {

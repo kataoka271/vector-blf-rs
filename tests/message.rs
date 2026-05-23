@@ -1,5 +1,5 @@
 use std::io::Cursor;
-use vector_blf_rs::blf::{Can, CanFd, CanFd64, Dir, Message, ObjType};
+use vector_blf::blf::{Can, CanFd, CanFd64, Dir, Message, ObjType};
 
 fn encode_message(msg: &Message) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -107,7 +107,7 @@ fn can_parse_isotp_single_frame() {
     };
     let frame = can.parse_isotp().unwrap();
     match frame {
-        vector_blf_rs::blf::IsoTpFrame::SingleFrame { data } => {
+        vector_blf::blf::IsoTpFrame::SingleFrame { data } => {
             assert_eq!(data, vec![0x3E, 0x00]);
         }
         _ => panic!("expected SingleFrame"),
@@ -189,7 +189,7 @@ fn canfd_parse_isotp_first_frame() {
     };
     let frame = fd.parse_isotp().unwrap();
     match frame {
-        vector_blf_rs::blf::IsoTpFrame::FirstFrame { total_length, .. } => {
+        vector_blf::blf::IsoTpFrame::FirstFrame { total_length, .. } => {
             assert_eq!(total_length, 10);
         }
         _ => panic!("expected FirstFrame"),
@@ -252,7 +252,7 @@ fn canfd64_parse_isotp_extended_single_frame() {
     };
     let frame = fd64.parse_isotp().unwrap();
     match frame {
-        vector_blf_rs::blf::IsoTpFrame::SingleFrame { data } => {
+        vector_blf::blf::IsoTpFrame::SingleFrame { data } => {
             assert_eq!(data.len(), 8);
             assert_eq!(data[0], 0x22);
         }
@@ -264,7 +264,16 @@ fn canfd64_parse_isotp_extended_single_frame() {
 
 #[test]
 fn message_obj_type_matches_variant() {
-    assert_eq!(make_can(0, false, Dir::Tx, false, &[]).obj_type(), ObjType::CanMessage);
-    assert_eq!(make_canfd(0, Dir::Tx, false, false, &[]).obj_type(), ObjType::CanFdMessage);
-    assert_eq!(make_canfd64(0, Dir::Tx, &[]).obj_type(), ObjType::CanFdMessage64);
+    assert_eq!(
+        make_can(0, false, Dir::Tx, false, &[]).obj_type(),
+        ObjType::CanMessage
+    );
+    assert_eq!(
+        make_canfd(0, Dir::Tx, false, false, &[]).obj_type(),
+        ObjType::CanFdMessage
+    );
+    assert_eq!(
+        make_canfd64(0, Dir::Tx, &[]).obj_type(),
+        ObjType::CanFdMessage64
+    );
 }

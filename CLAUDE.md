@@ -15,6 +15,11 @@ cargo clippy                         # lint
 cargo run -- <input.blf> [options]   # run the CLI
 ```
 
+**`python` should be run via `uv run`**
+```bash
+uv run python <script.py>
+```
+
 ### Python bindings (PyO3 + maturin)
 
 ```bash
@@ -41,7 +46,7 @@ A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format
 | `encoder.rs` | `Encoder`/`Decoder` traits over `Read`/`Write`; `Timestamp` (Nanosecond or Microsecond) |
 | `error.rs` | `ParseError` enum (Io, Eof, UnexpectedObjType, ZlibError, InvalidData); `ParseResult<T>` |
 | `message.rs` | `Message` enum: `Can`, `CanFd`, `CanFd64`, `Ethernet`, `EthernetEx`, etc. |
-| `signal.rs` | CAN signal decoding: `Signal` (start_bit, bit_length, scale, offset), `SignalDb`, Intel/Motorola byte order |
+| `signal.rs` | CAN signal decoding: `Signal` (start_bit, bit_length, scale, offset), `CanSignalDb`, Intel/Motorola byte order |
 | `ip.rs` | IPv4/IPv6 packet parsing |
 | `transport.rs` | TCP/UDP parsing |
 | `diag/uds.rs` | UDS (ISO 14229) service parsing — 22 services, NRC codes |
@@ -86,8 +91,11 @@ PyO3 bindings exposed as the `vector_blf` Python extension module:
 | `CanFd` | + fdf, brs, esi |
 | `CanFd64` | same as CanFd but channel is u8 |
 | `Ethernet` / `EthernetEx` | channel, dir, src_addr, dst_addr, ether_type, data |
+| `CanSignalDb(path)` | loads a CAN signal CSV; `.decode(message_id: int, data: bytes) -> list[tuple[str, float]]` |
+| `SomeIpSignalDb(path)` | loads a SOME/IP signal CSV; `.decode(service_id: int, method_id: int, payload: bytes) -> list[tuple[str, float]]` |
 
 `dir` is exposed as a raw `u8` (0=Tx, 1=Rx, 2=TxRq). `Message::Other` variants map to `None`.
+`CanSignalDb` and `SomeIpSignalDb` use the same Intel/Motorola bit-extraction logic as `signal.rs`; the DLT pipeline delegates to these rather than reimplementing in Python.
 
 ### Databricks Integration (`databricks/`)
 

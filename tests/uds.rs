@@ -1,4 +1,4 @@
-use vector_blf_rs::blf::{Nrc, ParseError, ServiceId, Uds};
+use vector_blf::blf::{Nrc, ParseError, ServiceId, Uds};
 
 #[test]
 fn parse_request() {
@@ -96,7 +96,10 @@ fn parse_empty_returns_error() {
 
 #[test]
 fn parse_negative_response_too_short_returns_error() {
-    assert!(matches!(Uds::parse(&[0x7F, 0x22]), Err(ParseError::InvalidData)));
+    assert!(matches!(
+        Uds::parse(&[0x7F, 0x22]),
+        Err(ParseError::InvalidData)
+    ));
 }
 
 #[test]
@@ -133,7 +136,10 @@ fn nrc_known_values() {
     assert_eq!(Nrc::from_u8(0x31), Nrc::RequestOutOfRange);
     assert_eq!(Nrc::from_u8(0x33), Nrc::SecurityAccessDenied);
     assert_eq!(Nrc::from_u8(0x78), Nrc::ResponsePending);
-    assert_eq!(Nrc::from_u8(0x7E), Nrc::SubFunctionNotSupportedInActiveSession);
+    assert_eq!(
+        Nrc::from_u8(0x7E),
+        Nrc::SubFunctionNotSupportedInActiveSession
+    );
     assert_eq!(Nrc::from_u8(0x7F), Nrc::ServiceNotSupportedInActiveSession);
 }
 

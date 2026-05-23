@@ -79,7 +79,7 @@ fn extract_motorola(data: &[u8], start_bit: u32, bit_length: u32) -> Option<u64>
         let bit_val = (data[byte_idx] >> bit_idx) as u64 & 1;
         // MSB goes into the highest output bit
         raw |= bit_val << (bit_length - 1 - i);
-        pos = if pos % 8 == 0 { pos + 15 } else { pos - 1 };
+        pos = if pos.is_multiple_of(8) { pos + 15 } else { pos - 1 };
     }
     Some(raw)
 }
@@ -121,11 +121,11 @@ impl SignalDef {
 /// `message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`
 /// (case-insensitive). `is_signed` accepts `true`/`false` or `1`/`0`.
 #[derive(Debug, Default)]
-pub struct SignalDb {
+pub struct CanSignalDb {
     map: HashMap<u32, Vec<SignalDef>>,
 }
 
-impl SignalDb {
+impl CanSignalDb {
     pub fn new() -> Self {
         Self::default()
     }
@@ -161,7 +161,14 @@ impl SignalDb {
             db.insert(SignalDef {
                 name,
                 message_id,
-                signal: Signal { start_bit, bit_length, byte_order, is_signed, scale, offset },
+                signal: Signal {
+                    start_bit,
+                    bit_length,
+                    byte_order,
+                    is_signed,
+                    scale,
+                    offset,
+                },
             });
         }
         Ok(db)
@@ -269,19 +276,32 @@ impl SomeIpSignalDb {
                 name,
                 service_id,
                 method_id,
-                signal: Signal { start_bit, bit_length, byte_order, is_signed, scale, offset },
+                signal: Signal {
+                    start_bit,
+                    bit_length,
+                    byte_order,
+                    is_signed,
+                    scale,
+                    offset,
+                },
             });
         }
         Ok(db)
     }
 
     pub fn insert(&mut self, def: SomeIpSignalDef) {
-        self.map.entry((def.service_id, def.method_id)).or_default().push(def);
+        self.map
+            .entry((def.service_id, def.method_id))
+            .or_default()
+            .push(def);
     }
 
     /// All signal definitions for the given (service_id, method_id) pair.
     pub fn signals(&self, service_id: u16, method_id: u16) -> &[SomeIpSignalDef] {
-        self.map.get(&(service_id, method_id)).map(Vec::as_slice).unwrap_or(&[])
+        self.map
+            .get(&(service_id, method_id))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Decode all signals for `(service_id, method_id)` from `payload`.
@@ -302,7 +322,14 @@ mod tests {
     use super::*;
 
     fn sig(start_bit: u32, bit_length: u32, byte_order: ByteOrder, is_signed: bool) -> Signal {
-        Signal { start_bit, bit_length, byte_order, is_signed, scale: 1.0, offset: 0.0 }
+        Signal {
+            start_bit,
+            bit_length,
+            byte_order,
+            is_signed,
+            scale: 1.0,
+            offset: 0.0,
+        }
     }
 
     #[test]
@@ -344,8 +371,12 @@ mod tests {
     #[test]
     fn scale_offset() {
         let s = Signal {
-            start_bit: 0, bit_length: 8, byte_order: ByteOrder::Intel,
-            is_signed: false, scale: 0.5, offset: -40.0,
+            start_bit: 0,
+            bit_length: 8,
+            byte_order: ByteOrder::Intel,
+            is_signed: false,
+            scale: 0.5,
+            offset: -40.0,
         };
         // raw=100 → 100*0.5 - 40 = 10.0
         assert_eq!(s.decode(&[100]), Some(10.0));
@@ -359,7 +390,7 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
 0x100,Throttle,16,8,Intel,false,0.4,0.0
 0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
 ";
-        let db = SignalDb::from_csv(csv.as_bytes()).unwrap();
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x100).len(), 2);
         assert_eq!(db.signals(0x200).len(), 1);
         assert_eq!(db.signals(0x300).len(), 0);
@@ -367,7 +398,10 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
         // EngineSpeed: raw=0x0100 → 256 * 0.25 = 64.0
         let data = [0x00u8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let vals = db.extract(0x100, &data);
-        let speed = vals.iter().find(|(n, _)| *n == "EngineSpeed").map(|(_, v)| *v);
+        let speed = vals
+            .iter()
+            .find(|(n, _)| *n == "EngineSpeed")
+            .map(|(_, v)| *v);
         assert_eq!(speed, Some(64.0));
     }
 
@@ -375,7 +409,7 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
     fn csv_decimal_id() {
         let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
                    256,Sig,0,8,Intel,false,1.0,0.0\n";
-        let db = SignalDb::from_csv(csv.as_bytes()).unwrap();
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(256).len(), 1); // 256 == 0x100
     }
 
@@ -385,7 +419,7 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
                    # this is a comment\n\
                    \n\
                    0x10,Voltage,0,8,Intel,false,0.1,0.0\n";
-        let db = SignalDb::from_csv(csv.as_bytes()).unwrap();
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x10).len(), 1);
     }
 
@@ -406,7 +440,10 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
         // Pressure: raw=0x32 (50) → 50 * 1.0 = 50.0
         let payload = [0x90u8, 0x01, 0x32];
         let vals = db.extract(0x0064, 0x0001, &payload);
-        let temp = vals.iter().find(|(n, _)| *n == "Temperature").map(|(_, v)| *v);
+        let temp = vals
+            .iter()
+            .find(|(n, _)| *n == "Temperature")
+            .map(|(_, v)| *v);
         let pres = vals.iter().find(|(n, _)| *n == "Pressure").map(|(_, v)| *v);
         assert_eq!(temp, Some(4.0));
         assert_eq!(pres, Some(50.0));

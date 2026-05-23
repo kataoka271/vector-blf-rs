@@ -92,7 +92,7 @@ _ETHERTYPE_IPV6: int = 0x86DD
 _IPPROTO_TCP: int = 6
 _IPPROTO_UDP: int = 17
 _SOMEIP_PROTOCOL_VERSION: int = 0x01
-_SOMEIP_SD_SERVICE_ID: int = 0xFFFF   # Service Discovery — always skip
+_SOMEIP_SD_SERVICE_ID: int = 0xFFFF  # Service Discovery — always skip
 
 # ── record schema (struct returned by the parsing UDF) ────────────────────────
 
@@ -105,7 +105,7 @@ _RECORD_SCHEMA = StructType(
         StructField("channel", IntegerType()),
         StructField("can_id", LongType()),
         StructField("is_ext_id", BooleanType()),
-        StructField("dir", ByteType()),       # 0=Tx  1=Rx  2=TxRq
+        StructField("dir", ByteType()),  # 0=Tx  1=Rx  2=TxRq
         StructField("rtr", BooleanType()),
         StructField("dlc", ByteType()),
         StructField("data", BinaryType()),
@@ -123,35 +123,42 @@ _RECORD_SCHEMA = StructType(
 # ── signal output schemas ────────────────────────────────────────────────────
 
 _SIGNAL_RESULT_SCHEMA = ArrayType(
-    StructType([
-        StructField("signal_name", StringType(), nullable=False),
-        StructField("signal_value", DoubleType(), nullable=False),
-    ])
+    StructType(
+        [
+            StructField("signal_name", StringType(), nullable=False),
+            StructField("signal_value", DoubleType(), nullable=False),
+        ]
+    )
 )
 
 _ETH_SIGNAL_RESULT_SCHEMA = ArrayType(
-    StructType([
-        StructField("signal_name", StringType(), nullable=False),
-        StructField("signal_value", DoubleType()),   # numeric fields (ports, TTL, …)
-        StructField("signal_str", StringType()),      # address strings (IPs)
-    ])
+    StructType(
+        [
+            StructField("signal_name", StringType(), nullable=False),
+            StructField("signal_value", DoubleType()),  # numeric fields (ports, TTL, …)
+            StructField("signal_str", StringType()),  # address strings (IPs)
+        ]
+    )
 )
 
 _SOMEIP_SIGNAL_RESULT_SCHEMA = ArrayType(
-    StructType([
-        StructField("src_ip",            StringType(),  True),
-        StructField("dst_ip",            StringType(),  True),
-        StructField("udp_src_port",      IntegerType(), True),
-        StructField("udp_dst_port",      IntegerType(), True),
-        StructField("someip_service_id", IntegerType(), False),
-        StructField("someip_method_id",  IntegerType(), False),
-        StructField("someip_msg_type",   IntegerType(), False),
-        StructField("signal_name",       StringType(),  False),
-        StructField("signal_value",      DoubleType(),  False),
-    ])
+    StructType(
+        [
+            StructField("src_ip", StringType(), True),
+            StructField("dst_ip", StringType(), True),
+            StructField("udp_src_port", IntegerType(), True),
+            StructField("udp_dst_port", IntegerType(), True),
+            StructField("someip_service_id", IntegerType(), False),
+            StructField("someip_method_id", IntegerType(), False),
+            StructField("someip_msg_type", IntegerType(), False),
+            StructField("signal_name", StringType(), False),
+            StructField("signal_value", DoubleType(), False),
+        ]
+    )
 )
 
 # ── path helper ───────────────────────────────────────────────────────────────
+
 
 def _local_path(spark_path: str) -> str:
     """Convert a Spark/DBFS URI to a local filesystem path.
@@ -160,10 +167,11 @@ def _local_path(spark_path: str) -> str:
     Legacy DBFS paths are mounted at /dbfs/....
     """
     if spark_path.startswith("dbfs:/Volumes/"):
-        return spark_path[len("dbfs:"):]          # /Volumes/...
+        return spark_path[len("dbfs:") :]  # /Volumes/...
     if spark_path.startswith("dbfs:/"):
-        return "/dbfs/" + spark_path[len("dbfs:/"):]
-    return spark_path                             # already a local path
+        return "/dbfs/" + spark_path[len("dbfs:/") :]
+    return spark_path  # already a local path
+
 
 # ── parsing UDF ───────────────────────────────────────────────────────────────
 
@@ -285,6 +293,7 @@ def _parse_blf_file(paths: pd.Series) -> pd.Series:
 
 # ── bronze layer ──────────────────────────────────────────────────────────────
 
+
 @dlt.table(
     name="blf_bronze",
     comment="Raw log objects from BLF files — one row per message.",
@@ -328,7 +337,7 @@ def blf_bronze():
             "_file_mtime",
             "_file_size_bytes",
             "_ingested_at",
-            "_rec.*",   # flatten all record fields to top-level columns
+            "_rec.*",  # flatten all record fields to top-level columns
         )
     )
 
@@ -376,99 +385,35 @@ def blf_silver_can():
 
 # ── silver layer — Ethernet ───────────────────────────────────────────────────
 
+
 def _mac_str(col_name: str) -> F.Column:
     """Format a 6-byte binary column as XX:XX:XX:XX:XX:XX."""
     b = F.col(col_name)
     return F.concat_ws(
         ":",
-        *[
-            F.upper(F.lpad(F.hex(F.substring(b, i, 1)), 2, "0"))
-            for i in range(1, 7)
-        ],
+        *[F.upper(F.lpad(F.hex(F.substring(b, i, 1)), 2, "0")) for i in range(1, 7)],
     )
 
 
 # ── silver layer — decoded CAN signals ───────────────────────────────────────
 
-# Pure-Python port of signal.rs bit-extraction logic (Intel / Motorola byte order).
-# Runs on Spark executors inside the pandas UDF below.
-
-def _extract_intel(data: bytes, start_bit: int, bit_length: int):
-    raw = 0
-    for i in range(bit_length):
-        pos = start_bit + i
-        byte_idx = pos >> 3
-        if byte_idx >= len(data):
-            return None
-        raw |= ((data[byte_idx] >> (pos & 7)) & 1) << i
-    return raw
-
-
-def _extract_motorola(data: bytes, start_bit: int, bit_length: int):
-    raw = 0
-    pos = start_bit
-    for i in range(bit_length):
-        byte_idx = pos >> 3
-        if byte_idx >= len(data):
-            return None
-        raw |= ((data[byte_idx] >> (pos & 7)) & 1) << (bit_length - 1 - i)
-        pos = pos + 15 if pos % 8 == 0 else pos - 1
-    return raw
-
-
-def _sign_extend(value: int, bit_length: int) -> int:
-    if bit_length == 0 or bit_length >= 64:
-        return value
-    sign_bit = 1 << (bit_length - 1)
-    if value & sign_bit:
-        return value | (~((1 << bit_length) - 1))
-    return value
-
-
-# ── signal CSV helpers ────────────────────────────────────────────────────────
-
-def _parse_id_field(raw: str) -> int:
-    """Parse a hex (0x…) or decimal integer string."""
-    s = raw.strip()
-    return int(s, 16) if s.lower().startswith("0x") else int(s)
-
-
-_SIGNAL_COMMON_FIELDS = ("signal_name", "start_bit", "bit_length",
-                         "byte_order", "is_signed", "scale", "offset")
-
-
-def _coerce_signal_field(field: str, raw: str):
-    raw = raw.strip()
-    if field == "signal_name":  return raw
-    if field == "start_bit":    return int(raw)
-    if field == "bit_length":   return int(raw)
-    if field == "byte_order":   return raw.lower()
-    if field == "is_signed":    return raw.lower() in ("true", "1")
-    if field == "scale":        return float(raw)
-    if field == "offset":       return float(raw)
-
-
-# Per-executor cache: csv_path → list[signal_def_dict]
+# Per-executor cache: csv_path → vector_blf.CanSignalDb | None
 _SIGNAL_DB_CACHE: dict = {}
 
 
-def _load_signal_db(csv_path: str) -> list:
+def _load_signal_db(csv_path: str):
     if csv_path in _SIGNAL_DB_CACHE:
         return _SIGNAL_DB_CACHE[csv_path]
-    import csv as _csv
-    signals = []
+    import vector_blf  # noqa: PLC0415
+
+    db = None
     if csv_path:
         try:
-            with open(csv_path, newline="") as fh:
-                for row in _csv.DictReader(fh):
-                    signals.append({
-                        "message_id": _parse_id_field(row["message_id"]),
-                        **{f: _coerce_signal_field(f, row[f]) for f in _SIGNAL_COMMON_FIELDS},
-                    })
+            db = vector_blf.CanSignalDb(csv_path)
         except Exception as exc:
             print(f"[blf_pipeline] failed to load signals CSV {csv_path!r}: {exc}")
-    _SIGNAL_DB_CACHE[csv_path] = signals
-    return signals
+    _SIGNAL_DB_CACHE[csv_path] = db
+    return db
 
 
 @pandas_udf(_SIGNAL_RESULT_SCHEMA)
@@ -482,27 +427,17 @@ def _decode_signals(
     `paths` carries the signal CSV path as a per-row literal so that the
     value is available on executors without relying on driver-side state.
     """
-    result = []
     # All rows in this micro-batch share the same CSV path (driver-side F.lit literal).
     csv_path = paths.iloc[0] if len(paths) else ""
-    signal_db = _load_signal_db(csv_path)
+    db = _load_signal_db(csv_path)
 
+    result = []
     for can_id, data in zip(can_ids, data_col):
         decoded = []
-        if data is not None:
-            raw_bytes = bytes(data)
-            for sig in signal_db:
-                if sig["message_id"] != can_id:
-                    continue
-                if sig["byte_order"] == "intel":
-                    raw = _extract_intel(raw_bytes, sig["start_bit"], sig["bit_length"])
-                else:
-                    raw = _extract_motorola(raw_bytes, sig["start_bit"], sig["bit_length"])
-                if raw is None:
-                    continue
-                numeric = _sign_extend(raw, sig["bit_length"]) if sig["is_signed"] else raw
-                value = numeric * sig["scale"] + sig["offset"]
-                decoded.append({"signal_name": sig["signal_name"], "signal_value": value})
+        if data is not None and db is not None:
+            decoded = [
+                {"signal_name": name, "signal_value": value} for name, value in db.decode(int(can_id), bytes(data))
+            ]
         result.append(decoded)
 
     return pd.Series(result)
@@ -594,24 +529,53 @@ def blf_silver_eth():
 
 # ── silver layer — parsed Ethernet payload signals ────────────────────────────
 
+
 def _eth_parse_tcp(data: bytes, out: list) -> None:
     if len(data) < 20:
         return
-    out.extend([
-        {"signal_name": "tcp.src_port",  "signal_value": float((data[0] << 8) | data[1]), "signal_str": None},
-        {"signal_name": "tcp.dst_port",  "signal_value": float((data[2] << 8) | data[3]), "signal_str": None},
-        {"signal_name": "tcp.flags",     "signal_value": float(data[13] & 0x3F),           "signal_str": None},
-    ])
+    out.extend(
+        [
+            {
+                "signal_name": "tcp.src_port",
+                "signal_value": float((data[0] << 8) | data[1]),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "tcp.dst_port",
+                "signal_value": float((data[2] << 8) | data[3]),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "tcp.flags",
+                "signal_value": float(data[13] & 0x3F),
+                "signal_str": None,
+            },
+        ]
+    )
 
 
 def _eth_parse_udp(data: bytes, out: list) -> None:
     if len(data) < 8:
         return
-    out.extend([
-        {"signal_name": "udp.src_port",      "signal_value": float((data[0] << 8) | data[1]), "signal_str": None},
-        {"signal_name": "udp.dst_port",      "signal_value": float((data[2] << 8) | data[3]), "signal_str": None},
-        {"signal_name": "udp.payload_bytes", "signal_value": float(((data[4] << 8) | data[5]) - 8), "signal_str": None},
-    ])
+    out.extend(
+        [
+            {
+                "signal_name": "udp.src_port",
+                "signal_value": float((data[0] << 8) | data[1]),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "udp.dst_port",
+                "signal_value": float((data[2] << 8) | data[3]),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "udp.payload_bytes",
+                "signal_value": float(((data[4] << 8) | data[5]) - 8),
+                "signal_str": None,
+            },
+        ]
+    )
 
 
 def _eth_parse_ipv4(data: bytes, out: list) -> None:
@@ -619,13 +583,35 @@ def _eth_parse_ipv4(data: bytes, out: list) -> None:
         return
     ihl = (data[0] & 0x0F) * 4
     protocol = data[9]
-    out.extend([
-        {"signal_name": "ip.protocol",    "signal_value": float(protocol),                              "signal_str": None},
-        {"signal_name": "ip.ttl",         "signal_value": float(data[8]),                               "signal_str": None},
-        {"signal_name": "ip.total_len",   "signal_value": float((data[2] << 8) | data[3]),              "signal_str": None},
-        {"signal_name": "ip.src",         "signal_value": None, "signal_str": ".".join(str(b) for b in data[12:16])},
-        {"signal_name": "ip.dst",         "signal_value": None, "signal_str": ".".join(str(b) for b in data[16:20])},
-    ])
+    out.extend(
+        [
+            {
+                "signal_name": "ip.protocol",
+                "signal_value": float(protocol),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "ip.ttl",
+                "signal_value": float(data[8]),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "ip.total_len",
+                "signal_value": float((data[2] << 8) | data[3]),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "ip.src",
+                "signal_value": None,
+                "signal_str": ".".join(str(b) for b in data[12:16]),
+            },
+            {
+                "signal_name": "ip.dst",
+                "signal_value": None,
+                "signal_str": ".".join(str(b) for b in data[16:20]),
+            },
+        ]
+    )
     transport = data[ihl:] if ihl <= len(data) else b""
     if protocol == _IPPROTO_TCP:
         _eth_parse_tcp(transport, out)
@@ -637,18 +623,30 @@ def _eth_parse_ipv6(data: bytes, out: list) -> None:
     if len(data) < 40:
         return
     next_header = data[6]
-    out.extend([
-        {"signal_name": "ip.protocol",   "signal_value": float(next_header), "signal_str": None},
-        {"signal_name": "ip.hop_limit",  "signal_value": float(data[7]),     "signal_str": None},
-        {
-            "signal_name": "ip.src", "signal_value": None,
-            "signal_str": ":".join(f"{(data[8  + i*2] << 8 | data[9  + i*2]):04x}" for i in range(8)),
-        },
-        {
-            "signal_name": "ip.dst", "signal_value": None,
-            "signal_str": ":".join(f"{(data[24 + i*2] << 8 | data[25 + i*2]):04x}" for i in range(8)),
-        },
-    ])
+    out.extend(
+        [
+            {
+                "signal_name": "ip.protocol",
+                "signal_value": float(next_header),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "ip.hop_limit",
+                "signal_value": float(data[7]),
+                "signal_str": None,
+            },
+            {
+                "signal_name": "ip.src",
+                "signal_value": None,
+                "signal_str": ":".join(f"{(data[8 + i * 2] << 8 | data[9 + i * 2]):04x}" for i in range(8)),
+            },
+            {
+                "signal_name": "ip.dst",
+                "signal_value": None,
+                "signal_str": ":".join(f"{(data[24 + i * 2] << 8 | data[25 + i * 2]):04x}" for i in range(8)),
+            },
+        ]
+    )
     transport = data[40:]
     if next_header == _IPPROTO_TCP:
         _eth_parse_tcp(transport, out)
@@ -743,25 +741,20 @@ def blf_silver_eth_signals():
 
 _SOMEIP_VALID_MSG_TYPES = frozenset({0x00, 0x01, 0x02, 0x80, 0x81})
 
-# Per-executor cache: csv_path → dict[(service_id, method_id)] → [signal_def]
+# Per-executor cache: csv_path → vector_blf.SomeIpSignalDb | None
 _SOMEIP_SIGNAL_DB_CACHE: dict = {}
 
 
-def _load_someip_signal_db(csv_path: str) -> dict:
-    """Load SOME/IP signal CSV; returns dict keyed by (service_id, method_id)."""
+def _load_someip_signal_db(csv_path: str):
+    """Load SOME/IP signal CSV; returns a vector_blf.SomeIpSignalDb or None."""
     if csv_path in _SOMEIP_SIGNAL_DB_CACHE:
         return _SOMEIP_SIGNAL_DB_CACHE[csv_path]
-    import csv as _csv
-    db: dict = {}
+    import vector_blf  # noqa: PLC0415
+
+    db = None
     if csv_path:
         try:
-            with open(csv_path, newline="") as fh:
-                for row in _csv.DictReader(fh):
-                    key = (_parse_id_field(row["service_id"]),
-                           _parse_id_field(row["method_id"]))
-                    db.setdefault(key, []).append(
-                        {f: _coerce_signal_field(f, row[f]) for f in _SIGNAL_COMMON_FIELDS}
-                    )
+            db = vector_blf.SomeIpSignalDb(csv_path)
         except Exception as exc:
             print(f"[blf_pipeline] failed to load SOME/IP signals CSV {csv_path!r}: {exc}")
     _SOMEIP_SIGNAL_DB_CACHE[csv_path] = db
@@ -779,7 +772,8 @@ def _someip_strip_ipv4_udp(data: bytes):
     if len(udp) < 8:
         return None
     return (
-        src_ip, dst_ip,
+        src_ip,
+        dst_ip,
         (udp[0] << 8) | udp[1],
         (udp[2] << 8) | udp[3],
         udp[8:],
@@ -793,13 +787,14 @@ def _someip_strip_ipv6_udp(data: bytes):
     """
     if len(data) < 40 or data[6] != _IPPROTO_UDP:  # next header not UDP
         return None
-    src_ip = ":".join(f"{(data[8  + i*2] << 8 | data[9  + i*2]):04x}" for i in range(8))
-    dst_ip = ":".join(f"{(data[24 + i*2] << 8 | data[25 + i*2]):04x}" for i in range(8))
+    src_ip = ":".join(f"{(data[8 + i * 2] << 8 | data[9 + i * 2]):04x}" for i in range(8))
+    dst_ip = ":".join(f"{(data[24 + i * 2] << 8 | data[25 + i * 2]):04x}" for i in range(8))
     udp = data[40:]
     if len(udp) < 8:
         return None
     return (
-        src_ip, dst_ip,
+        src_ip,
+        dst_ip,
         (udp[0] << 8) | udp[1],
         (udp[2] << 8) | udp[3],
         udp[8:],
@@ -816,10 +811,10 @@ def _someip_parse_header(payload: bytes):
     if msg_type not in _SOMEIP_VALID_MSG_TYPES:
         return None
     service_id = (payload[0] << 8) | payload[1]
-    if service_id == _SOMEIP_SD_SERVICE_ID:       # skip SOME/IP-SD
+    if service_id == _SOMEIP_SD_SERVICE_ID:  # skip SOME/IP-SD
         return None
     method_id = (payload[2] << 8) | payload[3]
-    length    = int.from_bytes(payload[4:8], "big")
+    length = int.from_bytes(payload[4:8], "big")
     if length < 8 or 8 + length > len(payload):  # length field sanity check
         return None
     return service_id, method_id, msg_type, payload[16 : 8 + length]
@@ -851,30 +846,25 @@ def _decode_someip_signals(
             elif ether_type == _ETHERTYPE_IPV6:
                 udp_info = _someip_strip_ipv6_udp(raw)
 
-            if udp_info is not None:
+            if udp_info is not None and signal_db is not None:
                 src_ip, dst_ip, src_port, dst_port, udp_payload = udp_info
                 parsed = _someip_parse_header(udp_payload)
                 if parsed is not None:
                     service_id, method_id, msg_type, app_payload = parsed
-                    for sig in signal_db.get((service_id, method_id), []):
-                        if sig["byte_order"] == "intel":
-                            raw_val = _extract_intel(app_payload, sig["start_bit"], sig["bit_length"])
-                        else:
-                            raw_val = _extract_motorola(app_payload, sig["start_bit"], sig["bit_length"])
-                        if raw_val is None:
-                            continue
-                        numeric = _sign_extend(raw_val, sig["bit_length"]) if sig["is_signed"] else raw_val
-                        signals.append({
-                            "src_ip":            src_ip,
-                            "dst_ip":            dst_ip,
-                            "udp_src_port":      src_port,
-                            "udp_dst_port":      dst_port,
-                            "someip_service_id": service_id,
-                            "someip_method_id":  method_id,
-                            "someip_msg_type":   msg_type,
-                            "signal_name":       sig["signal_name"],
-                            "signal_value":      numeric * sig["scale"] + sig["offset"],
-                        })
+                    for sig_name, sig_value in signal_db.decode(service_id, method_id, bytes(app_payload)):
+                        signals.append(
+                            {
+                                "src_ip": src_ip,
+                                "dst_ip": dst_ip,
+                                "udp_src_port": src_port,
+                                "udp_dst_port": dst_port,
+                                "someip_service_id": service_id,
+                                "someip_method_id": method_id,
+                                "someip_msg_type": msg_type,
+                                "signal_name": sig_name,
+                                "signal_value": sig_value,
+                            }
+                        )
         result.append(signals)
 
     return pd.Series(result)
@@ -946,6 +936,7 @@ def blf_silver_someip_signals():
 
 # ── gold layer — merged CAN + Ethernet + SOME/IP signals ─────────────────────
 
+
 @dlt.table(
     name="blf_gold_signals",
     comment=(
@@ -966,58 +957,47 @@ def blf_silver_someip_signals():
 )
 def blf_gold_signals():
     _null_str = F.lit(None).cast(StringType())
-    can = (
-        dlt.read_stream("blf_silver_can_signals")
-        .select(
-            "_source_file",
-            "_ingested_at",
-            "message_type",
-            "timestamp_ns",
-            "timestamp_s",
-            "channel",
-            F.lit("CAN").alias("signal_source"),
-            F.col("can_id_hex").alias("message_id_str"),
-            "dir",
-            "signal_name",
-            "signal_value",
-            _null_str.alias("signal_str"),
-        )
+    can = dlt.read_stream("blf_silver_can_signals").select(
+        "_source_file",
+        "_ingested_at",
+        "message_type",
+        "timestamp_ns",
+        "timestamp_s",
+        "channel",
+        F.lit("CAN").alias("signal_source"),
+        F.col("can_id_hex").alias("message_id_str"),
+        "dir",
+        "signal_name",
+        "signal_value",
+        _null_str.alias("signal_str"),
     )
-    eth = (
-        dlt.read_stream("blf_silver_eth_signals")
-        .select(
-            "_source_file",
-            "_ingested_at",
-            "message_type",
-            "timestamp_ns",
-            "timestamp_s",
-            "channel",
-            F.lit("ETH").alias("signal_source"),
-            F.col("ether_type_hex").alias("message_id_str"),
-            "dir",
-            "signal_name",
-            "signal_value",
-            "signal_str",
-        )
+    eth = dlt.read_stream("blf_silver_eth_signals").select(
+        "_source_file",
+        "_ingested_at",
+        "message_type",
+        "timestamp_ns",
+        "timestamp_s",
+        "channel",
+        F.lit("ETH").alias("signal_source"),
+        F.col("ether_type_hex").alias("message_id_str"),
+        "dir",
+        "signal_name",
+        "signal_value",
+        "signal_str",
     )
-    someip = (
-        dlt.read_stream("blf_silver_someip_signals")
-        .select(
-            "_source_file",
-            "_ingested_at",
-            "message_type",
-            "timestamp_ns",
-            "timestamp_s",
-            "channel",
-            F.lit("SOMEIP").alias("signal_source"),
-            F.concat_ws(
-                "/", "someip_service_id_hex", "someip_method_id_hex"
-            ).alias("message_id_str"),
-            "dir",
-            "signal_name",
-            "signal_value",
-            _null_str.alias("signal_str"),
-        )
+    someip = dlt.read_stream("blf_silver_someip_signals").select(
+        "_source_file",
+        "_ingested_at",
+        "message_type",
+        "timestamp_ns",
+        "timestamp_s",
+        "channel",
+        F.lit("SOMEIP").alias("signal_source"),
+        F.concat_ws("/", "someip_service_id_hex", "someip_method_id_hex").alias("message_id_str"),
+        "dir",
+        "signal_name",
+        "signal_value",
+        _null_str.alias("signal_str"),
     )
     # signal_name is not globally unique; consumers must include signal_source in WHERE.
     return can.union(eth).union(someip)

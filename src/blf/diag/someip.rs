@@ -1,5 +1,5 @@
 use super::super::error::{ParseError, ParseResult};
-use super::super::read_util::{read_u8, read_u16_be, read_u32_be};
+use super::super::read_util::{read_u16_be, read_u32_be, read_u8};
 use std::io::Read;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,4 +136,3 @@ impl SomeIp {
         self.service_id == 0xFFFF && self.method_id == 0x8100
     }
 }
-

@@ -18,6 +18,7 @@ module-name = "vector_blf"
 
 [dependency-groups]
 dev = [
+    "autosar-data>=0.10.1",
     "maturin>=1.13.3",
     "python-can>=4.5.0",
     "ruff>=0.15.14",

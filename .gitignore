@@ -1,2 +1,7 @@
 /target
-/data/bench_*.blf
+/data
+/.claude
+/.cursor
+/.databricks
+/.venv
+/dist

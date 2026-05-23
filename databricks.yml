@@ -37,8 +37,8 @@ artifacts:
   vector_blf:
     type: whl
     # Runs locally before upload; produces target/wheels/vector_blf-*.whl
-    build: maturin build --release --features python --manylinux auto
-    path: target/wheels   # directory DAB scans for the resulting .whl file
+    build: bash databricks/build_wheel.sh
+    path: .  # build runs from here; DABs scans recursively for *.whl (finds dist/)
 
 # ── shared variables (overridable per target) ─────────────────────────────────
 
@@ -87,18 +87,15 @@ resources:
         blf.target_schema:  ${var.target_schema}
 
       libraries:
-        # DLT pipeline definition (uploaded as a workspace notebook)
-        - notebook:
+        # DLT pipeline definition
+        - file:
             path: ./databricks/dlt_blf_pipeline.py
-        # Compiled Rust extension wheel (built by the artifact above)
-        - whl: ${artifacts.vector_blf}
 
-      clusters:
-        - label: default
-          node_type_id: ${var.node_type_id}
-          autoscale:
-            min_workers: ${var.min_workers}
-            max_workers: ${var.max_workers}
+      environment:
+        dependencies:
+          - ./dist/*.whl
+
+      serverless: true
 
       channel: CURRENT    # use the latest DLT runtime
       edition: ADVANCED   # required for Auto Loader + expectations

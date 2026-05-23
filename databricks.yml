@@ -124,7 +124,7 @@ targets:
     variables:
       blf_source_path: /Volumes/main/blf_dev/raw
       target_schema:   blf_dev
-      signals_path:    /Volumes/main/blf_dev/spec/signals.csv
+      signals_path:    /Volumes/main/blf_dev/signals/can_signals.csv
 
   # ── prod ─────────────────────────────────────────────────────────────────
   # Continuous pipeline: restarts automatically, runs in production mode.
@@ -138,4 +138,4 @@ targets:
     variables:
       blf_source_path: /Volumes/main/blf/raw
       target_schema:   blf
-      signals_path:    /Volumes/main/blf/spec/signals.csv
+      signals_path:    /Volumes/main/blf/signals/can_signals.csv

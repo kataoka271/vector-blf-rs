@@ -21,7 +21,7 @@ Also ships **Python bindings** via PyO3 + maturin as the `vector_blf` package.
 ## CLI
 
 ```
-vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N]
+vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [can_signals.csv]] [--threads N]
 ```
 
 ```bash
@@ -35,7 +35,7 @@ vector-blf-rs data/test_logfile.blf data/bench_large.blf 200000
 vector-blf-rs data/test_logfile.blf out.csv
 
 # Export to CSV with signal decoding
-vector-blf-rs data/test_logfile.blf out.csv signals.csv
+vector-blf-rs data/test_logfile.blf out.csv can_signals.csv
 ```
 
 ---
@@ -103,7 +103,7 @@ blf_silver_can_signals  — decoded physical signal values (long format, one row
 Auto Loader tracks which files have been processed, so only new BLF files are
 ingested on each run (exactly-once, incremental).
 
-Signal definitions are loaded from a CSV at `blf.signals_path` (see Pipeline parameters). `assets/signals.csv` in this repo contains a demo set covering engine, vehicle dynamics, battery, and ambient signals.
+Signal definitions are loaded from a CSV at `blf.signals_path` (see Pipeline parameters). `assets/can_signals.csv` in this repo contains a demo set covering engine, vehicle dynamics, battery, and ambient signals.
 
 ### Deploy with Databricks Asset Bundles
 
@@ -154,10 +154,10 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
 0x64,ambient_temp,0,8,Intel,true,1.0,-40.0
 ```
 
-`message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`. Upload to the `spec` volume before running:
+`message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`. Upload to the `signals` volume before running:
 
 ```bash
-databricks fs cp assets/signals.csv dbfs:/Volumes/main/blf_dev/spec/signals.csv --overwrite
+databricks fs cp assets/can_signals.csv dbfs:/Volumes/main/blf_dev/signals/can_signals.csv --overwrite
 ```
 
 ---

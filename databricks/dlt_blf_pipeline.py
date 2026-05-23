@@ -34,7 +34,7 @@ Setup
        blf.source_path         /Volumes/mycat/myschema/blf_raw
        blf.target_catalog      mycat            (optional, default: main)
        blf.target_schema       automotive       (optional, default: blf)
-       blf.signals_path        /Volumes/mycat/myschema/signals.csv        (optional)
+       blf.signals_path        /Volumes/mycat/myschema/can_signals.csv        (optional)
        blf.someip_signals_path /Volumes/mycat/myschema/someip_signals.csv (optional)
 
    CAN signal CSV format (header required):

@@ -67,7 +67,7 @@ A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format
 ### CLI (`src/main.rs`)
 
 ```
-vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N]
+vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [can_signals.csv]] [--threads N]
 ```
 
 - BLF→BLF: copy with optional repetition count
@@ -96,7 +96,7 @@ PyO3 bindings exposed as the `vector_blf` Python extension module:
 | `databricks.yml` | Databricks Asset Bundle (DAB) config — defines the `vector_blf` wheel artifact, pipeline variables, and `dev`/`prod` targets |
 | `databricks/dlt_blf_pipeline.py` | Delta Live Tables pipeline: `blf_bronze` (all messages) → `blf_silver_can`, `blf_silver_eth`, `blf_silver_can_signals` (streaming tables via Auto Loader) |
 | `databricks/build_wheel.sh` | Builds a manylinux `aarch64` wheel inside Docker using `maturin` + `cargo-zigbuild`; output goes to `dist/` |
-| `assets/signals.csv` | Demo signal definitions CSV; upload to the `spec` volume before running the pipeline |
+| `assets/can_signals.csv` | Demo signal definitions CSV; upload to the `signals` volume before running the pipeline |
 
 **DAB workflow:**
 
@@ -107,20 +107,20 @@ databricks bundle deploy -t prod      # deploy to production
 databricks bundle run blf_ingestion   # trigger a pipeline run
 databricks bundle destroy             # tear down all managed resources
 
-# Upload signal definitions to the spec volume (dev)
-databricks fs cp assets/signals.csv       dbfs:/Volumes/main/blf_dev/spec/signals.csv       --overwrite
-databricks fs cp assets/someip_signals.csv dbfs:/Volumes/main/blf_dev/spec/someip_signals.csv --overwrite
+# Upload signal definitions to the signals volume (dev)
+databricks fs cp assets/can_signals.csv       dbfs:/Volumes/main/blf_dev/signals/can_signals.csv       --overwrite
+databricks fs cp assets/someip_signals.csv dbfs:/Volumes/main/blf_dev/signals/someip_signals.csv --overwrite
 ```
 
-The pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.source_path`), parses them with the `vector_blf` wheel using a pandas UDF, and writes partitioned Delta tables. Signal definitions live in the `spec` volume (`blf.signals_path` for CAN, `blf.someip_signals_path` for SOME/IP); when present, physical values are decoded into `blf_silver_can_signals` and `blf_silver_someip_signals` respectively.
+The pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.source_path`), parses them with the `vector_blf` wheel using a pandas UDF, and writes partitioned Delta tables. Signal definitions live in the `signals` volume (`blf.signals_path` for CAN, `blf.someip_signals_path` for SOME/IP); when present, physical values are decoded into `blf_silver_can_signals` and `blf_silver_someip_signals` respectively.
 
 **Volume layout (dev):**
 
 | Volume | Path | Contents |
 |--------|------|----------|
 | `main.blf_dev.raw` | `/Volumes/main/blf_dev/raw/` | Source `*.blf` files (Auto Loader input) |
-| `main.blf_dev.spec` | `/Volumes/main/blf_dev/spec/signals.csv` | CAN signal definitions CSV |
-| `main.blf_dev.spec` | `/Volumes/main/blf_dev/spec/someip_signals.csv` | SOME/IP signal definitions CSV |
+| `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/can_signals.csv` | CAN signal definitions CSV |
+| `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/someip_signals.csv` | SOME/IP signal definitions CSV |
 
 **Cross-compilation note:** Databricks Serverless runs Linux ARM64 (`aarch64`). `build_wheel.sh` uses Docker + zig to cross-compile from Windows/macOS without a Linux machine.
 

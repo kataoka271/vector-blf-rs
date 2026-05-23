@@ -7,9 +7,10 @@ extension (PyO3/maturin), and writes structured Delta tables.
 
 Layer layout
 ------------
-  blf_bronze        streaming table — one row per log object, all message types
-  blf_silver_can    streaming table — CAN / CAN-FD / CAN-FD64 messages
-  blf_silver_eth    streaming table — Ethernet / EthernetEx messages
+  blf_bronze             streaming table — one row per log object, all message types
+  blf_silver_can         streaming table — CAN / CAN-FD / CAN-FD64 messages
+  blf_silver_eth         streaming table — Ethernet / EthernetEx messages
+  blf_silver_can_signals streaming table — decoded physical signal values (long format)
 
 Setup
 -----
@@ -27,9 +28,19 @@ Setup
        /Volumes/<catalog>/<schema>/<vol>/wheels/vector_blf-*.whl
 
 4. Set pipeline parameters (Edit → Advanced → Parameters):
-       blf.source_path   /Volumes/mycat/myschema/blf_raw
-       blf.target_catalog  mycat            (optional, default: main)
-       blf.target_schema   automotive       (optional, default: blf)
+       blf.source_path    /Volumes/mycat/myschema/blf_raw
+       blf.target_catalog mycat            (optional, default: main)
+       blf.target_schema  automotive       (optional, default: blf)
+       blf.signals_path   /Volumes/mycat/myschema/signals.csv  (optional)
+
+   Signal CSV format (header required):
+       message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+       0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
+       0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+
+   message_id accepts hex (0x…) or decimal.  byte_order is Intel or Motorola
+   (case-insensitive).  is_signed accepts true/false or 1/0.
+   If blf.signals_path is not set, blf_silver_can_signals will be empty.
 
 The pipeline is continuous-streaming: Auto Loader tracks which files have
 been processed, so only new *.blf files are ingested on each run.
@@ -43,6 +54,7 @@ from pyspark.sql.types import (
     BinaryType,
     BooleanType,
     ByteType,
+    DoubleType,
     IntegerType,
     LongType,
     StringType,
@@ -55,6 +67,7 @@ from pyspark.sql.types import (
 SOURCE_PATH = spark.conf.get("blf.source_path")
 TARGET_CATALOG = spark.conf.get("blf.target_catalog", "main")
 TARGET_SCHEMA = spark.conf.get("blf.target_schema", "blf")
+SIGNALS_PATH = spark.conf.get("blf.signals_path", "")
 
 # ── record schema (struct returned by the parsing UDF) ────────────────────────
 
@@ -316,6 +329,170 @@ def _mac_str(col_name: str) -> F.Column:
             F.upper(F.lpad(F.hex(F.substring(b, i, 1)), 2, "0"))
             for i in range(1, 7)
         ],
+    )
+
+
+# ── silver layer — decoded CAN signals ───────────────────────────────────────
+
+_SIGNAL_RESULT_SCHEMA = ArrayType(
+    StructType([
+        StructField("signal_name", StringType(), nullable=False),
+        StructField("signal_value", DoubleType(), nullable=False),
+    ])
+)
+
+# Pure-Python port of signal.rs bit-extraction logic (Intel / Motorola byte order).
+# Runs on Spark executors inside the pandas UDF below.
+
+def _extract_intel(data: bytes, start_bit: int, bit_length: int):
+    raw = 0
+    for i in range(bit_length):
+        pos = start_bit + i
+        byte_idx = pos >> 3
+        if byte_idx >= len(data):
+            return None
+        raw |= ((data[byte_idx] >> (pos & 7)) & 1) << i
+    return raw
+
+
+def _extract_motorola(data: bytes, start_bit: int, bit_length: int):
+    raw = 0
+    pos = start_bit
+    for i in range(bit_length):
+        byte_idx = pos >> 3
+        if byte_idx >= len(data):
+            return None
+        raw |= ((data[byte_idx] >> (pos & 7)) & 1) << (bit_length - 1 - i)
+        pos = pos + 15 if pos % 8 == 0 else pos - 1
+    return raw
+
+
+def _sign_extend(value: int, bit_length: int) -> int:
+    if bit_length == 0 or bit_length >= 64:
+        return value
+    sign_bit = 1 << (bit_length - 1)
+    if value & sign_bit:
+        return value | (~((1 << bit_length) - 1))
+    return value
+
+
+# Per-executor cache: csv_path → list[signal_def_dict]
+_SIGNAL_DB_CACHE: dict = {}
+
+
+def _load_signal_db(csv_path: str) -> list:
+    if csv_path in _SIGNAL_DB_CACHE:
+        return _SIGNAL_DB_CACHE[csv_path]
+    import csv as _csv
+    signals = []
+    if csv_path:
+        try:
+            with open(csv_path, newline="") as fh:
+                for row in _csv.DictReader(fh):
+                    mid_s = row["message_id"].strip()
+                    mid = int(mid_s, 16) if mid_s.lower().startswith("0x") else int(mid_s)
+                    signals.append({
+                        "message_id": mid,
+                        "signal_name": row["signal_name"].strip(),
+                        "start_bit": int(row["start_bit"]),
+                        "bit_length": int(row["bit_length"]),
+                        "byte_order": row["byte_order"].strip().lower(),
+                        "is_signed": row["is_signed"].strip().lower() in ("true", "1"),
+                        "scale": float(row["scale"]),
+                        "offset": float(row["offset"]),
+                    })
+        except Exception as exc:
+            print(f"[blf_pipeline] failed to load signals CSV {csv_path!r}: {exc}")
+    _SIGNAL_DB_CACHE[csv_path] = signals
+    return signals
+
+
+@pandas_udf(_SIGNAL_RESULT_SCHEMA)
+def _decode_signals(
+    can_ids: pd.Series,
+    data_col: pd.Series,
+    paths: pd.Series,
+) -> pd.Series:
+    """Decode all matching CAN signals for each (can_id, data) row.
+
+    `paths` carries the signal CSV path as a per-row literal so that the
+    value is available on executors without relying on driver-side state.
+    """
+    result = []
+    csv_path = paths.iloc[0] if len(paths) else ""
+    signal_db = _load_signal_db(csv_path)
+
+    for can_id, data in zip(can_ids, data_col):
+        decoded = []
+        if data is not None:
+            raw_bytes = bytes(data)
+            for sig in signal_db:
+                if sig["message_id"] != can_id:
+                    continue
+                if sig["byte_order"] == "intel":
+                    raw = _extract_intel(raw_bytes, sig["start_bit"], sig["bit_length"])
+                else:
+                    raw = _extract_motorola(raw_bytes, sig["start_bit"], sig["bit_length"])
+                if raw is None:
+                    continue
+                numeric = _sign_extend(raw, sig["bit_length"]) if sig["is_signed"] else raw
+                value = numeric * sig["scale"] + sig["offset"]
+                decoded.append({"signal_name": sig["signal_name"], "signal_value": value})
+        result.append(decoded)
+
+    return pd.Series(result)
+
+
+@dlt.table(
+    name="blf_silver_can_signals",
+    comment=(
+        "Physical signal values decoded from CAN / CAN-FD / CAN-FD64 messages "
+        "using the signal definition CSV at blf.signals_path. "
+        "Long format: one row per (message, signal)."
+    ),
+    table_properties={
+        "quality": "silver",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+    partition_cols=["message_type"],
+)
+def blf_silver_can_signals():
+    return (
+        dlt.read_stream("blf_silver_can")
+        .withColumn(
+            "_signals",
+            _decode_signals(
+                F.col("can_id"),
+                F.col("data"),
+                F.lit(SIGNALS_PATH),
+            ),
+        )
+        .filter(F.size("_signals") > 0)
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "can_id",
+            "can_id_hex",
+            "dir",
+            F.explode("_signals").alias("_s"),
+        )
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "can_id",
+            "can_id_hex",
+            "dir",
+            F.col("_s.signal_name"),
+            F.col("_s.signal_value"),
+        )
     )
 
 

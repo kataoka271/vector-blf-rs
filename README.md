@@ -74,7 +74,7 @@ for obj in vector_blf.Reader("path/to/file.blf"):
 
 | Class | Fields |
 |---|---|
-| `Reader(path)` | Iterator of `BaseObject` |
+| `Reader(path, types=None)` | Iterator of `BaseObject`; `types` filters message types in Rust (e.g. `["Can", "CanFd"]`) |
 | `BaseObject` | `timestamp_ns: int`, `message: Can \| CanFd \| CanFd64 \| Ethernet \| EthernetEx \| None` |
 | `Can` | `channel`, `id`, `is_ext_id`, `dir`, `rtr`, `dlc`, `data` |
 | `CanFd` | + `fdf`, `brs`, `esi` |
@@ -93,14 +93,17 @@ for obj in vector_blf.Reader("path/to/file.blf"):
 ```
 Auto Loader (*.blf → file paths)
          ↓  vector_blf Rust UDF
-blf_bronze        — all message types, one row per log object
+blf_bronze              — all message types, one row per log object
          ↓ filter
-blf_silver_can    — CAN / CAN-FD / CAN-FD64 (+ data_hex, timestamp_s, dir string)
-blf_silver_eth    — Ethernet / EthernetEx   (+ formatted MACs, ether_type_hex)
+blf_silver_can          — CAN / CAN-FD / CAN-FD64 (+ data_hex, timestamp_s, dir string)
+blf_silver_eth          — Ethernet / EthernetEx   (+ formatted MACs, ether_type_hex)
+blf_silver_can_signals  — decoded physical signal values (long format, one row per signal)
 ```
 
 Auto Loader tracks which files have been processed, so only new BLF files are
 ingested on each run (exactly-once, incremental).
+
+Signal definitions are loaded from a CSV at `blf.signals_path` (see Pipeline parameters). `assets/signals.csv` in this repo contains a demo set covering engine, vehicle dynamics, battery, and ambient signals.
 
 ### Deploy with Databricks Asset Bundles
 
@@ -142,6 +145,20 @@ Then update the `artifacts.vector_blf.build` line in `databricks.yml` to match.
 | `blf.source_path` | — | Volume path containing `*.blf` files (required) |
 | `blf.target_catalog` | `main` | Unity Catalog output catalog |
 | `blf.target_schema` | `blf` | Unity Catalog output schema |
+| `blf.signals_path` | `""` | Volume path to signal definitions CSV; if empty, `blf_silver_can_signals` is empty |
+
+Signal CSV format (header required):
+
+```
+message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x64,ambient_temp,0,8,Intel,true,1.0,-40.0
+```
+
+`message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`. Upload to the `spec` volume before running:
+
+```bash
+databricks fs cp assets/signals.csv dbfs:/Volumes/main/blf_dev/spec/signals.csv --overwrite
+```
 
 ---
 

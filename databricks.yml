@@ -63,6 +63,13 @@ variables:
       AWS  → m5.xlarge  |  Azure → Standard_DS3_v2  |  GCP → n1-standard-4
     default: m5.xlarge
 
+  signals_path:
+    description: >
+      Unity Catalog Volume path to the signal definitions CSV.
+      If empty, blf_silver_can_signals will be empty.
+      Format: message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+    default: ""
+
   min_workers:
     default: "1"
 
@@ -85,6 +92,7 @@ resources:
         blf.source_path:    ${var.blf_source_path}
         blf.target_catalog: ${var.target_catalog}
         blf.target_schema:  ${var.target_schema}
+        blf.signals_path:   ${var.signals_path}
 
       libraries:
         # DLT pipeline definition
@@ -116,6 +124,7 @@ targets:
     variables:
       blf_source_path: /Volumes/main/blf_dev/raw
       target_schema:   blf_dev
+      signals_path:    /Volumes/main/blf_dev/spec/signals.csv
 
   # ── prod ─────────────────────────────────────────────────────────────────
   # Continuous pipeline: restarts automatically, runs in production mode.
@@ -129,3 +138,4 @@ targets:
     variables:
       blf_source_path: /Volumes/main/blf/raw
       target_schema:   blf
+      signals_path:    /Volumes/main/blf/spec/signals.csv

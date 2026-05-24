@@ -959,11 +959,11 @@ _UDS_RECORD_SCHEMA = StructType(
     [
         StructField("timestamp_ns", LongType(), nullable=False),
         StructField("channel", IntegerType()),
-        StructField("can_id", LongType()),           # null for DOIP rows
+        StructField("can_id", LongType()),  # null for DOIP rows
         StructField("dir", ByteType()),
-        StructField("transport", StringType(), nullable=False),    # "CAN" | "DOIP"
-        StructField("doip_src_addr", IntegerType()),   # null for CAN rows
-        StructField("doip_target_addr", IntegerType()), # null for CAN rows
+        StructField("transport", StringType(), nullable=False),  # "CAN" | "DOIP"
+        StructField("doip_src_addr", IntegerType()),  # null for CAN rows
+        StructField("doip_target_addr", IntegerType()),  # null for CAN rows
         StructField("uds_type", StringType(), nullable=False),
         StructField("service_id", IntegerType(), nullable=False),
         StructField("service_name", StringType()),
@@ -1104,8 +1104,7 @@ def _parse_uds_from_can(local_path: str, source_file: str) -> list:
     try:
         for obj in vector_blf.Reader(local_path, types=["Can", "CanFd", "CanFd64"]):
             msg = obj.message
-            if msg is None:
-                continue
+            assert isinstance(msg, (vector_blf.Can, vector_blf.CanFd, vector_blf.CanFd64))
             data = bytes(msg.data)
             if not data:
                 continue
@@ -1227,8 +1226,7 @@ def _parse_uds_from_doip(local_path: str, source_file: str) -> list:
     try:
         for obj in vector_blf.Reader(local_path, types=["Ethernet", "EthernetEx"]):
             msg = obj.message
-            if msg is None:
-                continue
+            assert isinstance(msg, (vector_blf.Ethernet, vector_blf.EthernetEx))
             tcp = _doip_strip_tcp(msg.ether_type, bytes(msg.data))
             if tcp is None:
                 continue
@@ -1347,9 +1345,7 @@ def blf_silver_diag():
             "transport",
             "channel",
             "can_id",
-            F.when(F.col("can_id").isNotNull(), F.format_string("0x%08X", F.col("can_id"))).alias(
-                "can_id_hex"
-            ),
+            F.when(F.col("can_id").isNotNull(), F.format_string("0x%08X", F.col("can_id"))).alias("can_id_hex"),
             "doip_src_addr",
             "doip_target_addr",
             _DIR_LABEL.alias("dir"),
@@ -1358,9 +1354,7 @@ def blf_silver_diag():
             F.format_string("0x%02X", F.col("service_id")).alias("service_id_hex"),
             "service_name",
             "nrc",
-            F.when(F.col("nrc").isNotNull(), F.format_string("0x%02X", F.col("nrc"))).alias(
-                "nrc_hex"
-            ),
+            F.when(F.col("nrc").isNotNull(), F.format_string("0x%02X", F.col("nrc"))).alias("nrc_hex"),
             "nrc_name",
             F.hex("data").alias("data_hex"),
             "data",

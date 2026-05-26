@@ -28,7 +28,6 @@ from autosar_data.abstraction.communication import (
     ISignalIPdu,
 )
 
-
 # ---------------------------------------------------------------------------
 # Safe navigation helpers (raw element tree)
 # ---------------------------------------------------------------------------
@@ -197,9 +196,9 @@ def _signals_from_isignal_ipdu(
     """
     rows: list[dict[str, str | int | float]] = []
 
-    sig_mappings_container = pdu_elem.get_sub_element(
-        "I-SIGNAL-TO-PDU-MAPPINGS"
-    ) or pdu_elem.get_sub_element("I-SIGNAL-TO-I-PDU-MAPPINGS")
+    sig_mappings_container = pdu_elem.get_sub_element("I-SIGNAL-TO-PDU-MAPPINGS") or pdu_elem.get_sub_element(
+        "I-SIGNAL-TO-I-PDU-MAPPINGS"
+    )
     if sig_mappings_container is None:
         return rows
 
@@ -372,12 +371,12 @@ FIELDNAMES_CONTAINER = FIELDNAMES_BASE + ["pdu_id"]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Convert AUTOSAR ARXML to can_signals.csv for vector-blf-rs"
-    )
+    parser = argparse.ArgumentParser(description="Convert AUTOSAR ARXML to can_signals.csv for vector-blf-rs")
     parser.add_argument("inputs", nargs="+", metavar="ARXML", help="Input ARXML file(s)")
     parser.add_argument("-o", "--output", metavar="CSV", help="Output CSV file (default: stdout)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Print ARXML load warnings and container debug info")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Print ARXML load warnings and container debug info"
+    )
     args = parser.parse_args()
 
     model = autosar_data.AutosarModel()

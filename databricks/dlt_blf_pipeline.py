@@ -76,6 +76,7 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
+    TimestampType,
 )
 
 # ── pipeline parameters ───────────────────────────────────────────────────────
@@ -97,11 +98,14 @@ _SOMEIP_SD_SERVICE_ID: int = 0xFFFF  # Service Discovery — always skip
 _DOIP_PORT: int = 13400
 _DOIP_PAYLOAD_TYPE_DIAG: int = 0x8001  # DoIP DiagMessage — carries UDS payload
 
-# ── record schema (struct returned by the parsing UDF) ────────────────────────
+# ── bronze output schema (flat rows emitted by _parse_blf_batch) ──────────────
 
-# One element per log object.  Fields not relevant to a message type are null.
-_RECORD_SCHEMA = StructType(
+_BRONZE_OUTPUT_SCHEMA = StructType(
     [
+        StructField("_source_file", StringType(), nullable=False),
+        StructField("_file_mtime", TimestampType()),
+        StructField("_file_size_bytes", LongType()),
+        StructField("_ingested_at", TimestampType(), nullable=False),
         StructField("timestamp_ns", LongType(), nullable=False),
         StructField("message_type", StringType(), nullable=False),
         # CAN / CAN-FD / CAN-FD64
@@ -122,6 +126,9 @@ _RECORD_SCHEMA = StructType(
         StructField("ether_type", IntegerType()),
     ]
 )
+
+# Rows buffered per executor before yielding a DataFrame; limits peak heap per file.
+_PARSE_BATCH_SIZE = 5_000
 
 # ── signal output schemas ────────────────────────────────────────────────────
 
@@ -176,122 +183,131 @@ def _local_path(spark_path: str) -> str:
     return spark_path  # already a local path
 
 
-# ── parsing UDF ───────────────────────────────────────────────────────────────
+# ── parsing worker (mapInPandas) ──────────────────────────────────────────────
 
-from pyspark.sql.functions import pandas_udf  # noqa: E402
+from pyspark.sql.functions import pandas_udf  # noqa: E402  (still used by signal UDFs)
 
 
-@pandas_udf(ArrayType(_RECORD_SCHEMA))
-def _parse_blf_file(paths: pd.Series) -> pd.Series:
-    """Parse one BLF file per row; return a list of record dicts per file.
+def _parse_blf_batch(iterator):
+    """mapInPandas worker: parse BLF files and yield record rows iteratively.
 
-    Runs inside Spark executors — each executor processes a batch of file paths.
-    The vector_blf wheel must be installed on the cluster (see module docstring).
-    Memory note: all records for a single file are collected before yielding.
-    For extremely large files (> a few hundred MB) consider splitting upstream.
+    Each input DataFrame batch contains one or more file-path rows.  Records are
+    emitted in chunks of _PARSE_BATCH_SIZE, so peak heap is proportional to that
+    constant rather than to the file size.
     """
-    import vector_blf  # noqa: PLC0415  (imported here so it's on the executor)
+    from datetime import datetime, timezone
 
-    result: list[list[dict]] = []
+    import vector_blf  # noqa: PLC0415
 
-    for spark_path in paths:
-        local = _local_path(spark_path)
-        records: list[dict] = []
-        try:
-            for obj in vector_blf.Reader(
-                local,
-                types=["Can", "CanFd", "CanFd64", "Ethernet", "EthernetEx"],
-            ):
-                msg = obj.message
-                rec: dict = {
-                    "timestamp_ns": obj.timestamp_ns,
-                    "message_type": None,
-                    "channel": None,
-                    "can_id": None,
-                    "is_ext_id": None,
-                    "dir": None,
-                    "rtr": None,
-                    "dlc": None,
-                    "data": None,
-                    "fdf": None,
-                    "brs": None,
-                    "esi": None,
-                    "src_addr": None,
-                    "dst_addr": None,
-                    "ether_type": None,
-                }
+    for batch_df in iterator:
+        rows: list[dict] = []
+        now = datetime.now(timezone.utc)
 
-                if isinstance(msg, vector_blf.Can):
-                    rec.update(
-                        message_type="CAN",
-                        channel=msg.channel,
-                        can_id=msg.id,
-                        is_ext_id=msg.is_ext_id,
-                        dir=msg.dir,
-                        rtr=msg.rtr,
-                        dlc=msg.dlc,
-                        data=bytes(msg.data),
-                    )
-                elif isinstance(msg, vector_blf.CanFd):
-                    rec.update(
-                        message_type="CAN_FD",
-                        channel=msg.channel,
-                        can_id=msg.id,
-                        is_ext_id=msg.is_ext_id,
-                        dir=msg.dir,
-                        rtr=msg.rtr,
-                        dlc=msg.dlc,
-                        data=bytes(msg.data),
-                        fdf=msg.fdf,
-                        brs=msg.brs,
-                        esi=msg.esi,
-                    )
-                elif isinstance(msg, vector_blf.CanFd64):
-                    rec.update(
-                        message_type="CAN_FD64",
-                        channel=int(msg.channel),
-                        can_id=msg.id,
-                        is_ext_id=msg.is_ext_id,
-                        dir=msg.dir,
-                        rtr=msg.rtr,
-                        dlc=msg.dlc,
-                        data=bytes(msg.data),
-                        fdf=msg.fdf,
-                        brs=msg.brs,
-                        esi=msg.esi,
-                    )
-                elif isinstance(msg, vector_blf.Ethernet):
-                    rec.update(
-                        message_type="ETH",
-                        channel=msg.channel,
-                        dir=msg.dir,
-                        src_addr=bytes(msg.src_addr),
-                        dst_addr=bytes(msg.dst_addr),
-                        ether_type=msg.ether_type,
-                        data=bytes(msg.data),
-                    )
-                elif isinstance(msg, vector_blf.EthernetEx):
-                    rec.update(
-                        message_type="ETH_EX",
-                        channel=msg.channel,
-                        dir=msg.dir,
-                        src_addr=bytes(msg.src_addr),
-                        dst_addr=bytes(msg.dst_addr),
-                        ether_type=msg.ether_type,
-                        data=bytes(msg.data),
-                    )
-                else:
-                    continue  # filtered by types= above; should not reach here
+        for _, row in batch_df.iterrows():
+            spark_path = str(row["_source_file"])
+            file_mtime = row.get("_file_mtime")
+            file_size = row.get("_file_size_bytes")
+            local = _local_path(spark_path)
+            try:
+                for obj in vector_blf.Reader(
+                    local,
+                    types=["Can", "CanFd", "CanFd64", "Ethernet", "EthernetEx"],
+                ):
+                    msg = obj.message
+                    rec: dict = {
+                        "_source_file": spark_path,
+                        "_file_mtime": file_mtime,
+                        "_file_size_bytes": file_size,
+                        "_ingested_at": now,
+                        "timestamp_ns": obj.timestamp_ns,
+                        "message_type": None,
+                        "channel": None,
+                        "can_id": None,
+                        "is_ext_id": None,
+                        "dir": None,
+                        "rtr": None,
+                        "dlc": None,
+                        "data": None,
+                        "fdf": None,
+                        "brs": None,
+                        "esi": None,
+                        "src_addr": None,
+                        "dst_addr": None,
+                        "ether_type": None,
+                    }
 
-                records.append(rec)
+                    if isinstance(msg, vector_blf.Can):
+                        rec.update(
+                            message_type="CAN",
+                            channel=msg.channel,
+                            can_id=msg.id,
+                            is_ext_id=msg.is_ext_id,
+                            dir=msg.dir,
+                            rtr=msg.rtr,
+                            dlc=msg.dlc,
+                            data=bytes(msg.data),
+                        )
+                    elif isinstance(msg, vector_blf.CanFd):
+                        rec.update(
+                            message_type="CAN_FD",
+                            channel=msg.channel,
+                            can_id=msg.id,
+                            is_ext_id=msg.is_ext_id,
+                            dir=msg.dir,
+                            rtr=msg.rtr,
+                            dlc=msg.dlc,
+                            data=bytes(msg.data),
+                            fdf=msg.fdf,
+                            brs=msg.brs,
+                            esi=msg.esi,
+                        )
+                    elif isinstance(msg, vector_blf.CanFd64):
+                        rec.update(
+                            message_type="CAN_FD64",
+                            channel=int(msg.channel),
+                            can_id=msg.id,
+                            is_ext_id=msg.is_ext_id,
+                            dir=msg.dir,
+                            rtr=msg.rtr,
+                            dlc=msg.dlc,
+                            data=bytes(msg.data),
+                            fdf=msg.fdf,
+                            brs=msg.brs,
+                            esi=msg.esi,
+                        )
+                    elif isinstance(msg, vector_blf.Ethernet):
+                        rec.update(
+                            message_type="ETH",
+                            channel=msg.channel,
+                            dir=msg.dir,
+                            src_addr=bytes(msg.src_addr),
+                            dst_addr=bytes(msg.dst_addr),
+                            ether_type=msg.ether_type,
+                            data=bytes(msg.data),
+                        )
+                    elif isinstance(msg, vector_blf.EthernetEx):
+                        rec.update(
+                            message_type="ETH_EX",
+                            channel=msg.channel,
+                            dir=msg.dir,
+                            src_addr=bytes(msg.src_addr),
+                            dst_addr=bytes(msg.dst_addr),
+                            ether_type=msg.ether_type,
+                            data=bytes(msg.data),
+                        )
+                    else:
+                        continue
 
-        except Exception as exc:  # noqa: BLE001
-            # Log parse errors to the executor log without failing the pipeline.
-            print(f"[blf_pipeline] failed to parse {spark_path!r}: {exc}")
+                    rows.append(rec)
+                    if len(rows) >= _PARSE_BATCH_SIZE:
+                        yield pd.DataFrame(rows)
+                        rows = []
 
-        result.append(records)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[blf_pipeline] failed to parse {spark_path!r}: {exc}")
 
-    return pd.Series(result)
+        if rows:
+            yield pd.DataFrame(rows)
 
 
 # ── bronze layer ──────────────────────────────────────────────────────────────
@@ -326,22 +342,8 @@ def blf_bronze():
             F.col("modificationTime").alias("_file_mtime"),
             F.col("length").alias("_file_size_bytes"),
         )
-        .withColumn("_records", _parse_blf_file(F.col("_source_file")))
-        .withColumn("_ingested_at", F.current_timestamp())
-        .select(
-            "_source_file",
-            "_file_mtime",
-            "_file_size_bytes",
-            "_ingested_at",
-            F.explode("_records").alias("_rec"),
-        )
-        .select(
-            "_source_file",
-            "_file_mtime",
-            "_file_size_bytes",
-            "_ingested_at",
-            "_rec.*",  # flatten all record fields to top-level columns
-        )
+        # mapInPandas yields rows as they are parsed — no full-file buffering.
+        .mapInPandas(_parse_blf_batch, schema=_BRONZE_OUTPUT_SCHEMA)
     )
 
 
@@ -955,8 +957,11 @@ def blf_silver_someip_signals():
 #   PositiveResponse — first byte = requested SID | 0x40
 #   NegativeResponse — first byte 0x7F, second byte = requested SID, third = NRC
 
-_UDS_RECORD_SCHEMA = StructType(
+_DIAG_RAW_SCHEMA = StructType(
     [
+        StructField("_source_file", StringType(), nullable=False),
+        StructField("_file_mtime", TimestampType()),
+        StructField("_ingested_at", TimestampType(), nullable=False),
         StructField("timestamp_ns", LongType(), nullable=False),
         StructField("channel", IntegerType()),
         StructField("can_id", LongType()),  # null for DOIP rows
@@ -972,6 +977,8 @@ _UDS_RECORD_SCHEMA = StructType(
         StructField("data", BinaryType()),
     ]
 )
+
+_UDS_BATCH_SIZE = 1_000  # rows buffered before yielding from _parse_blf_uds_batch
 
 _UDS_SERVICE_NAMES: dict = {
     0x10: "DiagnosticSessionControl",
@@ -1094,12 +1101,11 @@ def _isotp_ff_info(data: bytes) -> tuple | None:
     return total_len, bytes(data[2:])
 
 
-def _parse_uds_from_can(local_path: str, source_file: str) -> list:
-    """Read CAN/CAN-FD frames, reassemble ISO-TP PDUs, return UDS record dicts."""
+def _parse_uds_from_can(local_path: str, source_file: str):
+    """Generator: read CAN/CAN-FD frames, reassemble ISO-TP PDUs, yield UDS record dicts."""
     import vector_blf  # noqa: PLC0415
 
     conversations: dict = {}  # (channel, can_id) -> reassembly state dict
-    results: list = []
 
     try:
         for obj in vector_blf.Reader(local_path, types=["Can", "CanFd", "CanFd64"]):
@@ -1116,18 +1122,16 @@ def _parse_uds_from_can(local_path: str, source_file: str) -> list:
                 if payload:
                     rec = _uds_parse_payload(payload)
                     if rec:
-                        results.append(
-                            dict(
-                                timestamp_ns=obj.timestamp_ns,
-                                channel=key[0],
-                                can_id=key[1],
-                                dir=msg.dir,
-                                transport="CAN",
-                                doip_src_addr=None,
-                                doip_target_addr=None,
-                                _source_file=source_file,
-                                **rec,
-                            )
+                        yield dict(
+                            timestamp_ns=obj.timestamp_ns,
+                            channel=key[0],
+                            can_id=key[1],
+                            dir=msg.dir,
+                            transport="CAN",
+                            doip_src_addr=None,
+                            doip_target_addr=None,
+                            _source_file=source_file,
+                            **rec,
                         )
                 conversations.pop(key, None)
 
@@ -1154,18 +1158,16 @@ def _parse_uds_from_can(local_path: str, source_file: str) -> list:
                             payload = bytes(state["buf"][: state["total_len"]])
                             rec = _uds_parse_payload(payload)
                             if rec:
-                                results.append(
-                                    dict(
-                                        timestamp_ns=state["ts"],
-                                        channel=key[0],
-                                        can_id=key[1],
-                                        dir=state["dir"],
-                                        transport="CAN",
-                                        doip_src_addr=None,
-                                        doip_target_addr=None,
-                                        _source_file=source_file,
-                                        **rec,
-                                    )
+                                yield dict(
+                                    timestamp_ns=state["ts"],
+                                    channel=key[0],
+                                    can_id=key[1],
+                                    dir=state["dir"],
+                                    transport="CAN",
+                                    doip_src_addr=None,
+                                    doip_target_addr=None,
+                                    _source_file=source_file,
+                                    **rec,
                                 )
                             del conversations[key]
                     else:
@@ -1175,8 +1177,6 @@ def _parse_uds_from_can(local_path: str, source_file: str) -> list:
 
     except Exception as exc:  # noqa: BLE001
         print(f"[blf_pipeline] CAN/UDS parse failed for {source_file!r}: {exc}")
-
-    return results
 
 
 def _doip_strip_tcp(ether_type: int, data: bytes) -> tuple | None:
@@ -1217,11 +1217,9 @@ def _doip_diag_messages(tcp_payload: bytes):
         pos += 8 + plen
 
 
-def _parse_uds_from_doip(local_path: str, source_file: str) -> list:
-    """Read Ethernet frames, parse DoIP DiagMessages over TCP 13400, return UDS record dicts."""
+def _parse_uds_from_doip(local_path: str, source_file: str):
+    """Generator: read Ethernet frames, parse DoIP DiagMessages over TCP 13400, yield UDS record dicts."""
     import vector_blf  # noqa: PLC0415
-
-    results: list = []
 
     try:
         for obj in vector_blf.Reader(local_path, types=["Ethernet", "EthernetEx"]):
@@ -1236,60 +1234,72 @@ def _parse_uds_from_doip(local_path: str, source_file: str) -> list:
             for src_addr, tgt_addr, uds_payload in _doip_diag_messages(tcp_payload):
                 rec = _uds_parse_payload(uds_payload)
                 if rec:
-                    results.append(
-                        dict(
-                            timestamp_ns=obj.timestamp_ns,
-                            channel=int(msg.channel),
-                            can_id=None,
-                            dir=msg.dir,
-                            transport="DOIP",
-                            doip_src_addr=src_addr,
-                            doip_target_addr=tgt_addr,
-                            _source_file=source_file,
-                            **rec,
-                        )
+                    yield dict(
+                        timestamp_ns=obj.timestamp_ns,
+                        channel=int(msg.channel),
+                        can_id=None,
+                        dir=msg.dir,
+                        transport="DOIP",
+                        doip_src_addr=src_addr,
+                        doip_target_addr=tgt_addr,
+                        _source_file=source_file,
+                        **rec,
                     )
 
     except Exception as exc:  # noqa: BLE001
         print(f"[blf_pipeline] DoIP/UDS parse failed for {source_file!r}: {exc}")
 
-    return results
 
+def _parse_blf_uds_batch(iterator):
+    """mapInPandas worker: parse UDS diagnostic messages from BLF files.
 
-@pandas_udf(ArrayType(_UDS_RECORD_SCHEMA))
-def _parse_blf_file_uds(paths: pd.Series) -> pd.Series:
-    """Parse UDS diagnostic messages from one BLF file per row.
-
-    Processes both transports in a single pass each and merges the results sorted
-    by timestamp.  ISO-TP reassembly state is local to each file invocation.
+    Processes both transports via generators, merges sorted by timestamp, and
+    yields in chunks of _UDS_BATCH_SIZE to avoid large intermediate allocations.
+    ISO-TP reassembly state is local to each file invocation.
     """
-    result: list = []
-    for spark_path in paths:
-        local = _local_path(spark_path)
-        records = _parse_uds_from_can(local, spark_path)
-        records.extend(_parse_uds_from_doip(local, spark_path))
-        records.sort(key=lambda r: r["timestamp_ns"])
-        result.append(
-            [
-                {
-                    "timestamp_ns": r["timestamp_ns"],
-                    "channel": r.get("channel"),
-                    "can_id": r.get("can_id"),
-                    "dir": r.get("dir"),
-                    "transport": r["transport"],
-                    "doip_src_addr": r.get("doip_src_addr"),
-                    "doip_target_addr": r.get("doip_target_addr"),
-                    "uds_type": r["uds_type"],
-                    "service_id": r["service_id"],
-                    "service_name": r.get("service_name"),
-                    "nrc": r.get("nrc"),
-                    "nrc_name": r.get("nrc_name"),
-                    "data": r.get("data", b""),
-                }
-                for r in records
-            ]
-        )
-    return pd.Series(result)
+    import itertools
+    from datetime import datetime, timezone
+
+    for batch_df in iterator:
+        now = datetime.now(timezone.utc)
+        for _, row in batch_df.iterrows():
+            spark_path = str(row["_source_file"])
+            file_mtime = row.get("_file_mtime")
+            local = _local_path(spark_path)
+            records = sorted(
+                itertools.chain(
+                    _parse_uds_from_can(local, spark_path),
+                    _parse_uds_from_doip(local, spark_path),
+                ),
+                key=lambda r: r["timestamp_ns"],
+            )
+            rows: list[dict] = []
+            for r in records:
+                rows.append(
+                    {
+                        "_source_file": spark_path,
+                        "_file_mtime": file_mtime,
+                        "_ingested_at": now,
+                        "timestamp_ns": r["timestamp_ns"],
+                        "channel": r.get("channel"),
+                        "can_id": r.get("can_id"),
+                        "dir": r.get("dir"),
+                        "transport": r["transport"],
+                        "doip_src_addr": r.get("doip_src_addr"),
+                        "doip_target_addr": r.get("doip_target_addr"),
+                        "uds_type": r["uds_type"],
+                        "service_id": r["service_id"],
+                        "service_name": r.get("service_name"),
+                        "nrc": r.get("nrc"),
+                        "nrc_name": r.get("nrc_name"),
+                        "data": r.get("data", b""),
+                    }
+                )
+                if len(rows) >= _UDS_BATCH_SIZE:
+                    yield pd.DataFrame(rows)
+                    rows = []
+            if rows:
+                yield pd.DataFrame(rows)
 
 
 @dlt.table(
@@ -1323,20 +1333,8 @@ def blf_silver_diag():
             F.col("path").alias("_source_file"),
             F.col("modificationTime").alias("_file_mtime"),
         )
-        .withColumn("_records", _parse_blf_file_uds(F.col("_source_file")))
-        .withColumn("_ingested_at", F.current_timestamp())
-        .select(
-            "_source_file",
-            "_file_mtime",
-            "_ingested_at",
-            F.explode("_records").alias("_rec"),
-        )
-        .select(
-            "_source_file",
-            "_file_mtime",
-            "_ingested_at",
-            "_rec.*",
-        )
+        # mapInPandas yields rows as they are parsed — no full-file buffering.
+        .mapInPandas(_parse_blf_uds_batch, schema=_DIAG_RAW_SCHEMA)
         .select(
             "_source_file",
             "_ingested_at",

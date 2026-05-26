@@ -54,6 +54,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "usage: vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N]",
     );
 
+    let output = positional.get(1);
+    let is_csv = output.map(|s| s.ends_with(".csv")).unwrap_or(false);
+
+    // Single-threaded CSV: stream one object at a time — O(1-container) peak memory.
+    if n_threads == 1 && is_csv {
+        let t = time::Instant::now();
+        let output = output.unwrap();
+        let mut w = BufWriter::new(File::create(output)?);
+        let reader = blf::Reader::new(BufReader::new(File::open(input)?))?;
+        let count = if let Some(signals_path) = positional.get(2) {
+            let db = CanSignalDb::from_csv(BufReader::new(File::open(signals_path)?))?;
+            let someip_db = someip_signals_path
+                .as_deref()
+                .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
+                .transpose()?;
+            blf::csv::write_csv_signals(
+                &mut w,
+                reader.filter_map(|r| r.ok()),
+                &db,
+                someip_db.as_ref(),
+            )?
+        } else {
+            blf::csv::write_csv_raw(&mut w, reader.filter_map(|r| r.ok()))?
+        };
+        println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
+        return Ok(());
+    }
+
+    // Buffered path: scan → parallel parse → output.
+    // Used for multi-threaded parsing, BLF→BLF copy, or benchmarking (no output).
+
     // Scan phase: index LogContainer offsets without decompression.
     let t = time::Instant::now();
     let offsets = {
@@ -98,22 +129,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Boundary check: warn if timestamps are out of order at chunk seams.
     check_boundaries(&chunk_results);
 
-    // Merge in original file order.
-    let objects: Vec<BaseObject> = chunk_results.into_iter().flatten().collect();
-
-    if let Some(output) = positional.get(1) {
+    if let Some(output) = output {
         let t = time::Instant::now();
-        if output.ends_with(".csv") {
+        if is_csv {
             let mut w = BufWriter::new(File::create(output)?);
+            // Pass chunk_results directly — no flatten().collect() needed.
             let count = if let Some(signals_path) = positional.get(2) {
                 let db = CanSignalDb::from_csv(BufReader::new(File::open(signals_path)?))?;
                 let someip_db = someip_signals_path
                     .as_deref()
                     .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
                     .transpose()?;
-                blf::csv::write_csv_signals(&mut w, &objects, &db, someip_db.as_ref())?
+                blf::csv::write_csv_signals(
+                    &mut w,
+                    chunk_results.iter().flatten(),
+                    &db,
+                    someip_db.as_ref(),
+                )?
             } else {
-                blf::csv::write_csv_raw(&mut w, &objects)?
+                blf::csv::write_csv_raw(&mut w, chunk_results.iter().flatten())?
             };
             println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
         } else {
@@ -121,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut writer = Writer::new(BufWriter::new(File::create(output)?))?;
             let mut count = 0usize;
             for _ in 0..repeat {
-                for obj in &objects {
+                for obj in chunk_results.iter().flatten() {
                     writer.write_base_object(obj)?;
                     count += 1;
                 }

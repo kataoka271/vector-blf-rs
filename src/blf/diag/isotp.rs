@@ -159,6 +159,7 @@ impl Reassembler {
                 self.reset();
                 self.total_length = *total_length;
                 self.next_sn = 1;
+                self.buf = Vec::with_capacity(*total_length as usize);
                 self.buf.extend_from_slice(data);
                 Ok(None)
             }

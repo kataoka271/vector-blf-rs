@@ -5,6 +5,7 @@ use super::signal::{CanSignalDb, ContainerHeader, SomeIpSignalDb};
 use super::transport::Transport;
 use super::BaseObject;
 use super::Timestamp;
+use std::borrow::Borrow;
 use std::io::Write;
 
 fn ts_ns(ts: Timestamp) -> u64 {
@@ -38,16 +39,17 @@ fn try_someip_signals<'a>(
     }
 }
 
-pub fn write_csv_raw<W: Write>(
+pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
     w: &mut W,
-    objects: &[BaseObject],
+    objects: impl IntoIterator<Item = T>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     writeln!(
         w,
         "timestamp_ns,type,channel,dir,src_mac,dst_mac,ether_type,vlan_vid,id,ext_id,dlc,data"
     )?;
     let mut count = 0usize;
-    for obj in objects {
+    for item in objects {
+        let obj = item.borrow();
         let ns = ts_ns(obj.timestamp);
         match &obj.message {
             Message::Can(m) => {
@@ -138,15 +140,16 @@ fn can_extract<'a>(db: &'a CanSignalDb, can_id: u32, data: &[u8]) -> Vec<(&'a st
     }
 }
 
-pub fn write_csv_signals<W: Write>(
+pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
     w: &mut W,
-    objects: &[BaseObject],
+    objects: impl IntoIterator<Item = T>,
     db: &CanSignalDb,
     someip_db: Option<&SomeIpSignalDb>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     writeln!(w, "timestamp_ns,channel,message_id,signal_name,value")?;
     let mut count = 0usize;
-    for obj in objects {
+    for item in objects {
+        let obj = item.borrow();
         let ns = ts_ns(obj.timestamp);
         match &obj.message {
             Message::Can(m) => {

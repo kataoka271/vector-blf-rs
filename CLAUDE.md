@@ -2,6 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Code Style
+
+- Prefer Rust 2018 module style: use `foo.rs` alongside a `foo/` directory for submodules, not `foo/mod.rs`.
+
+### After editing Rust files
+
+```bash
+cargo fmt       # formatter
+cargo clippy    # linter
+cargo check     # type-check
+```
+
+### After editing Python files
+
+```bash
+uv run ruff format <file>                    # formatter
+uv run ruff check <file>                     # linter
+uv run ruff check --select I --fix <file>    # import organizer
+uv run ty check                              # type checker
+```
+
 ## Commands
 
 ```bash

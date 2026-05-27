@@ -103,11 +103,26 @@ fn sign_extend(value: u64, bit_length: u32) -> i64 {
 /// CAN-FD container frame header format. Both variants are big-endian (network byte order).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContainerHeader {
-    /// 2-byte PDU ID + 2-byte length (4-byte overhead per I-PDU). Most common.
+    /// 24-bit PDU ID + 8-bit DLC (4-byte overhead per I-PDU). Standard CAN-FD container format.
     #[default]
     Short,
     /// 4-byte PDU ID + 4-byte length (8-byte overhead per I-PDU).
     Long,
+}
+
+/// CAN-FD DLC → payload byte length (ISO 11898-1 Table 3).
+fn canfd_dlc_to_len(dlc: u8) -> usize {
+    match dlc {
+        0..=8 => dlc as usize,
+        9 => 12,
+        10 => 16,
+        11 => 20,
+        12 => 24,
+        13 => 32,
+        14 => 48,
+        15 => 64,
+        _ => dlc as usize,
+    }
 }
 
 /// Demultiplex a CAN-FD container frame payload into `(pdu_id, i_pdu_payload)` pairs.
@@ -122,8 +137,9 @@ pub fn demux_container(data: &[u8], header: ContainerHeader) -> Vec<(u32, &[u8])
                 if pos + 4 > data.len() {
                     break;
                 }
-                let id = u16::from_be_bytes([data[pos], data[pos + 1]]) as u32;
-                let len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+                let id =
+                    (data[pos] as u32) << 16 | (data[pos + 1] as u32) << 8 | (data[pos + 2] as u32);
+                let len = canfd_dlc_to_len(data[pos + 3]);
                 pos += 4;
                 (id, len)
             }
@@ -594,15 +610,29 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn demux_short_header() {
-        // Two I-PDUs: PDU 0x0010 with 2 bytes, PDU 0x0020 with 1 byte
-        // [0x00, 0x10, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x20, 0x00, 0x01, 0xFF]
+        // Two I-PDUs: PDU 0x000010 (2 bytes), PDU 0x000020 (1 byte)
+        // Each header: 3-byte PDU ID (big-endian) + 1-byte DLC
         let data = [
-            0x00u8, 0x10, 0x00, 0x02, 0xAB, 0xCD, 0x00, 0x20, 0x00, 0x01, 0xFF,
+            0x00u8, 0x00, 0x10, 0x02, 0xAB, 0xCD, // PDU 0x000010, dlc=2
+            0x00, 0x00, 0x20, 0x01, 0xFF, // PDU 0x000020, dlc=1
         ];
         let pdus = demux_container(&data, ContainerHeader::Short);
         assert_eq!(pdus.len(), 2);
-        assert_eq!(pdus[0], (0x0010, [0xAB, 0xCD].as_slice()));
-        assert_eq!(pdus[1], (0x0020, [0xFF].as_slice()));
+        assert_eq!(pdus[0], (0x000010, [0xAB, 0xCD].as_slice()));
+        assert_eq!(pdus[1], (0x000020, [0xFF].as_slice()));
+    }
+
+    #[test]
+    fn demux_short_header_dlc_extended() {
+        // DLC=9 maps to 12 payload bytes (ISO 11898-1 Table 3)
+        let mut data = vec![0x00u8, 0x00, 0x01, 0x09]; // PDU 0x000001, dlc=9
+        data.extend_from_slice(&[
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+        ]);
+        let pdus = demux_container(&data, ContainerHeader::Short);
+        assert_eq!(pdus.len(), 1);
+        assert_eq!(pdus[0].0, 0x000001);
+        assert_eq!(pdus[0].1.len(), 12);
     }
 
     #[test]
@@ -616,8 +646,8 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn demux_truncated_stops_early() {
-        // Header says length=5 but only 2 bytes available after header
-        let data = [0x00u8, 0x01, 0x00, 0x05, 0xAA, 0xBB];
+        // Header says dlc=5 but only 2 bytes available after the 4-byte header
+        let data = [0x00u8, 0x00, 0x01, 0x05, 0xAA, 0xBB];
         let pdus = demux_container(&data, ContainerHeader::Short);
         assert!(pdus.is_empty());
     }
@@ -634,8 +664,8 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
         // Build a container frame: PDU 0x10 → [0x05, 0x0A], PDU 0x20 → [0x08]
         let frame = [
-            0x00u8, 0x10, 0x00, 0x02, 0x05, 0x0A, // PDU 0x10: Sig1=5, Sig2=10
-            0x00, 0x20, 0x00, 0x01, 0x08, // PDU 0x20: Sig3=8*0.5=4.0
+            0x00u8, 0x00, 0x10, 0x02, 0x05, 0x0A, // PDU 0x10: Sig1=5, Sig2=10
+            0x00, 0x00, 0x20, 0x01, 0x08, // PDU 0x20: Sig3=8*0.5=4.0
         ];
         let vals = db.extract_container(0x200, &frame, ContainerHeader::Short);
         let get = |name: &str| vals.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
@@ -653,13 +683,13 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
         // PDU 0x01 first, then PDU 0x02
         let frame_ab = [
-            0x00u8, 0x01, 0x00, 0x02, 0x40, 0x1F, // PDU 0x01: raw=0x1F40=8000 → 80.0 m
-            0x00, 0x02, 0x00, 0x01, 0x64, // PDU 0x02: raw=0x64=100 → 100*0.5-40=10.0 °C
+            0x00u8, 0x00, 0x01, 0x02, 0x40, 0x1F, // PDU 0x01: raw=0x1F40=8000 → 80.0 m
+            0x00, 0x00, 0x02, 0x01, 0x64, // PDU 0x02: raw=0x64=100 → 100*0.5-40=10.0 °C
         ];
         // PDU 0x02 first, then PDU 0x01
         let frame_ba = [
-            0x00u8, 0x02, 0x00, 0x01, 0x64, // PDU 0x02
-            0x00, 0x01, 0x00, 0x02, 0x40, 0x1F, // PDU 0x01
+            0x00u8, 0x00, 0x02, 0x01, 0x64, // PDU 0x02
+            0x00, 0x00, 0x01, 0x02, 0x40, 0x1F, // PDU 0x01
         ];
 
         let vals_ab = db.extract_container(0x600, &frame_ab, ContainerHeader::Short);
@@ -689,7 +719,7 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
         assert!(!db.is_container(0x100));
         assert!(db.is_container(0x200));
         assert_eq!(db.extract(0x100, &[0x42]).len(), 1);
-        let frame = [0x00u8, 0x01, 0x00, 0x01, 0x07];
+        let frame = [0x00u8, 0x00, 0x01, 0x01, 0x07];
         assert_eq!(
             db.extract_container(0x200, &frame, ContainerHeader::Short)
                 .len(),

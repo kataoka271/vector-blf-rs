@@ -419,10 +419,7 @@ def _load_signal_db(csv_path: str):
 
     db = None
     if csv_path:
-        try:
-            db = vector_blf.CanSignalDb(csv_path)
-        except Exception as exc:
-            print(f"[blf_pipeline] failed to load signals CSV {csv_path!r}: {exc}")
+        db = vector_blf.CanSignalDb(csv_path)
     _SIGNAL_DB_CACHE[csv_path] = db
     return db
 
@@ -764,10 +761,7 @@ def _load_someip_signal_db(csv_path: str):
 
     db = None
     if csv_path:
-        try:
-            db = vector_blf.SomeIpSignalDb(csv_path)
-        except Exception as exc:
-            print(f"[blf_pipeline] failed to load SOME/IP signals CSV {csv_path!r}: {exc}")
+        db = vector_blf.SomeIpSignalDb(csv_path)
     _SOMEIP_SIGNAL_DB_CACHE[csv_path] = db
     return db
 

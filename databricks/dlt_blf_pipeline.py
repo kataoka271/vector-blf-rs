@@ -10,6 +10,7 @@ Layer layout
   blf_bronze                 streaming table — one row per log object, all message types
   blf_silver_can             streaming table — CAN / CAN-FD / CAN-FD64 messages
   blf_silver_eth             streaming table — Ethernet / EthernetEx messages
+  blf_silver_someip          streaming table — SOME/IP messages parsed from Ethernet UDP frames
   blf_silver_can_signals     streaming table — decoded physical signal values (long format)
   blf_silver_eth_signals     streaming table — IP/TCP/UDP protocol fields as signals (long format)
   blf_silver_someip_signals  streaming table — SOME/IP application signals (long format)
@@ -151,7 +152,7 @@ _ETH_SIGNAL_RESULT_SCHEMA = ArrayType(
     )
 )
 
-_SOMEIP_SIGNAL_RESULT_SCHEMA = ArrayType(
+_SOMEIP_ROW_SCHEMA = ArrayType(
     StructType(
         [
             StructField("src_ip", StringType(), True),
@@ -160,9 +161,14 @@ _SOMEIP_SIGNAL_RESULT_SCHEMA = ArrayType(
             StructField("udp_dst_port", IntegerType(), True),
             StructField("someip_service_id", IntegerType(), False),
             StructField("someip_method_id", IntegerType(), False),
+            StructField("someip_length", IntegerType(), False),
+            StructField("someip_client_id", IntegerType(), False),
+            StructField("someip_session_id", IntegerType(), False),
+            StructField("someip_protocol_version", IntegerType(), False),
+            StructField("someip_interface_version", IntegerType(), False),
             StructField("someip_msg_type", IntegerType(), False),
-            StructField("signal_name", StringType(), False),
-            StructField("signal_value", DoubleType(), False),
+            StructField("someip_return_code", IntegerType(), False),
+            StructField("payload", BinaryType(), False),
         ]
     )
 )
@@ -807,10 +813,10 @@ def _someip_strip_ipv6_udp(data: bytes):
 
 
 def _someip_parse_header(payload: bytes):
-    """Validate SOME/IP header; return (service_id, method_id, msg_type, app_payload) or None."""
+    """Validate SOME/IP header; return a dict with all header fields or None."""
     if len(payload) < 16:
         return None
-    if payload[12] != _SOMEIP_PROTOCOL_VERSION:  # SOME/IP protocol version
+    if payload[12] != _SOMEIP_PROTOCOL_VERSION:
         return None
     msg_type = payload[14]
     if msg_type not in _SOMEIP_VALID_MSG_TYPES:
@@ -820,29 +826,28 @@ def _someip_parse_header(payload: bytes):
         return None
     method_id = (payload[2] << 8) | payload[3]
     length = int.from_bytes(payload[4:8], "big")
-    if length < 8 or 8 + length > len(payload):  # length field sanity check
+    if length < 8 or 8 + length > len(payload):
         return None
-    return service_id, method_id, msg_type, payload[16 : 8 + length]
+    return {
+        "service_id": service_id,
+        "method_id": method_id,
+        "length": length,
+        "client_id": (payload[8] << 8) | payload[9],
+        "session_id": (payload[10] << 8) | payload[11],
+        "protocol_version": payload[12],
+        "interface_version": payload[13],
+        "msg_type": msg_type,
+        "return_code": payload[15],
+        "app_payload": payload[16 : 8 + length],
+    }
 
 
-@pandas_udf(_SOMEIP_SIGNAL_RESULT_SCHEMA)
-def _decode_someip_signals(
-    ether_types: pd.Series,
-    data_col: pd.Series,
-    paths: pd.Series,
-) -> pd.Series:
-    """Decode SOME/IP application signals from Ethernet UDP payloads.
-
-    Detection heuristic: UDP payload whose 13th byte equals 0x01 (SOME/IP protocol
-    version) and whose message-type byte is a known value.  SOME/IP-SD is skipped.
-    """
-    # All rows in this micro-batch share the same CSV path (driver-side F.lit literal).
-    csv_path = paths.iloc[0] if len(paths) else ""
-    signal_db = _load_someip_signal_db(csv_path)
+@pandas_udf(_SOMEIP_ROW_SCHEMA)
+def _parse_someip(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
+    """Parse SOME/IP header from Ethernet UDP payloads; return 0 or 1 parsed row per frame."""
     result = []
-
     for ether_type, data in zip(ether_types, data_col):
-        signals: list = []
+        rows: list = []
         if data is not None:
             raw = bytes(data)
             udp_info = None
@@ -850,28 +855,115 @@ def _decode_someip_signals(
                 udp_info = _someip_strip_ipv4_udp(raw)
             elif ether_type == _ETHERTYPE_IPV6:
                 udp_info = _someip_strip_ipv6_udp(raw)
-
-            if udp_info is not None and signal_db is not None:
+            if udp_info is not None:
                 src_ip, dst_ip, src_port, dst_port, udp_payload = udp_info
-                parsed = _someip_parse_header(udp_payload)
-                if parsed is not None:
-                    service_id, method_id, msg_type, app_payload = parsed
-                    for sig_name, sig_value in signal_db.decode(service_id, method_id, bytes(app_payload)):
-                        signals.append(
-                            {
-                                "src_ip": src_ip,
-                                "dst_ip": dst_ip,
-                                "udp_src_port": src_port,
-                                "udp_dst_port": dst_port,
-                                "someip_service_id": service_id,
-                                "someip_method_id": method_id,
-                                "someip_msg_type": msg_type,
-                                "signal_name": sig_name,
-                                "signal_value": sig_value,
-                            }
-                        )
-        result.append(signals)
+                hdr = _someip_parse_header(udp_payload)
+                if hdr is not None:
+                    rows.append(
+                        {
+                            "src_ip": src_ip,
+                            "dst_ip": dst_ip,
+                            "udp_src_port": src_port,
+                            "udp_dst_port": dst_port,
+                            "someip_service_id": hdr["service_id"],
+                            "someip_method_id": hdr["method_id"],
+                            "someip_length": hdr["length"],
+                            "someip_client_id": hdr["client_id"],
+                            "someip_session_id": hdr["session_id"],
+                            "someip_protocol_version": hdr["protocol_version"],
+                            "someip_interface_version": hdr["interface_version"],
+                            "someip_msg_type": hdr["msg_type"],
+                            "someip_return_code": hdr["return_code"],
+                            "payload": hdr["app_payload"],
+                        }
+                    )
+        result.append(rows)
+    return pd.Series(result)
 
+
+@dlt.table(
+    name="blf_silver_someip",
+    comment=(
+        "SOME/IP messages parsed from Ethernet UDP frames. "
+        "One row per SOME/IP message (header validated; SOME/IP-SD excluded). "
+        "All 16-byte header fields are exposed as columns; app payload in payload/payload_hex."
+    ),
+    table_properties={
+        "quality": "silver",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+    partition_cols=["message_type"],
+)
+def blf_silver_someip():
+    return (
+        dlt.read_stream("blf_silver_eth")
+        .withColumn("_someip", _parse_someip(F.col("ether_type"), F.col("data")))
+        .filter(F.size("_someip") > 0)
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "dir",
+            "src_mac",
+            "dst_mac",
+            F.explode("_someip").alias("_s"),
+        )
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "dir",
+            "src_mac",
+            "dst_mac",
+            F.col("_s.src_ip"),
+            F.col("_s.dst_ip"),
+            F.col("_s.udp_src_port"),
+            F.col("_s.udp_dst_port"),
+            F.col("_s.someip_service_id"),
+            F.format_string("0x%04X", F.col("_s.someip_service_id")).alias("someip_service_id_hex"),
+            F.col("_s.someip_method_id"),
+            F.format_string("0x%04X", F.col("_s.someip_method_id")).alias("someip_method_id_hex"),
+            F.col("_s.someip_length"),
+            F.col("_s.someip_client_id"),
+            F.col("_s.someip_session_id"),
+            F.col("_s.someip_protocol_version"),
+            F.col("_s.someip_interface_version"),
+            F.col("_s.someip_msg_type"),
+            F.col("_s.someip_return_code"),
+            F.hex(F.col("_s.payload")).alias("payload_hex"),
+            F.col("_s.payload"),
+        )
+    )
+
+
+# ── silver layer — SOME/IP application signals ───────────────────────────────
+
+
+@pandas_udf(_SIGNAL_RESULT_SCHEMA)
+def _decode_someip_signals(
+    service_ids: pd.Series,
+    method_ids: pd.Series,
+    payloads: pd.Series,
+    paths: pd.Series,
+) -> pd.Series:
+    """Decode SOME/IP application signals from already-parsed SOME/IP payloads."""
+    csv_path = paths.iloc[0] if len(paths) else ""
+    db = _load_someip_signal_db(csv_path)
+    result = []
+    for service_id, method_id, payload in zip(service_ids, method_ids, payloads):
+        decoded = []
+        if payload is not None and db is not None:
+            decoded = [
+                {"signal_name": name, "signal_value": value}
+                for name, value in db.decode(int(service_id), int(method_id), bytes(payload))
+            ]
+        result.append(decoded)
     return pd.Series(result)
 
 
@@ -892,12 +984,13 @@ def _decode_someip_signals(
 )
 def blf_silver_someip_signals():
     return (
-        dlt.read_stream("blf_silver_eth")
+        dlt.read_stream("blf_silver_someip")
         .withColumn(
             "_signals",
             _decode_someip_signals(
-                F.col("ether_type"),
-                F.col("data"),
+                F.col("someip_service_id"),
+                F.col("someip_method_id"),
+                F.col("payload"),
                 F.lit(SOMEIP_SIGNALS_PATH),
             ),
         )
@@ -912,6 +1005,15 @@ def blf_silver_someip_signals():
             "dir",
             "src_mac",
             "dst_mac",
+            "src_ip",
+            "dst_ip",
+            "udp_src_port",
+            "udp_dst_port",
+            "someip_service_id",
+            "someip_service_id_hex",
+            "someip_method_id",
+            "someip_method_id_hex",
+            "someip_msg_type",
             F.explode("_signals").alias("_sig"),
         )
         .select(
@@ -924,15 +1026,15 @@ def blf_silver_someip_signals():
             "dir",
             "src_mac",
             "dst_mac",
-            F.col("_sig.src_ip"),
-            F.col("_sig.dst_ip"),
-            F.col("_sig.udp_src_port"),
-            F.col("_sig.udp_dst_port"),
-            F.col("_sig.someip_service_id"),
-            F.format_string("0x%04X", F.col("_sig.someip_service_id")).alias("someip_service_id_hex"),
-            F.col("_sig.someip_method_id"),
-            F.format_string("0x%04X", F.col("_sig.someip_method_id")).alias("someip_method_id_hex"),
-            F.col("_sig.someip_msg_type"),
+            "src_ip",
+            "dst_ip",
+            "udp_src_port",
+            "udp_dst_port",
+            "someip_service_id",
+            "someip_service_id_hex",
+            "someip_method_id",
+            "someip_method_id_hex",
+            "someip_msg_type",
             F.col("_sig.signal_name"),
             F.col("_sig.signal_value"),
         )

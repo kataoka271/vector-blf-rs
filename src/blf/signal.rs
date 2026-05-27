@@ -266,6 +266,22 @@ impl CanSignalDb {
         Ok(db)
     }
 
+    /// Total number of signal definitions across all frames and container PDUs.
+    pub fn len(&self) -> usize {
+        let regular: usize = self.frames.values().map(Vec::len).sum();
+        let container: usize = self
+            .containers
+            .values()
+            .flat_map(|m| m.values())
+            .map(Vec::len)
+            .sum();
+        regular + container
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Insert a regular-frame signal definition.
     pub fn insert(&mut self, def: SignalDef) {
         self.frames.entry(def.message_id).or_default().push(def);
@@ -327,6 +343,98 @@ impl CanSignalDb {
             }
         }
         result
+    }
+
+    /// Write all signal definitions to `w` in the canonical CSV format.
+    ///
+    /// Regular-frame rows have an empty `pdu_id` column; container-frame rows
+    /// include the PDU ID. Rows are sorted by message ID then signal name.
+    pub fn write_csv<W: std::io::Write>(
+        &self,
+        w: &mut W,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let bo = |b: ByteOrder| {
+            if b == ByteOrder::Intel {
+                "Intel"
+            } else {
+                "Motorola"
+            }
+        };
+        writeln!(
+            w,
+            "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id"
+        )?;
+        let mut msg_ids: Vec<u32> = self.frames.keys().copied().collect();
+        msg_ids.sort_unstable();
+        for id in msg_ids {
+            let mut defs = self.frames[&id].iter().collect::<Vec<_>>();
+            defs.sort_by(|a, b| a.name.cmp(&b.name));
+            for d in defs {
+                writeln!(
+                    w,
+                    "0x{:X},{},{},{},{},{},{},{}",
+                    id,
+                    d.name,
+                    d.signal.start_bit,
+                    d.signal.bit_length,
+                    bo(d.signal.byte_order),
+                    d.signal.is_signed,
+                    d.signal.scale,
+                    d.signal.offset,
+                )?;
+            }
+        }
+        let mut msg_ids: Vec<u32> = self.containers.keys().copied().collect();
+        msg_ids.sort_unstable();
+        for id in msg_ids {
+            let mut pdu_ids: Vec<u32> = self.containers[&id].keys().copied().collect();
+            pdu_ids.sort_unstable();
+            for pdu in pdu_ids {
+                let mut defs = self.containers[&id][&pdu].iter().collect::<Vec<_>>();
+                defs.sort_by(|a, b| a.name.cmp(&b.name));
+                for d in defs {
+                    writeln!(
+                        w,
+                        "0x{:X},{},{},{},{},{},{},{},0x{:X}",
+                        id,
+                        d.name,
+                        d.signal.start_bit,
+                        d.signal.bit_length,
+                        bo(d.signal.byte_order),
+                        d.signal.is_signed,
+                        d.signal.scale,
+                        d.signal.offset,
+                        pdu,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Merge `overlay` into `self`; overlay wins on `(message_id, signal_name)` conflicts.
+    pub fn merge(&mut self, overlay: CanSignalDb) {
+        for (id, defs) in overlay.frames {
+            let base = self.frames.entry(id).or_default();
+            for d in defs {
+                base.retain(|x| x.name != d.name);
+                base.push(d);
+            }
+        }
+        for (id, pdu_map) in overlay.containers {
+            for (pdu, defs) in pdu_map {
+                let base = self
+                    .containers
+                    .entry(id)
+                    .or_default()
+                    .entry(pdu)
+                    .or_default();
+                for d in defs {
+                    base.retain(|x| x.name != d.name);
+                    base.push(d);
+                }
+            }
+        }
     }
 }
 
@@ -459,6 +567,58 @@ impl SomeIpSignalDb {
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    /// Write all signal definitions to `w` in the canonical CSV format.
+    /// Rows are sorted by (service_id, method_id, signal_name).
+    pub fn write_csv<W: std::io::Write>(
+        &self,
+        w: &mut W,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let bo = |b: ByteOrder| {
+            if b == ByteOrder::Intel {
+                "Intel"
+            } else {
+                "Motorola"
+            }
+        };
+        writeln!(
+            w,
+            "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset"
+        )?;
+        let mut keys: Vec<(u16, u16)> = self.map.keys().copied().collect();
+        keys.sort_unstable();
+        for (svc, mth) in keys {
+            let mut defs = self.map[&(svc, mth)].iter().collect::<Vec<_>>();
+            defs.sort_by(|a, b| a.name.cmp(&b.name));
+            for d in defs {
+                writeln!(
+                    w,
+                    "0x{:04X},0x{:04X},{},{},{},{},{},{},{}",
+                    svc,
+                    mth,
+                    d.name,
+                    d.signal.start_bit,
+                    d.signal.bit_length,
+                    bo(d.signal.byte_order),
+                    d.signal.is_signed,
+                    d.signal.scale,
+                    d.signal.offset,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Merge `overlay` into `self`; overlay wins on `(service_id, method_id, signal_name)` conflicts.
+    pub fn merge(&mut self, overlay: SomeIpSignalDb) {
+        for ((svc, mth), defs) in overlay.map {
+            let base = self.map.entry((svc, mth)).or_default();
+            for d in defs {
+                base.retain(|x| x.name != d.name);
+                base.push(d);
+            }
+        }
     }
 }
 

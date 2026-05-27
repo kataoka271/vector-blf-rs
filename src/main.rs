@@ -38,6 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse --threads N, --someip-signals <file>, and collect remaining positional args.
     let mut n_threads: usize = 1;
     let mut someip_signals_path: Option<String> = None;
+    let mut overlay_path: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut iter = args[1..].iter();
     while let Some(arg) = iter.next() {
@@ -45,9 +46,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             n_threads = iter.next().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
         } else if arg == "--someip-signals" {
             someip_signals_path = iter.next().cloned();
+        } else if arg == "--overlay" {
+            overlay_path = iter.next().cloned();
         } else {
             positional.push(arg.clone());
         }
+    }
+
+    // ── convert subcommand ────────────────────────────────────────────────────
+    if positional.first().map(String::as_str) == Some("convert") {
+        let input = positional.get(1).expect(
+            "usage: vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]",
+        );
+        let output = positional.get(2).expect(
+            "usage: vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]",
+        );
+        let t = time::Instant::now();
+        let mut db = if input.ends_with(".dbc") {
+            blf::convert::dbc::can_db_from_dbc(BufReader::new(File::open(input)?))?
+        } else if input.ends_with(".arxml") || input.ends_with(".xml") {
+            blf::convert::arxml::can_db_from_arxml(BufReader::new(File::open(input)?))?
+        } else {
+            eprintln!("error: unrecognised format for {input:?} (expected .dbc or .arxml)");
+            std::process::exit(1);
+        };
+        if let Some(ref overlay) = overlay_path {
+            let ov = CanSignalDb::from_csv(BufReader::new(File::open(overlay)?))?;
+            db.merge(ov);
+        }
+        let mut w = BufWriter::new(File::create(output)?);
+        db.write_csv(&mut w)?;
+        println!(
+            "wrote {} signal(s) to {output:?} in {:.3}s",
+            db.len(),
+            t.elapsed().as_secs_f32()
+        );
+        return Ok(());
     }
 
     let input = positional.first().expect(

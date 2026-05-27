@@ -216,7 +216,7 @@ impl CanSignalDb {
             if line.is_empty() || line.starts_with('#') || line.starts_with("message_id") {
                 continue;
             }
-            let p: Vec<&str> = line.splitn(9, ',').map(str::trim).collect();
+            let p: Vec<&str> = line.split(',').map(str::trim).collect();
             if p.len() < 8 {
                 return Err(ParseError::InvalidData);
             }
@@ -234,8 +234,16 @@ impl CanSignalDb {
                 "false" | "0" => false,
                 _ => return Err(ParseError::InvalidData),
             };
-            let scale = p[6].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
-            let offset = p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
+            let scale = if p[6].is_empty() {
+                1.0
+            } else {
+                p[6].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+            };
+            let offset = if p[7].is_empty() {
+                0.0
+            } else {
+                p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+            };
             let def = SignalDef {
                 name,
                 message_id,
@@ -380,7 +388,7 @@ impl SomeIpSignalDb {
             if line.is_empty() || line.starts_with('#') || line.starts_with("service_id") {
                 continue;
             }
-            let p: Vec<&str> = line.splitn(9, ',').map(str::trim).collect();
+            let p: Vec<&str> = line.split(',').map(str::trim).collect();
             if p.len() < 9 {
                 return Err(ParseError::InvalidData);
             }
@@ -399,8 +407,16 @@ impl SomeIpSignalDb {
                 "false" | "0" => false,
                 _ => return Err(ParseError::InvalidData),
             };
-            let scale = p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
-            let offset = p[8].parse::<f64>().map_err(|_| ParseError::InvalidData)?;
+            let scale = if p[7].is_empty() {
+                1.0
+            } else {
+                p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+            };
+            let offset = if p[8].is_empty() {
+                0.0
+            } else {
+                p[8].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+            };
             db.insert(SomeIpSignalDef {
                 name,
                 service_id,
@@ -584,6 +600,50 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
                    100,1,Sig,0,8,Intel,false,1.0,0.0\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(100, 1).len(), 1); // 100 == 0x64, 1 == 0x01
+    }
+
+    #[test]
+    fn csv_trailing_comma_regular() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,Speed,0,16,Intel,false,0.25,0.0,\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(0x100).len(), 1);
+    }
+
+    #[test]
+    fn csv_trailing_comma_container() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x200,Sig,0,8,Intel,false,1.0,0.0,0x10,\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert!(db.is_container(0x200));
+    }
+
+    #[test]
+    fn csv_default_scale_offset() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,Speed,0,8,Intel,false,,\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        // scale=1.0, offset=0.0: raw=42 → 42.0
+        let vals = db.extract(0x100, &[42]);
+        assert_eq!(vals.first().map(|(_, v)| *v), Some(42.0));
+    }
+
+    #[test]
+    fn someip_csv_trailing_comma() {
+        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0,\n";
+        let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.signals(0x0064, 0x0001).len(), 1);
+    }
+
+    #[test]
+    fn someip_csv_default_scale_offset() {
+        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x0010,0x0001,Sig,0,8,Intel,false,,\n";
+        let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
+        // scale=1.0, offset=0.0: raw=7 → 7.0
+        let vals = db.extract(0x0010, 0x0001, &[7]);
+        assert_eq!(vals.first().map(|(_, v)| *v), Some(7.0));
     }
 
     #[test]

@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let input = positional.first().expect(
-        "usage: vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N]",
+        "usage:\n  vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N] [--someip-signals <file>]\n  vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]",
     );
 
     let output = positional.get(1);

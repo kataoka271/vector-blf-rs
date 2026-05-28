@@ -838,7 +838,12 @@ def _someip_parse_header(payload: bytes):
 
 @pandas_udf(_SOMEIP_ROW_SCHEMA)
 def _parse_someip(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
-    """Parse SOME/IP header from Ethernet UDP payloads; return 0 or 1 parsed row per frame."""
+    """Parse SOME/IP messages from Ethernet UDP payloads.
+
+    Supports AUTOSAR Container PDU Transport: loops over the UDP payload and
+    parses all back-to-back SOME/IP PDUs, advancing by 8 + length bytes after
+    each valid message.  Stops on the first invalid/unrecognised header.
+    """
     result = []
     for ether_type, data in zip(ether_types, data_col):
         rows: list = []
@@ -851,8 +856,11 @@ def _parse_someip(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
                 udp_info = _someip_strip_ipv6_udp(raw)
             if udp_info is not None:
                 src_ip, dst_ip, src_port, dst_port, udp_payload = udp_info
-                hdr = _someip_parse_header(udp_payload)
-                if hdr is not None:
+                pos = 0
+                while pos < len(udp_payload):
+                    hdr = _someip_parse_header(udp_payload[pos:])
+                    if hdr is None:
+                        break
                     rows.append(
                         {
                             "src_ip": src_ip,
@@ -871,6 +879,7 @@ def _parse_someip(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
                             "payload": hdr["app_payload"],
                         }
                     )
+                    pos += 8 + hdr["length"]
         result.append(rows)
     return pd.Series(result)
 

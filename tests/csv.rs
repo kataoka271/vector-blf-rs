@@ -1,7 +1,7 @@
 use vector_blf::blf::csv::{write_csv_raw, write_csv_signals};
 use vector_blf::blf::{
-    BaseObject, Can, CanFd, CanFd64, CanSignalDb, Dir, Ethernet, EthernetEx, Message, Timestamp,
-    Vlan,
+    check_can_csv, check_someip_csv, BaseObject, Can, CanFd, CanFd64, CanSignalDb, Dir, Ethernet,
+    EthernetEx, Message, Timestamp, Vlan,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -450,4 +450,125 @@ fn csv_signals_mixed_ids_only_matching_emitted() {
     let count = write_csv_signals(&mut out, objs, &db, None).unwrap();
     // Each 0x100 frame has 2 signals (EngineSpeed + Throttle); 0x999 has none
     assert_eq!(count, 4);
+}
+
+// ── check_can_csv ─────────────────────────────────────────────────────────────
+
+#[test]
+fn check_can_csv_valid() {
+    let csv = "\
+message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
+0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+";
+    assert!(check_can_csv(csv.as_bytes()).is_empty());
+}
+
+#[test]
+fn check_can_csv_too_few_columns() {
+    let csv = "message_id,signal_name,start_bit\n0x100,Speed,0\n";
+    let errors = check_can_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, 2);
+    assert!(errors[0].1.contains("expected at least 8 columns"));
+}
+
+#[test]
+fn check_can_csv_bad_message_id() {
+    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\nnot_a_number,Speed,0,16,Intel,false,1.0,0.0\n";
+    let errors = check_can_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("invalid message_id"));
+}
+
+#[test]
+fn check_can_csv_bad_byte_order() {
+    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,16,BigEndian,false,1.0,0.0\n";
+    let errors = check_can_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("invalid byte_order"));
+}
+
+#[test]
+fn check_can_csv_bad_is_signed() {
+    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,16,Intel,yes,1.0,0.0\n";
+    let errors = check_can_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("invalid is_signed"));
+}
+
+#[test]
+fn check_can_csv_bad_scale_and_offset() {
+    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,16,Intel,false,abc,xyz\n";
+    let errors = check_can_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 2);
+    assert!(errors.iter().any(|(_, m)| m.contains("invalid scale")));
+    assert!(errors.iter().any(|(_, m)| m.contains("invalid offset")));
+}
+
+#[test]
+fn check_can_csv_collects_multiple_rows() {
+    let csv = "\
+message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+bad_id,Speed,0,16,Intel,false,1.0,0.0
+0x200,Throttle,7,12,Motorola,true,0.1,-100.0
+another_bad,Brake,0,8,Intel,false,1.0,0.0
+";
+    let errors = check_can_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 2, "should collect errors from all bad rows");
+    assert_eq!(errors[0].0, 2);
+    assert_eq!(errors[1].0, 4);
+}
+
+#[test]
+fn check_can_csv_skips_comments_and_blanks() {
+    let csv = "\
+# comment line
+message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+
+0x100,Speed,0,16,Intel,false,1.0,0.0
+";
+    assert!(check_can_csv(csv.as_bytes()).is_empty());
+}
+
+// ── check_someip_csv ──────────────────────────────────────────────────────────
+
+#[test]
+fn check_someip_csv_valid() {
+    let csv = "\
+service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
+";
+    assert!(check_someip_csv(csv.as_bytes()).is_empty());
+}
+
+#[test]
+fn check_someip_csv_too_few_columns() {
+    let csv = "service_id,method_id\n0x64,0x01\n";
+    let errors = check_someip_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("expected at least 9 columns"));
+}
+
+#[test]
+fn check_someip_csv_bad_service_and_method_id() {
+    let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\nnope,nope,Temp,0,16,Intel,false,1.0,0.0\n";
+    let errors = check_someip_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 2);
+    assert!(errors.iter().any(|(_, m)| m.contains("invalid service_id")));
+    assert!(errors.iter().any(|(_, m)| m.contains("invalid method_id")));
+}
+
+#[test]
+fn check_someip_csv_collects_multiple_rows() {
+    let csv = "\
+service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+bad,0x01,Temp,0,16,Intel,false,1.0,0.0
+0x64,0x01,Temp,0,16,Intel,false,1.0,0.0
+bad,0x01,Pressure,0,8,Intel,false,1.0,0.0
+";
+    let errors = check_someip_csv(csv.as_bytes());
+    assert_eq!(errors.len(), 2);
+    assert_eq!(errors[0].0, 2);
+    assert_eq!(errors[1].0, 4);
 }

@@ -1,8 +1,11 @@
 pub mod blf;
 
-use blf::{BaseObject, CanSignalDb, ParseError, SomeIpSignalDb, Timestamp, Writer};
+use blf::{
+    check_can_csv, check_someip_csv, BaseObject, CanSignalDb, ParseError, SomeIpSignalDb,
+    Timestamp, Writer,
+};
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufRead, BufReader, BufWriter};
 use std::time;
 
 fn ts_ns(ts: Timestamp) -> u64 {
@@ -53,6 +56,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // ── check subcommand ─────────────────────────────────────────────────────
+    if positional.first().map(String::as_str) == Some("check") {
+        let path = positional
+            .get(1)
+            .expect("usage: vector-blf-rs check <signals.csv>");
+
+        // Detect CSV type from the first non-blank, non-comment line (the header).
+        let csv_type = {
+            let f = File::open(path)?;
+            let mut detected = "";
+            for line in std::io::BufReader::new(f).lines() {
+                let line = line?;
+                let trimmed = line.trim().to_string();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                    if trimmed.starts_with("message_id") {
+                        detected = "can";
+                    } else if trimmed.starts_with("service_id") {
+                        detected = "someip";
+                    } else {
+                        eprintln!(
+                            "error: cannot detect CSV type from header {:?}; \
+                             expected header starting with 'message_id' (CAN) or 'service_id' (SOME/IP)",
+                            trimmed
+                        );
+                        std::process::exit(1);
+                    }
+                    break;
+                }
+            }
+            detected
+        };
+
+        let errors = if csv_type == "can" {
+            check_can_csv(BufReader::new(File::open(path)?))
+        } else {
+            check_someip_csv(BufReader::new(File::open(path)?))
+        };
+
+        if errors.is_empty() {
+            println!("{path}: OK");
+        } else {
+            for (line, msg) in &errors {
+                eprintln!("{path}:{line}: {msg}");
+            }
+            eprintln!("{} error(s) found", errors.len());
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // ── convert subcommand ────────────────────────────────────────────────────
     if positional.first().map(String::as_str) == Some("convert") {
         let input = positional.get(1).expect(
@@ -85,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let input = positional.first().expect(
-        "usage:\n  vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N] [--someip-signals <file>]\n  vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]",
+        "usage:\n  vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [signals.csv]] [--threads N] [--someip-signals <file>]\n  vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]\n  vector-blf-rs check <signals.csv>",
     );
 
     let output = positional.get(1);

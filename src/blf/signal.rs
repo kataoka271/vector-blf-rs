@@ -210,7 +210,8 @@ impl CanSignalDb {
 
     pub fn from_csv<R: std::io::Read>(reader: R) -> ParseResult<Self> {
         let mut db = Self::new();
-        for line in std::io::BufReader::new(reader).lines() {
+        for (i, line) in std::io::BufReader::new(reader).lines().enumerate() {
+            let lineno = i + 1;
             let line = line?;
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with("message_id") {
@@ -218,31 +219,62 @@ impl CanSignalDb {
             }
             let p: Vec<&str> = line.split(',').map(str::trim).collect();
             if p.len() < 8 {
-                return Err(ParseError::InvalidData);
+                return Err(ParseError::Csv {
+                    line: lineno,
+                    message: format!("expected at least 8 columns, got {}", p.len()),
+                });
             }
-            let message_id = parse_u32(p[0])?;
+            let message_id = parse_u32(p[0]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid message_id: {:?}", p[0]),
+            })?;
             let name = p[1].to_string();
-            let start_bit = parse_u32(p[2])?;
-            let bit_length = parse_u32(p[3])?;
+            let start_bit = parse_u32(p[2]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid start_bit: {:?}", p[2]),
+            })?;
+            let bit_length = parse_u32(p[3]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid bit_length: {:?}", p[3]),
+            })?;
             let byte_order = match p[4].to_lowercase().as_str() {
                 "intel" => ByteOrder::Intel,
                 "motorola" => ByteOrder::Motorola,
-                _ => return Err(ParseError::InvalidData),
+                _ => {
+                    return Err(ParseError::Csv {
+                        line: lineno,
+                        message: format!(
+                            "invalid byte_order: {:?}, expected Intel or Motorola",
+                            p[4]
+                        ),
+                    })
+                }
             };
             let is_signed = match p[5].to_lowercase().as_str() {
                 "true" | "1" => true,
                 "false" | "0" => false,
-                _ => return Err(ParseError::InvalidData),
+                _ => {
+                    return Err(ParseError::Csv {
+                        line: lineno,
+                        message: format!("invalid is_signed: {:?}, expected true/false/1/0", p[5]),
+                    })
+                }
             };
             let scale = if p[6].is_empty() {
                 1.0
             } else {
-                p[6].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+                p[6].parse::<f64>().map_err(|_| ParseError::Csv {
+                    line: lineno,
+                    message: format!("invalid scale: {:?}", p[6]),
+                })?
             };
             let offset = if p[7].is_empty() {
                 0.0
             } else {
-                p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+                p[7].parse::<f64>().map_err(|_| ParseError::Csv {
+                    line: lineno,
+                    message: format!("invalid offset: {:?}", p[7]),
+                })?
             };
             let def = SignalDef {
                 name,
@@ -257,7 +289,10 @@ impl CanSignalDb {
                 },
             };
             if p.len() >= 9 && !p[8].is_empty() {
-                let pdu_id = parse_u32(p[8])?;
+                let pdu_id = parse_u32(p[8]).map_err(|_| ParseError::Csv {
+                    line: lineno,
+                    message: format!("invalid pdu_id: {:?}", p[8]),
+                })?;
                 db.insert_container(def, pdu_id);
             } else {
                 db.insert(def);
@@ -490,7 +525,8 @@ impl SomeIpSignalDb {
 
     pub fn from_csv<R: std::io::Read>(reader: R) -> ParseResult<Self> {
         let mut db = Self::new();
-        for line in std::io::BufReader::new(reader).lines() {
+        for (i, line) in std::io::BufReader::new(reader).lines().enumerate() {
+            let lineno = i + 1;
             let line = line?;
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with("service_id") {
@@ -498,32 +534,66 @@ impl SomeIpSignalDb {
             }
             let p: Vec<&str> = line.split(',').map(str::trim).collect();
             if p.len() < 9 {
-                return Err(ParseError::InvalidData);
+                return Err(ParseError::Csv {
+                    line: lineno,
+                    message: format!("expected at least 9 columns, got {}", p.len()),
+                });
             }
-            let service_id = parse_u16(p[0])?;
-            let method_id = parse_u16(p[1])?;
+            let service_id = parse_u16(p[0]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid service_id: {:?}", p[0]),
+            })?;
+            let method_id = parse_u16(p[1]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid method_id: {:?}", p[1]),
+            })?;
             let name = p[2].to_string();
-            let start_bit = parse_u32(p[3])?;
-            let bit_length = parse_u32(p[4])?;
+            let start_bit = parse_u32(p[3]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid start_bit: {:?}", p[3]),
+            })?;
+            let bit_length = parse_u32(p[4]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid bit_length: {:?}", p[4]),
+            })?;
             let byte_order = match p[5].to_lowercase().as_str() {
                 "intel" => ByteOrder::Intel,
                 "motorola" => ByteOrder::Motorola,
-                _ => return Err(ParseError::InvalidData),
+                _ => {
+                    return Err(ParseError::Csv {
+                        line: lineno,
+                        message: format!(
+                            "invalid byte_order: {:?}, expected Intel or Motorola",
+                            p[5]
+                        ),
+                    })
+                }
             };
             let is_signed = match p[6].to_lowercase().as_str() {
                 "true" | "1" => true,
                 "false" | "0" => false,
-                _ => return Err(ParseError::InvalidData),
+                _ => {
+                    return Err(ParseError::Csv {
+                        line: lineno,
+                        message: format!("invalid is_signed: {:?}, expected true/false/1/0", p[6]),
+                    })
+                }
             };
             let scale = if p[7].is_empty() {
                 1.0
             } else {
-                p[7].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+                p[7].parse::<f64>().map_err(|_| ParseError::Csv {
+                    line: lineno,
+                    message: format!("invalid scale: {:?}", p[7]),
+                })?
             };
             let offset = if p[8].is_empty() {
                 0.0
             } else {
-                p[8].parse::<f64>().map_err(|_| ParseError::InvalidData)?
+                p[8].parse::<f64>().map_err(|_| ParseError::Csv {
+                    line: lineno,
+                    message: format!("invalid offset: {:?}", p[8]),
+                })?
             };
             db.insert(SomeIpSignalDef {
                 name,
@@ -620,6 +690,132 @@ impl SomeIpSignalDb {
             }
         }
     }
+}
+
+/// Validate every data row of a CAN signal CSV and return all errors as `(line, message)` pairs.
+///
+/// Skips blank lines, comment lines (`#`), and the header row (`message_id,...`).
+/// Unlike `CanSignalDb::from_csv`, this function continues past the first error to collect
+/// all problems in a single pass.
+pub fn check_can_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
+    let mut errors = Vec::new();
+    let mut lineno = 0usize;
+    for line in std::io::BufReader::new(reader).lines() {
+        lineno += 1;
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                errors.push((lineno, format!("I/O error: {e}")));
+                break;
+            }
+        };
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("message_id") {
+            continue;
+        }
+        let p: Vec<&str> = line.split(',').map(str::trim).collect();
+        if p.len() < 8 {
+            errors.push((
+                lineno,
+                format!("expected at least 8 columns, got {}", p.len()),
+            ));
+            continue;
+        }
+        if parse_u32(p[0]).is_err() {
+            errors.push((lineno, format!("invalid message_id: {:?}", p[0])));
+        }
+        if parse_u32(p[2]).is_err() {
+            errors.push((lineno, format!("invalid start_bit: {:?}", p[2])));
+        }
+        if parse_u32(p[3]).is_err() {
+            errors.push((lineno, format!("invalid bit_length: {:?}", p[3])));
+        }
+        if !matches!(p[4].to_lowercase().as_str(), "intel" | "motorola") {
+            errors.push((
+                lineno,
+                format!("invalid byte_order: {:?}, expected Intel or Motorola", p[4]),
+            ));
+        }
+        if !matches!(p[5].to_lowercase().as_str(), "true" | "false" | "1" | "0") {
+            errors.push((
+                lineno,
+                format!("invalid is_signed: {:?}, expected true/false/1/0", p[5]),
+            ));
+        }
+        if !p[6].is_empty() && p[6].parse::<f64>().is_err() {
+            errors.push((lineno, format!("invalid scale: {:?}", p[6])));
+        }
+        if !p[7].is_empty() && p[7].parse::<f64>().is_err() {
+            errors.push((lineno, format!("invalid offset: {:?}", p[7])));
+        }
+        if p.len() >= 9 && !p[8].is_empty() && parse_u32(p[8]).is_err() {
+            errors.push((lineno, format!("invalid pdu_id: {:?}", p[8])));
+        }
+    }
+    errors
+}
+
+/// Validate every data row of a SOME/IP signal CSV and return all errors as `(line, message)` pairs.
+///
+/// Skips blank lines, comment lines (`#`), and the header row (`service_id,...`).
+/// Unlike `SomeIpSignalDb::from_csv`, this function continues past the first error to collect
+/// all problems in a single pass.
+pub fn check_someip_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
+    let mut errors = Vec::new();
+    let mut lineno = 0usize;
+    for line in std::io::BufReader::new(reader).lines() {
+        lineno += 1;
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                errors.push((lineno, format!("I/O error: {e}")));
+                break;
+            }
+        };
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("service_id") {
+            continue;
+        }
+        let p: Vec<&str> = line.split(',').map(str::trim).collect();
+        if p.len() < 9 {
+            errors.push((
+                lineno,
+                format!("expected at least 9 columns, got {}", p.len()),
+            ));
+            continue;
+        }
+        if parse_u16(p[0]).is_err() {
+            errors.push((lineno, format!("invalid service_id: {:?}", p[0])));
+        }
+        if parse_u16(p[1]).is_err() {
+            errors.push((lineno, format!("invalid method_id: {:?}", p[1])));
+        }
+        if parse_u32(p[3]).is_err() {
+            errors.push((lineno, format!("invalid start_bit: {:?}", p[3])));
+        }
+        if parse_u32(p[4]).is_err() {
+            errors.push((lineno, format!("invalid bit_length: {:?}", p[4])));
+        }
+        if !matches!(p[5].to_lowercase().as_str(), "intel" | "motorola") {
+            errors.push((
+                lineno,
+                format!("invalid byte_order: {:?}, expected Intel or Motorola", p[5]),
+            ));
+        }
+        if !matches!(p[6].to_lowercase().as_str(), "true" | "false" | "1" | "0") {
+            errors.push((
+                lineno,
+                format!("invalid is_signed: {:?}, expected true/false/1/0", p[6]),
+            ));
+        }
+        if !p[7].is_empty() && p[7].parse::<f64>().is_err() {
+            errors.push((lineno, format!("invalid scale: {:?}", p[7])));
+        }
+        if !p[8].is_empty() && p[8].parse::<f64>().is_err() {
+            errors.push((lineno, format!("invalid offset: {:?}", p[8])));
+        }
+    }
+    errors
 }
 
 #[cfg(test)]

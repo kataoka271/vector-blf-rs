@@ -25,6 +25,9 @@ pub enum ParseError {
 
     #[error("Invalid data")]
     InvalidData,
+
+    #[error("CSV line {line}: {message}")]
+    Csv { line: usize, message: String },
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;

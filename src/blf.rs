@@ -29,8 +29,8 @@ pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan}
 pub use object::FileHeader;
 pub use objtype::ObjType;
 pub use signal::{
-    demux_container, ByteOrder, CanSignalDb, ContainerHeader, Signal, SignalDef, SomeIpSignalDb,
-    SomeIpSignalDef,
+    check_can_csv, check_someip_csv, demux_container, ByteOrder, CanSignalDb, ContainerHeader,
+    Signal, SignalDef, SomeIpSignalDb, SomeIpSignalDef,
 };
 pub use transport::{Tcp, TcpFlags, Transport, Udp};
 

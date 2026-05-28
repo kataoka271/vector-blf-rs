@@ -122,8 +122,8 @@ fn parse_objects_from_buf(
         } else {
             ObjectHeaderV2::decode(&mut payload)?.timestamp
         };
-        let msg_size = base_header.obj_size - OBJECT_HEADER_SIZE;
-        let message = Message::decode(&mut payload, base_header.obj_type, msg_size)?;
+        let payload_len = payload.len() as u32;
+        let message = Message::decode(&mut payload, base_header.obj_type, payload_len)?;
         if !payload.is_empty() {
             log::warn!("base object data remaining: {} bytes", payload.len());
         }
@@ -233,8 +233,8 @@ impl<R: Read + Seek> Reader<R> {
         } else {
             ObjectHeaderV2::decode(&mut payload)?.timestamp
         };
-        let msg_size = base_header.obj_size - OBJECT_HEADER_SIZE;
-        let message = Message::decode(&mut payload, base_header.obj_type, msg_size)?;
+        let payload_len = payload.len() as u32;
+        let message = Message::decode(&mut payload, base_header.obj_type, payload_len)?;
         if !payload.is_empty() {
             log::warn!("base object data remaining: {} bytes", payload.len());
         }

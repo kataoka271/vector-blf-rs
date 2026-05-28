@@ -38,6 +38,7 @@ Setup
        blf.target_schema       automotive       (optional, default: blf)
        blf.signals_path        /Volumes/mycat/myschema/can_signals.csv        (optional)
        blf.someip_signals_path /Volumes/mycat/myschema/someip_signals.csv (optional)
+       blf.container_long_header false                (optional, default: false)
 
    CAN signal CSV format (header required):
        message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
@@ -87,6 +88,7 @@ TARGET_CATALOG = spark.conf.get("blf.target_catalog", "main")
 TARGET_SCHEMA = spark.conf.get("blf.target_schema", "blf")
 SIGNALS_PATH = spark.conf.get("blf.signals_path", "")
 SOMEIP_SIGNALS_PATH = spark.conf.get("blf.someip_signals_path", "")
+CONTAINER_LONG_HEADER: bool = spark.conf.get("blf.container_long_header", "false").lower() == "true"
 
 # ── protocol constants ────────────────────────────────────────────────────────
 
@@ -429,23 +431,29 @@ def _decode_signals(
     can_ids: pd.Series,
     data_col: pd.Series,
     paths: pd.Series,
+    long_headers: pd.Series,
 ) -> pd.Series:
     """Decode all matching CAN signals for each (can_id, data) row.
 
-    `paths` carries the signal CSV path as a per-row literal so that the
-    value is available on executors without relying on driver-side state.
+    `paths` and `long_headers` carry per-batch constants via F.lit so the
+    values are available on executors without relying on driver-side state.
+    Container-frame CAN IDs (those with a pdu_id column in the CSV) are
+    demultiplexed via decode_container; regular frames use decode.
     """
-    # All rows in this micro-batch share the same CSV path (driver-side F.lit literal).
     csv_path = paths.iloc[0] if len(paths) else ""
+    use_long = bool(long_headers.iloc[0]) if len(long_headers) else False
     db = _load_signal_db(csv_path)
 
     result = []
     for can_id, data in zip(can_ids, data_col):
         decoded = []
         if data is not None and db is not None:
-            decoded = [
-                {"signal_name": name, "signal_value": value} for name, value in db.decode(int(can_id), bytes(data))
-            ]
+            mid = int(can_id)
+            if db.is_container(mid):
+                pairs = db.decode_container(mid, bytes(data), use_long)
+            else:
+                pairs = db.decode(mid, bytes(data))
+            decoded = [{"signal_name": name, "signal_value": value} for name, value in pairs]
         result.append(decoded)
 
     return pd.Series(result)
@@ -473,6 +481,7 @@ def blf_silver_can_signals():
                 F.col("can_id"),
                 F.col("data"),
                 F.lit(SIGNALS_PATH),
+                F.lit(CONTAINER_LONG_HEADER),
             ),
         )
         .filter(F.size("_signals") > 0)

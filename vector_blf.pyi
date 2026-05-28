@@ -94,6 +94,10 @@ class CanSignalDb:
     """
 
     def __init__(self, path: str) -> None: ...
+    def is_container(self, message_id: int) -> bool:
+        """Return ``True`` if *message_id* is configured as a CAN-FD container frame."""
+        ...
+
     def decode(self, message_id: int, data: bytes) -> List[Tuple[str, float]]:
         """Decode all matching signals for *message_id* from *data*.
 

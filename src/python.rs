@@ -294,6 +294,12 @@ impl CanSignalDb {
             .collect()
     }
 
+    /// Returns ``True`` if ``message_id`` is configured as a CAN-FD container frame
+    /// (i.e. the signal CSV has at least one row with a ``pdu_id`` for this CAN ID).
+    fn is_container(&self, message_id: u32) -> bool {
+        self.inner.is_container(message_id)
+    }
+
     /// Demultiplex a CAN-FD container frame and decode all signals from the contained I-PDUs.
     ///
     /// ``data`` is the raw CAN frame payload. ``long_header`` selects between

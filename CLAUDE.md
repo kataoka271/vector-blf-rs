@@ -37,7 +37,7 @@ cargo test                           # run all tests
 cargo test isotp::                   # run tests in a specific module
 cargo fmt                            # format code
 cargo clippy                         # lint
-cargo run -- <input.blf> [options]   # run the CLI
+cargo run -- parse <input.blf> [options]   # run the CLI
 ```
 
 **`python` should be run via `uv run`**
@@ -97,12 +97,14 @@ A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format
 ### CLI (`src/main.rs`)
 
 ```
-vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [can_signals.csv]] [--threads N]
+vector-blf-rs parse <input.blf> [output.blf | output.csv [signals.csv]] [--repeat N] [--threads N] [--someip-signals <file>]
+vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]
+vector-blf-rs check <signals.csv>
 ```
 
-- BLF→BLF: copy with optional repetition count
-- BLF→CSV: raw message export (timestamp_ns, channel, id, ext_id, dir, dlc, data)
-- BLF→CSV+signals: decode signals using a DBC-like CSV signal database
+- `parse`: BLF→BLF (copy, `--repeat N` to duplicate), BLF→CSV (raw or signal-decoded)
+- `convert`: DBC/ARXML → signal CSV, with optional overlay merge
+- `check`: validate a CAN or SOME/IP signal CSV
 
 ### Python Module (`src/python.rs`)
 
@@ -169,7 +171,7 @@ There is no criterion benchmark suite. Use the CLI directly against a generated 
 
 ```bash
 cargo build --release
-./target/release/vector-blf-rs data/test_logfile.blf data/bench_large.blf 200000
+./target/release/vector-blf-rs parse data/test_logfile.blf data/bench_large.blf --repeat 200000
 # → ~33 MB, 3.4M objects
 ```
 
@@ -177,10 +179,10 @@ cargo build --release
 
 ```bash
 # single-threaded
-./target/release/vector-blf-rs data/bench_large.blf
+./target/release/vector-blf-rs parse data/bench_large.blf
 
 # multi-threaded
-./target/release/vector-blf-rs data/bench_large.blf --threads 4
+./target/release/vector-blf-rs parse data/bench_large.blf --threads 4
 ```
 
 Output shows scan time (I/O-bound, benefits from BufReader) and parse time (zlib-bound, scales with `--threads`).
@@ -188,7 +190,7 @@ Output shows scan time (I/O-bound, benefits from BufReader) and parse time (zlib
 **3. Benchmark CSV export** (exercises hex-encoding path):
 
 ```bash
-./target/release/vector-blf-rs data/bench_large.blf out.csv
+./target/release/vector-blf-rs parse data/bench_large.blf out.csv
 ```
 
 **Key numbers on a 33 MB / 58K-container file (for regression detection):**

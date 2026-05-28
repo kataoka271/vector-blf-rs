@@ -1,7 +1,21 @@
+# Rust
 /target
+
+# Python
+/.venv
+/dist
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Data / generated files
 /data
+
+# IDE / tooling
 /.claude
 /.cursor
 /.databricks
-/.venv
-/dist

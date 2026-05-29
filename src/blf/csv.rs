@@ -126,6 +126,10 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
                 writeln!(w)?;
                 count += 1;
             }
+            Message::Mf4Signal(m) => {
+                writeln!(w, "{},Mf4Signal,,,,,,,,,{},{}", ns, m.value, m.unit)?;
+                count += 1;
+            }
             _ => {}
         }
     }

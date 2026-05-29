@@ -54,9 +54,16 @@ class EthernetEx:
     data: List[int]
     def __repr__(self) -> str: ...
 
+class Mf4Signal:
+    group: str
+    name: str
+    value: float
+    unit: str
+    def __repr__(self) -> str: ...
+
 class BaseObject:
     timestamp_ns: int
-    message: Union[Can, CanFd, CanFd64, Ethernet, EthernetEx, None]
+    message: Union[Can, CanFd, CanFd64, Ethernet, EthernetEx, Mf4Signal, None]
     def __repr__(self) -> str: ...
 
 class Reader:
@@ -70,7 +77,7 @@ class Reader:
         Optional allowlist of message types to yield. Filtering happens in
         Rust before any Python object is allocated. Valid values (case-
         insensitive): ``"Can"``, ``"CanFd"``, ``"CanFd64"``, ``"Ethernet"``,
-        ``"EthernetEx"``, ``"Other"``. If omitted, all types are yielded.
+        ``"EthernetEx"``, ``"Mf4Signal"``, ``"Other"``. If omitted, all types are yielded.
     """
 
     def __init__(self, path: str, types: Optional[List[str]] = None) -> None: ...

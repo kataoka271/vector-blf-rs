@@ -1,4 +1,5 @@
 use crate::blf::{self, ContainerHeader};
+use crate::mf4;
 use pyo3::exceptions::PyStopIteration;
 use pyo3::prelude::*;
 use std::fs::File;
@@ -128,6 +129,24 @@ impl EthernetEx {
     }
 }
 
+#[pyclass(get_all)]
+pub struct Mf4Signal {
+    pub group: String,
+    pub name: String,
+    pub value: f64,
+    pub unit: String,
+}
+
+#[pymethods]
+impl Mf4Signal {
+    fn __repr__(&self) -> String {
+        format!(
+            "Mf4Signal(group={:?}, name={:?}, value={}, unit={:?})",
+            self.group, self.name, self.value, self.unit
+        )
+    }
+}
+
 // ── BaseObject ───────────────────────────────────────────────────────────────
 
 /// A single log entry: timestamp + one message variant.
@@ -163,6 +182,7 @@ const F_CANFD64: u8 = 1 << 2;
 const F_ETHERNET: u8 = 1 << 3;
 const F_ETHERNETEX: u8 = 1 << 4;
 const F_OTHER: u8 = 1 << 5;
+const F_MF4SIGNAL: u8 = 1 << 6;
 
 fn message_bit(msg: &blf::Message) -> u8 {
     match msg {
@@ -171,6 +191,7 @@ fn message_bit(msg: &blf::Message) -> u8 {
         blf::Message::CanFd64(_) => F_CANFD64,
         blf::Message::Ethernet(_) => F_ETHERNET,
         blf::Message::EthernetEx(_) => F_ETHERNETEX,
+        blf::Message::Mf4Signal(_) => F_MF4SIGNAL,
         blf::Message::Other(_, _) => F_OTHER,
     }
 }
@@ -185,9 +206,10 @@ fn parse_filter(types: Option<Vec<String>>) -> PyResult<u8> {
             "canfd64"     => F_CANFD64,
             "ethernet"    => F_ETHERNET,
             "ethernetex"  => F_ETHERNETEX,
+            "mf4signal"   => F_MF4SIGNAL,
             "other"       => F_OTHER,
             other => return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "unknown message type {other:?}; valid: Can, CanFd, CanFd64, Ethernet, EthernetEx, Other"
+                "unknown message type {other:?}; valid: Can, CanFd, CanFd64, Ethernet, EthernetEx, Mf4Signal, Other"
             ))),
         };
     }
@@ -196,26 +218,44 @@ fn parse_filter(types: Option<Vec<String>>) -> PyResult<u8> {
 
 // ── Reader ───────────────────────────────────────────────────────────────────
 
-/// Iterator over BaseObjects in a BLF file.
+enum InnerReader {
+    Blf(blf::Reader<BufReader<File>>),
+    Mf4(mf4::Reader<BufReader<File>>),
+}
+
+impl InnerReader {
+    fn next_item(&mut self) -> Option<Result<blf::BaseObject, blf::ParseError>> {
+        match self {
+            InnerReader::Blf(r) => r.next(),
+            InnerReader::Mf4(r) => r.next(),
+        }
+    }
+}
+
+/// Iterator over BaseObjects in a BLF or MF4 file.
 ///
 /// Parameters
 /// ----------
 /// path : str
-///     Path to the BLF file.
+///     Path to the BLF or MF4 file (.blf, .mf4, .mdf).
 /// types : list[str] | None
 ///     Optional allowlist of message types to yield. Filtering happens in
 ///     Rust before any Python object is allocated. Valid values (case-
 ///     insensitive): ``"Can"``, ``"CanFd"``, ``"CanFd64"``, ``"Ethernet"``,
-///     ``"EthernetEx"``, ``"Other"``. If omitted, all types are yielded.
+///     ``"EthernetEx"``, ``"Mf4Signal"``, ``"Other"``. If omitted, all types
+///     are yielded.
 ///
 /// Example::
 ///
 ///     import vector_blf
 ///     for obj in vector_blf.Reader("file.blf", types=["Can", "CanFd"]):
 ///         print(obj.timestamp_ns, obj.message.id)
+///
+///     for obj in vector_blf.Reader("file.mf4", types=["Mf4Signal"]):
+///         print(obj.message.name, obj.message.value)
 #[pyclass]
 pub struct Reader {
-    inner: blf::Reader<BufReader<File>>,
+    inner: InnerReader,
     filter: u8,
 }
 
@@ -224,14 +264,24 @@ impl Reader {
     #[new]
     #[pyo3(signature = (path, types=None))]
     fn new(path: &str, types: Option<Vec<String>>) -> PyResult<Self> {
+        let filter = parse_filter(types)?;
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
         let f =
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        let r = blf::Reader::new(BufReader::new(f))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(Self {
-            inner: r,
-            filter: parse_filter(types)?,
-        })
+        let inner = if ext == "mf4" || ext == "mdf" {
+            let r = mf4::Reader::new(BufReader::new(f))
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            InnerReader::Mf4(r)
+        } else {
+            let r = blf::Reader::new(BufReader::new(f))
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            InnerReader::Blf(r)
+        };
+        Ok(Self { inner, filter })
     }
 
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -240,14 +290,13 @@ impl Reader {
 
     fn __next__(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<BaseObject> {
         loop {
-            match slf.inner.next() {
+            match slf.inner.next_item() {
                 None => return Err(PyStopIteration::new_err(())),
                 Some(Err(e)) => return Err(pyo3::exceptions::PyValueError::new_err(e.to_string())),
                 Some(Ok(obj)) => {
                     if slf.filter == 0 || slf.filter & message_bit(&obj.message) != 0 {
                         return Ok(convert_base_object(py, obj));
                     }
-                    // filtered out — loop to next object without crossing into Python
                 }
             }
         }
@@ -456,6 +505,17 @@ fn convert_base_object(py: Python<'_>, obj: blf::BaseObject) -> BaseObject {
         )
         .unwrap()
         .into_any(),
+        blf::Message::Mf4Signal(m) => Py::new(
+            py,
+            Mf4Signal {
+                group: m.group.clone(),
+                name: m.name.clone(),
+                value: m.value,
+                unit: m.unit.clone(),
+            },
+        )
+        .unwrap()
+        .into_any(),
         blf::Message::Other(_, _) => py.None(),
     };
     BaseObject {
@@ -474,6 +534,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CanFd64>()?;
     m.add_class::<Ethernet>()?;
     m.add_class::<EthernetEx>()?;
+    m.add_class::<Mf4Signal>()?;
     m.add_class::<CanSignalDb>()?;
     m.add_class::<SomeIpSignalDb>()?;
     Ok(())

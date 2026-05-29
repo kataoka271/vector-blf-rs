@@ -14,6 +14,7 @@ Layer layout
   blf_silver_can_signals     streaming table — decoded physical signal values (long format)
   blf_silver_eth_signals     streaming table — IP/TCP/UDP protocol fields as signals (long format)
   blf_silver_someip_signals  streaming table — SOME/IP application signals (long format)
+  blf_silver_mf4_signals     streaming table — MF4 scalar signal values (long format)
   blf_silver_diag            streaming table — UDS messages merged from CAN ISO-TP and DoIP
   blf_gold_signals           streaming table — CAN + ETH + SOME/IP signals merged into one schema
 
@@ -127,6 +128,11 @@ _BRONZE_OUTPUT_SCHEMA = StructType(
         StructField("src_addr", BinaryType()),
         StructField("dst_addr", BinaryType()),
         StructField("ether_type", IntegerType()),
+        # MF4 scalar signal extras
+        StructField("mf4_group", StringType()),
+        StructField("mf4_name", StringType()),
+        StructField("mf4_value", DoubleType()),
+        StructField("mf4_unit", StringType()),
     ]
 )
 
@@ -219,7 +225,7 @@ def _parse_blf_batch(iterator):
             try:
                 for obj in vector_blf.Reader(
                     local,
-                    types=["Can", "CanFd", "CanFd64", "Ethernet", "EthernetEx"],
+                    types=["Can", "CanFd", "CanFd64", "Ethernet", "EthernetEx", "Mf4Signal"],
                 ):
                     msg = obj.message
                     rec: dict = {
@@ -242,6 +248,10 @@ def _parse_blf_batch(iterator):
                         "src_addr": None,
                         "dst_addr": None,
                         "ether_type": None,
+                        "mf4_group": None,
+                        "mf4_name": None,
+                        "mf4_value": None,
+                        "mf4_unit": None,
                     }
 
                     if isinstance(msg, vector_blf.Can):
@@ -303,6 +313,14 @@ def _parse_blf_batch(iterator):
                             ether_type=msg.ether_type,
                             data=bytes(msg.data),
                         )
+                    elif isinstance(msg, vector_blf.Mf4Signal):
+                        rec.update(
+                            message_type="MF4_SIGNAL",
+                            mf4_group=msg.group,
+                            mf4_name=msg.name,
+                            mf4_value=msg.value,
+                            mf4_unit=msg.unit,
+                        )
                     else:
                         continue
 
@@ -336,7 +354,7 @@ def blf_bronze():
     return (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "binaryFile")
-        .option("pathGlobFilter", "*.blf")
+        .option("pathGlobFilter", "*.{blf,mf4,mdf}")
         # Auto Loader tracks processed files in a _checkpoint directory.
         # Set to a stable Volume path so state survives pipeline restarts.
         .option(
@@ -736,6 +754,39 @@ def blf_silver_eth_signals():
             F.col("_sig.signal_name"),
             F.col("_sig.signal_value"),
             F.col("_sig.signal_str"),
+        )
+    )
+
+
+# ── silver layer — MF4 scalar signals ────────────────────────────────────────
+
+
+@dlt.table(
+    name="blf_silver_mf4_signals",
+    comment=(
+        "MF4 scalar signal values from channel groups read from .mf4 / .mdf files. "
+        "Long format: one row per sample. "
+        "mf4_group: acquisition group / channel group name. "
+        "mf4_name: channel name. mf4_value: physical value. mf4_unit: unit string."
+    ),
+    table_properties={
+        "quality": "silver",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+)
+def blf_silver_mf4_signals():
+    return (
+        dlt.read_stream("blf_bronze")
+        .filter(F.col("message_type") == "MF4_SIGNAL")
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "timestamp_ns",
+            (F.col("timestamp_ns") / 1e9).alias("timestamp_s"),
+            F.col("mf4_group").alias("group_name"),
+            F.col("mf4_name").alias("channel_name"),
+            F.col("mf4_value").alias("value"),
+            F.col("mf4_unit").alias("unit"),
         )
     )
 
@@ -1437,7 +1488,7 @@ def blf_silver_diag():
     return (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "binaryFile")
-        .option("pathGlobFilter", "*.blf")
+        .option("pathGlobFilter", "*.{blf,mf4,mdf}")
         .option(
             "cloudFiles.schemaLocation",
             f"{SOURCE_PATH}/_autoloader_schema_diag",

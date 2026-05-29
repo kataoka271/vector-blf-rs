@@ -133,12 +133,21 @@ impl EthernetEx {
 }
 
 #[derive(Debug)]
+pub struct Mf4Signal {
+    pub group: String,
+    pub name: String,
+    pub value: f64,
+    pub unit: String,
+}
+
+#[derive(Debug)]
 pub enum Message {
     Can(Can),
     CanFd(CanFd),
     CanFd64(CanFd64),
     Ethernet(Ethernet),
     EthernetEx(EthernetEx),
+    Mf4Signal(Mf4Signal),
     Other(ObjType, Vec<u8>),
 }
 
@@ -165,6 +174,9 @@ impl Message {
             Message::CanFd64(m) => m.encode(w),
             Message::Ethernet(m) => m.encode(w),
             Message::EthernetEx(m) => m.encode(w),
+            // Mf4Signal has no BLF binary representation; callers must filter before
+            // passing to a BLF Writer (see blf::Writer::write_base_object).
+            Message::Mf4Signal(_) => Ok(()),
             Message::Other(_, obj_data) => {
                 let mut w = w;
                 Ok(w.write_all(obj_data)?)
@@ -179,6 +191,7 @@ impl Message {
             Message::CanFd64(_) => ObjType::CanFdMessage64,
             Message::Ethernet(_) => ObjType::EthernetFrame,
             Message::EthernetEx(_) => ObjType::EthernetFrameEx,
+            Message::Mf4Signal(_) => ObjType::Other(0),
             Message::Other(obj_type, _) => *obj_type,
         }
     }

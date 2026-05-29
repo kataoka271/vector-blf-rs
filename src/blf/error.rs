@@ -28,6 +28,18 @@ pub enum ParseError {
 
     #[error("CSV line {line}: {message}")]
     Csv { line: usize, message: String },
+
+    #[error("Invalid MF4 magic (expected 'MDF     ')")]
+    InvalidMf4Magic,
+
+    #[error("Invalid MF4 block: expected {expected}, got {got:?}")]
+    InvalidMf4Block {
+        expected: &'static str,
+        got: [u8; 4],
+    },
+
+    #[error("Unsupported MF4 feature: {0}")]
+    UnsupportedMf4Feature(String),
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;

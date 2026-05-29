@@ -13,7 +13,7 @@ pub mod signal;
 pub mod transport;
 
 use encoder::{Decoder, Encoder};
-use error::ParseResult;
+pub use error::ParseResult;
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use object::{BaseObjectHeader, LogContainerHeader, ObjectHeaderV1, ObjectHeaderV2};
 use std::io::{Read, Seek, Write};
@@ -25,7 +25,7 @@ pub use diag::uds::{Nrc, ServiceId, Uds};
 pub use encoder::Timestamp;
 pub use error::ParseError;
 pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
-pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Vlan};
+pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Mf4Signal, Vlan};
 pub use object::FileHeader;
 pub use objtype::ObjType;
 pub use signal::{
@@ -284,6 +284,9 @@ impl<W: Write + Seek> Writer<W> {
     }
 
     pub fn write_base_object(&mut self, obj: &BaseObject) -> ParseResult<()> {
+        if matches!(obj.message, Message::Mf4Signal(_)) {
+            return Ok(());
+        }
         self.tmp.clear();
         obj.message.encode(&mut self.tmp)?;
         let base_header = BaseObjectHeader {

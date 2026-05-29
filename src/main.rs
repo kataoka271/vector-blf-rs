@@ -1,4 +1,5 @@
 pub mod blf;
+pub mod mf4;
 
 use blf::{
     check_can_csv, check_someip_csv, BaseObject, CanSignalDb, ParseError, SomeIpSignalDb,
@@ -39,9 +40,9 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         overlay: Option<PathBuf>,
     },
-    /// Parse a BLF file; optionally export to CSV or another BLF
+    /// Parse a BLF or MF4 file; optionally export to CSV, BLF, or MF4
     Parse {
-        /// Input BLF file
+        /// Input file (.blf or .mf4)
         input: PathBuf,
         /// Output file (.blf or .csv); omit to benchmark parse only
         output: Option<PathBuf>,
@@ -160,6 +161,10 @@ fn cmd_convert(input: PathBuf, output: PathBuf, overlay: Option<PathBuf>) -> Res
     Ok(())
 }
 
+fn ext(p: &Path) -> &str {
+    p.extension().and_then(|e| e.to_str()).unwrap_or("")
+}
+
 fn cmd_parse(
     input: PathBuf,
     output: Option<PathBuf>,
@@ -168,12 +173,18 @@ fn cmd_parse(
     n_threads: usize,
     someip_signals_path: Option<PathBuf>,
 ) -> Result<()> {
-    let is_csv = output
+    let input_is_mf4 = matches!(ext(&input), "mf4" | "mdf");
+    let is_csv = output.as_ref().map(|p| ext(p) == "csv").unwrap_or(false);
+    let output_is_mf4 = output
         .as_ref()
-        .map(|p| p.extension().and_then(|e| e.to_str()) == Some("csv"))
+        .map(|p| matches!(ext(p), "mf4" | "mdf"))
         .unwrap_or(false);
 
-    // Single-threaded CSV: stream one object at a time — O(1-container) peak memory.
+    if input_is_mf4 {
+        return cmd_parse_mf4(input, output, signals, someip_signals_path);
+    }
+
+    // Single-threaded CSV from BLF: stream one object at a time — O(1-container) peak memory.
     if n_threads == 1 && is_csv {
         return cmd_parse_csv_stream(
             &input,
@@ -192,7 +203,7 @@ fn cmd_parse(
         t.elapsed().as_secs_f32()
     );
 
-    // Parallel parse phase: each thread gets its own file handle and a chunk of offsets.
+    // Parallel parse phase.
     let chunk_results = parse_parallel(&input, &offsets, n_threads)?;
     check_boundaries(&chunk_results);
 
@@ -202,6 +213,20 @@ fn cmd_parse(
             let mut w = BufWriter::new(File::create(out)?);
             let count = write_csv_output(&mut w, &chunk_results, &signals, &someip_signals_path)?;
             println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
+        } else if output_is_mf4 {
+            let start_time_ns = chunk_results
+                .iter()
+                .flatten()
+                .next()
+                .map(|o| ts_ns(o.timestamp))
+                .unwrap_or(0);
+            let count =
+                write_mf4_output(out, chunk_results.iter().flatten(), repeat, start_time_ns)?;
+            println!(
+                "wrote {} objects in {:.3}s",
+                count,
+                t.elapsed().as_secs_f32()
+            );
         } else {
             let count = write_blf_output(out, &chunk_results, repeat)?;
             println!(
@@ -212,6 +237,94 @@ fn cmd_parse(
         }
     }
     Ok(())
+}
+
+/// Parse an MF4 input file; output to CSV, BLF, or another MF4.
+fn cmd_parse_mf4(
+    input: PathBuf,
+    output: Option<PathBuf>,
+    signals: Option<PathBuf>,
+    someip_signals_path: Option<PathBuf>,
+) -> Result<()> {
+    let t = time::Instant::now();
+    let reader = mf4::Reader::new(BufReader::new(File::open(&input)?))?;
+    let start_time_ns = reader.start_time_ns;
+
+    let Some(ref out) = output else {
+        // Benchmark: just count objects.
+        let count = reader.filter_map(|r| r.ok()).count();
+        println!(
+            "parsed {} objects in {:.3}s",
+            count,
+            t.elapsed().as_secs_f32()
+        );
+        return Ok(());
+    };
+
+    let output_ext = ext(out);
+    let is_csv = output_ext == "csv";
+    let output_is_mf4 = matches!(output_ext, "mf4" | "mdf");
+
+    if is_csv {
+        let mut w = BufWriter::new(File::create(out)?);
+        let count = if let Some(ref sp) = signals {
+            let db = CanSignalDb::from_csv(BufReader::new(File::open(sp)?))?;
+            let someip_db = someip_signals_path
+                .as_deref()
+                .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
+                .transpose()?;
+            blf::csv::write_csv_signals(
+                &mut w,
+                reader.filter_map(|r| r.ok()),
+                &db,
+                someip_db.as_ref(),
+            )?
+        } else {
+            blf::csv::write_csv_raw(&mut w, reader.filter_map(|r| r.ok()))?
+        };
+        println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
+    } else if output_is_mf4 {
+        let count = write_mf4_output(out, reader.filter_map(|r| r.ok()), 1, start_time_ns)?;
+        println!(
+            "wrote {} objects in {:.3}s",
+            count,
+            t.elapsed().as_secs_f32()
+        );
+    } else {
+        // MF4 → BLF
+        let mut writer = Writer::new(BufWriter::new(File::create(out)?))?;
+        let mut count = 0usize;
+        for obj in reader.filter_map(|r| r.ok()) {
+            writer.write_base_object(&obj)?;
+            count += 1;
+        }
+        writer.finish()?;
+        println!(
+            "wrote {} objects in {:.3}s",
+            count,
+            t.elapsed().as_secs_f32()
+        );
+    }
+    Ok(())
+}
+
+fn write_mf4_output(
+    output: &Path,
+    objects: impl Iterator<Item = impl std::borrow::Borrow<BaseObject>>,
+    repeat: u32,
+    start_time_ns: u64,
+) -> Result<usize> {
+    let mut writer = mf4::Writer::new(BufWriter::new(File::create(output)?), start_time_ns)?;
+    let objects: Vec<_> = objects.collect();
+    let mut count = 0usize;
+    for _ in 0..repeat {
+        for obj in &objects {
+            writer.write_base_object(obj.borrow())?;
+            count += 1;
+        }
+    }
+    writer.finish()?;
+    Ok(count)
 }
 
 fn cmd_parse_csv_stream(

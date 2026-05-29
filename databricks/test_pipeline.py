@@ -583,6 +583,82 @@ def test_decode_signals_with_csv() -> None:
 
 
 @_needs_vector_blf
+def test_decode_signals_container_frame_short_header() -> None:
+    csv_path = str(ASSETS_DIR / "can_signals.csv")
+    # CAN ID 0x600 is a container frame with two PDUs defined in can_signals.csv:
+    #   PDU 0x01: Radar_Distance_m (bits 0-15, Intel, scale 0.01)
+    #             Radar_RelSpeed_mps (bits 16-31, Intel, signed, scale 0.01)
+    #             Radar_Confidence_pct (bits 32-39, Intel, scale 1.0)
+    #   PDU 0x02: CabinTemp_degC (bits 0-7, Intel, signed, scale 0.5, offset -40)
+    #             FanSpeed_pct (bits 8-15, Intel, scale 0.4)
+    #             AcRequest (bit 16, Intel, scale 1.0)
+    #
+    # Short header: [pdu_id_24bit_BE, dlc_8bit] + payload  (4-byte overhead per PDU)
+    # dlc=5 -> 5 bytes payload; dlc=3 -> 3 bytes payload
+    frame = bytes(
+        [
+            0x00,
+            0x00,
+            0x01,
+            0x05,  # PDU 0x01 header: id=1, dlc=5
+            0x10,
+            0x00,
+            0x00,
+            0x00,
+            0x00,  # PDU 0x01 payload -> Radar_Distance_m raw=16
+            0x00,
+            0x00,
+            0x02,
+            0x03,  # PDU 0x02 header: id=2, dlc=3
+            0x14,
+            0x00,
+            0x00,  # PDU 0x02 payload -> CabinTemp_degC raw=20
+        ]
+    )
+    result = pipeline._decode_signals(
+        pd.Series([0x600]),
+        pd.Series([frame]),
+        pd.Series([csv_path]),
+        pd.Series([False]),
+    )
+    by_name = {s["signal_name"]: s["signal_value"] for s in result.iloc[0]}
+    assert by_name["Radar_Distance_m"] == pytest.approx(0.16)  # 16 * 0.01
+    assert by_name["CabinTemp_degC"] == pytest.approx(-30.0)  # 20 * 0.5 - 40
+
+
+@_needs_vector_blf
+def test_decode_signals_container_frame_long_header() -> None:
+    csv_path = str(ASSETS_DIR / "can_signals.csv")
+    # Long header: [pdu_id_32bit_BE, byte_length_32bit_BE] + payload (8-byte overhead per PDU)
+    # byte_length is the actual payload length in bytes (not a DLC code).
+    frame = bytes(
+        [
+            0x00,
+            0x00,
+            0x00,
+            0x01,  # PDU 0x01 id (u32 BE)
+            0x00,
+            0x00,
+            0x00,
+            0x05,  # PDU 0x01 byte length = 5
+            0x10,
+            0x00,
+            0x00,
+            0x00,
+            0x00,  # PDU 0x01 payload -> Radar_Distance_m raw=16
+        ]
+    )
+    result = pipeline._decode_signals(
+        pd.Series([0x600]),
+        pd.Series([frame]),
+        pd.Series([csv_path]),
+        pd.Series([True]),  # long_header=True
+    )
+    by_name = {s["signal_name"]: s["signal_value"] for s in result.iloc[0]}
+    assert by_name["Radar_Distance_m"] == pytest.approx(0.16)
+
+
+@_needs_vector_blf
 def test_decode_signals_empty_path_returns_no_signals() -> None:
     result = pipeline._decode_signals(
         pd.Series([0x100]),

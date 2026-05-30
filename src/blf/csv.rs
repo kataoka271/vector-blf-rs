@@ -51,7 +51,10 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
     for item in objects {
         let obj = item.borrow();
         let Some(ns) = ts_ns(obj.timestamp) else {
-            eprintln!("WARNING: skipping object with overflowing timestamp {:?}", obj.timestamp);
+            eprintln!(
+                "WARNING: skipping object with overflowing timestamp {:?}",
+                obj.timestamp
+            );
             continue;
         };
         match &obj.message {
@@ -158,7 +161,10 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
     for item in objects {
         let obj = item.borrow();
         let Some(ns) = ts_ns(obj.timestamp) else {
-            eprintln!("WARNING: skipping object with overflowing timestamp {:?}", obj.timestamp);
+            eprintln!(
+                "WARNING: skipping object with overflowing timestamp {:?}",
+                obj.timestamp
+            );
             continue;
         };
         match &obj.message {

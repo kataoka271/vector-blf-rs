@@ -61,18 +61,19 @@ enum Command {
     },
 }
 
-fn ts_ns(ts: Timestamp) -> u64 {
+fn ts_ns(ts: Timestamp) -> Option<u64> {
     match ts {
-        Timestamp::Nanosecond(n) => n,
-        Timestamp::Microsecond(u) => u * 1000,
+        Timestamp::Nanosecond(n) => Some(n),
+        Timestamp::Microsecond(u) => u.checked_mul(1000),
     }
 }
 
 fn check_boundaries(chunks: &[Vec<BaseObject>]) {
     for i in 0..chunks.len().saturating_sub(1) {
         if let (Some(a), Some(b)) = (chunks[i].last(), chunks[i + 1].first()) {
-            let a_ns = ts_ns(a.timestamp);
-            let b_ns = ts_ns(b.timestamp);
+            let (Some(a_ns), Some(b_ns)) = (ts_ns(a.timestamp), ts_ns(b.timestamp)) else {
+                continue;
+            };
             if b_ns < a_ns {
                 eprintln!(
                     "WARNING: timestamp not monotone at boundary {}/{}: {}ns > {}ns (delta={}ns)",
@@ -218,7 +219,7 @@ fn cmd_parse(
                 .iter()
                 .flatten()
                 .next()
-                .map(|o| ts_ns(o.timestamp))
+                .and_then(|o| ts_ns(o.timestamp))
                 .unwrap_or(0);
             let count =
                 write_mf4_output(out, chunk_results.iter().flatten(), repeat, start_time_ns)?;

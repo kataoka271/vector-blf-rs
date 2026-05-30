@@ -8,10 +8,10 @@ use super::Timestamp;
 use std::borrow::Borrow;
 use std::io::Write;
 
-fn ts_ns(ts: Timestamp) -> u64 {
+fn ts_ns(ts: Timestamp) -> Option<u64> {
     match ts {
-        Timestamp::Nanosecond(n) => n,
-        Timestamp::Microsecond(u) => u * 1000,
+        Timestamp::Nanosecond(n) => Some(n),
+        Timestamp::Microsecond(u) => u.checked_mul(1000),
     }
 }
 
@@ -50,7 +50,10 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
     let mut count = 0usize;
     for item in objects {
         let obj = item.borrow();
-        let ns = ts_ns(obj.timestamp);
+        let Some(ns) = ts_ns(obj.timestamp) else {
+            eprintln!("WARNING: skipping object with overflowing timestamp {:?}", obj.timestamp);
+            continue;
+        };
         match &obj.message {
             Message::Can(m) => {
                 write!(
@@ -154,7 +157,10 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
     let mut count = 0usize;
     for item in objects {
         let obj = item.borrow();
-        let ns = ts_ns(obj.timestamp);
+        let Some(ns) = ts_ns(obj.timestamp) else {
+            eprintln!("WARNING: skipping object with overflowing timestamp {:?}", obj.timestamp);
+            continue;
+        };
         match &obj.message {
             Message::Can(m) => {
                 let vals = can_extract(db, m.id, &m.data);

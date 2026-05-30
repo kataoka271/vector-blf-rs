@@ -97,7 +97,7 @@ A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format
 ### CLI (`src/main.rs`)
 
 ```
-vector-blf-rs parse <input.blf> [output.blf | output.csv [signals.csv]] [--repeat N] [--threads N] [--someip-signals <file>]
+vector-blf-rs parse <input.blf|.mf4> [output.blf|.csv] [--can-signals FILE] [--someip-signals FILE] [--repeat N] [--threads N]
 vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]
 vector-blf-rs check <signals.csv>
 ```

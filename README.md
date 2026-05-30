@@ -21,21 +21,38 @@ Also ships **Python bindings** via PyO3 + maturin as the `vector_blf` package.
 ## CLI
 
 ```
-vector-blf-rs <input.blf> [output.blf [repeat] | output.csv [can_signals.csv]] [--threads N]
+vector-blf-rs parse <input.blf|.mf4> [output.blf|.csv] [--can-signals FILE] [--someip-signals FILE] [--repeat N] [--threads N]
+vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay FILE]
+vector-blf-rs check <signals.csv>
 ```
 
 ```bash
 # Parse and print summary
-vector-blf-rs data/test_logfile.blf
+vector-blf-rs parse data/test_logfile.blf
 
-# Copy a BLF file (repeat 200000× to generate a large benchmark file)
-vector-blf-rs data/test_logfile.blf data/bench_large.blf 200000
+# Copy a BLF file (repeat 200000x to generate a large benchmark file)
+vector-blf-rs parse data/test_logfile.blf data/bench_large.blf --repeat 200000
 
 # Export to CSV
-vector-blf-rs data/test_logfile.blf out.csv
+vector-blf-rs parse data/test_logfile.blf out.csv
 
-# Export to CSV with signal decoding
-vector-blf-rs data/test_logfile.blf out.csv can_signals.csv
+# Export to CSV with CAN signal decoding
+vector-blf-rs parse data/test_logfile.blf out.csv --can-signals assets/can_signals.csv
+
+# Export to CSV with CAN + SOME/IP signal decoding (multi-threaded)
+vector-blf-rs parse data/test_logfile.blf out.csv \
+  --can-signals assets/can_signals.csv \
+  --someip-signals assets/someip_signals.csv \
+  --threads 4
+
+# Convert a DBC file to signal CSV
+vector-blf-rs convert network.dbc signals.csv
+
+# Convert an ARXML file with an overlay CSV
+vector-blf-rs convert network.arxml signals.csv --overlay overlay.csv
+
+# Validate a signal CSV
+vector-blf-rs check assets/can_signals.csv
 ```
 
 ---
@@ -186,10 +203,10 @@ Reproduce with:
 ```bash
 # Generate bench file (~33 MB)
 cargo build --release
-./target/release/vector-blf-rs data/test_logfile.blf data/bench_large.blf 200000
+./target/release/vector-blf-rs parse data/test_logfile.blf data/bench_large.blf --repeat 200000
 
 # Run benchmark
-uv run python bench_python.py data/bench_large.blf
+uv run python scripts/bench_python.py data/bench_large.blf
 ```
 
 ---

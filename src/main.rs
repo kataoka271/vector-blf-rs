@@ -46,16 +46,17 @@ enum Command {
         /// Output file (.blf or .csv); omit to benchmark parse only
         output: Option<PathBuf>,
         /// CAN signal definitions CSV (used when output is .csv)
-        signals: Option<PathBuf>,
+        #[arg(long, value_name = "FILE")]
+        can_signals: Option<PathBuf>,
+        /// SOME/IP signal definitions CSV
+        #[arg(long, value_name = "FILE")]
+        someip_signals: Option<PathBuf>,
         /// Repeat input N times into BLF output
         #[arg(long, default_value = "1", value_name = "N")]
         repeat: u32,
         /// Number of parser threads
         #[arg(long, default_value = "1", value_name = "N")]
         threads: usize,
-        /// SOME/IP signal definitions CSV
-        #[arg(long, value_name = "FILE")]
-        someip_signals: Option<PathBuf>,
     },
 }
 
@@ -322,7 +323,7 @@ fn main() -> Result<()> {
         Command::Parse {
             input,
             output,
-            signals,
+            can_signals: signals,
             repeat,
             threads,
             someip_signals,

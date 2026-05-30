@@ -35,6 +35,7 @@ def len_to_dlc(n: int) -> int:
 
 # ── Container frame builders ──────────────────────────────────────────────────
 
+
 def build_short(pdus: list[tuple[int, bytes]]) -> bytes:
     """Build a Short-header container frame payload.
 
@@ -44,7 +45,7 @@ def build_short(pdus: list[tuple[int, bytes]]) -> bytes:
     out = bytearray()
     for pdu_id, payload in pdus:
         dlc = len_to_dlc(len(payload))
-        out += struct.pack(">I", pdu_id)[1:]   # 3 high bytes of big-endian u32
+        out += struct.pack(">I", pdu_id)[1:]  # 3 high bytes of big-endian u32
         out += bytes([dlc])
         out += payload
     return bytes(out)
@@ -63,6 +64,7 @@ def build_long(pdus: list[tuple[int, bytes]]) -> bytes:
 
 
 # ── CAN-FD message factory ────────────────────────────────────────────────────
+
 
 def canfd_msg(
     arbitration_id: int,
@@ -88,38 +90,83 @@ def canfd_msg(
 # Short-header container frames on CAN ID 0x100
 SHORT_FRAMES = [
     # t=0.001 s: two I-PDUs
-    (0.001, 0x100, build_short([
-        (0x000010, bytes([0xAB, 0xCD])),          # PDU 0x10, 2 bytes
-        (0x000020, bytes([0xFF])),                 # PDU 0x20, 1 byte
-    ])),
+    (
+        0.001,
+        0x100,
+        build_short(
+            [
+                (0x000010, bytes([0xAB, 0xCD])),  # PDU 0x10, 2 bytes
+                (0x000020, bytes([0xFF])),  # PDU 0x20, 1 byte
+            ]
+        ),
+    ),
     # t=0.002 s: three I-PDUs, varying payload sizes
-    (0.002, 0x100, build_short([
-        (0x000010, bytes([0x01, 0x02, 0x03, 0x04])),   # PDU 0x10, 4 bytes
-        (0x000020, bytes([0xAA, 0xBB])),                # PDU 0x20, 2 bytes
-        (0x000030, bytes([0x11, 0x22, 0x33, 0x44,
-                          0x55, 0x66, 0x77, 0x88])),    # PDU 0x30, 8 bytes
-    ])),
+    (
+        0.002,
+        0x100,
+        build_short(
+            [
+                (0x000010, bytes([0x01, 0x02, 0x03, 0x04])),  # PDU 0x10, 4 bytes
+                (0x000020, bytes([0xAA, 0xBB])),  # PDU 0x20, 2 bytes
+                (0x000030, bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88])),  # PDU 0x30, 8 bytes
+            ]
+        ),
+    ),
     # t=0.003 s: DLC=9 (12-byte payload)
-    (0.003, 0x100, build_short([
-        (0x000001, bytes(range(12))),   # PDU 0x01, 12 bytes -> DLC 9
-    ])),
+    (
+        0.003,
+        0x100,
+        build_short(
+            [
+                (0x000001, bytes(range(12))),  # PDU 0x01, 12 bytes -> DLC 9
+            ]
+        ),
+    ),
+    (
+        0.004,
+        0x600,
+        build_short(
+            [
+                (0x000001, bytes([0x01, 0x00, 0x02, 0x11, 0xFF])),  # PDU 0x01, 5 bytes -> DLC 5
+                (0x000002, bytes([0x01, 0x00, 0x02])),  # PDU 0x02, 3 bytes -> DLC 3
+            ]
+        ),
+    ),
 ]
 
 # Long-header container frames on CAN ID 0x200
 LONG_FRAMES = [
     # t=0.011 s: single I-PDU
-    (0.011, 0x200, build_long([
-        (0x00000010, bytes([0xAB, 0xCD])),
-    ])),
+    (
+        0.011,
+        0x200,
+        build_long(
+            [
+                (0x00000010, bytes([0xAB, 0xCD])),
+            ]
+        ),
+    ),
     # t=0.012 s: two I-PDUs with larger payloads
-    (0.012, 0x200, build_long([
-        (0x00000010, bytes(range(8))),
-        (0x00000020, bytes([0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE])),
-    ])),
+    (
+        0.012,
+        0x200,
+        build_long(
+            [
+                (0x00000010, bytes(range(8))),
+                (0x00000020, bytes([0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE])),
+            ]
+        ),
+    ),
     # t=0.013 s: 16-byte payload (arbitrary length, allowed by long header)
-    (0.013, 0x200, build_long([
-        (0x00000030, bytes(range(16))),
-    ])),
+    (
+        0.013,
+        0x200,
+        build_long(
+            [
+                (0x00000030, bytes(range(16))),
+            ]
+        ),
+    ),
 ]
 
 # Mixed: one short-header frame followed by a non-container CAN-FD frame

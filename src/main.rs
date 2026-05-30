@@ -8,6 +8,7 @@ use blf::{
 };
 use clap::{Parser, Subcommand};
 use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -64,6 +65,9 @@ enum Command {
         /// Suppress table output to stdout
         #[arg(long, short)]
         quiet: bool,
+        /// Print a per-PDU occurrence summary (requires --can-signals)
+        #[arg(long)]
+        pdu_list: bool,
     },
 }
 
@@ -397,6 +401,51 @@ fn print_signal_table<T: Borrow<BaseObject>>(
     tbl.print();
 }
 
+fn collect_pdu_counts<T: Borrow<BaseObject>>(
+    objects: impl IntoIterator<Item = T>,
+    can_db: &CanSignalDb,
+) -> HashMap<(u32, u32), usize> {
+    let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
+    for item in objects {
+        let obj = item.borrow();
+        let (can_id, data): (u32, &[u8]) = match &obj.message {
+            Message::Can(m) if can_db.is_container(m.id) => (m.id, &m.data),
+            Message::CanFd(m) if can_db.is_container(m.id) => (m.id, &m.data),
+            Message::CanFd64(m) if can_db.is_container(m.id) => (m.id, &m.data),
+            _ => continue,
+        };
+        for (pdu_id, _) in blf::demux_container(data, blf::ContainerHeader::Short) {
+            *counts.entry((can_id, pdu_id)).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+fn print_pdu_table(counts: &HashMap<(u32, u32), usize>, can_db: &CanSignalDb) {
+    let mut tbl = table::Table::new(&[
+        ("can_id", false),
+        ("pdu_id", false),
+        ("count", true),
+        ("signals", false),
+    ]);
+    let mut entries: Vec<_> = counts.iter().collect();
+    entries.sort_by_key(|((can_id, pdu_id), _)| (*can_id, *pdu_id));
+    for ((can_id, pdu_id), count) in entries {
+        let sig_names: Vec<&str> = can_db
+            .container_signals(*can_id, *pdu_id)
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        tbl.push(vec![
+            format!("0x{:X}", can_id),
+            format!("0x{:X}", pdu_id),
+            count.to_string(),
+            sig_names.join(", "),
+        ]);
+    }
+    tbl.print();
+}
+
 fn check_boundaries(chunks: &[Vec<BaseObject>]) {
     for i in 0..chunks.len().saturating_sub(1) {
         if let (Some(a), Some(b)) = (chunks[i].last(), chunks[i + 1].first()) {
@@ -495,6 +544,7 @@ fn ext(p: &Path) -> &str {
     p.extension().and_then(|e| e.to_str()).unwrap_or("")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_parse(
     input: PathBuf,
     output: Option<PathBuf>,
@@ -503,9 +553,10 @@ fn cmd_parse(
     n_threads: usize,
     someip_signals_path: Option<PathBuf>,
     quiet: bool,
+    pdu_list: bool,
 ) -> Result<()> {
     if matches!(ext(&input), "mf4" | "mdf") {
-        return cmd_parse_mf4(input, output, signals, someip_signals_path, quiet);
+        return cmd_parse_mf4(input, output, signals, someip_signals_path, quiet, pdu_list);
     }
 
     let is_csv = output.as_ref().map(|p| ext(p) == "csv").unwrap_or(false);
@@ -572,15 +623,26 @@ fn cmd_parse(
         }
     }
     if !quiet {
-        if signals.is_some() || someip_signals_path.is_some() {
-            let can_db = signals
-                .as_ref()
-                .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
-                .transpose()?;
-            let someip_db = someip_signals_path
-                .as_ref()
-                .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
-                .transpose()?;
+        let can_db = signals
+            .as_ref()
+            .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
+            .transpose()?;
+        let someip_db = someip_signals_path
+            .as_ref()
+            .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
+            .transpose()?;
+        if pdu_list {
+            match can_db.as_ref() {
+                Some(db) => {
+                    let counts = collect_pdu_counts(chunk_results.iter().flatten(), db);
+                    print_pdu_table(&counts, db);
+                }
+                None => {
+                    eprintln!("error: --pdu-list requires --can-signals");
+                    std::process::exit(1);
+                }
+            }
+        } else if can_db.is_some() || someip_db.is_some() {
             print_signal_table(
                 chunk_results.iter().flatten(),
                 can_db.as_ref(),
@@ -600,6 +662,7 @@ fn cmd_parse_mf4(
     signals: Option<PathBuf>,
     someip_signals_path: Option<PathBuf>,
     quiet: bool,
+    pdu_list: bool,
 ) -> Result<()> {
     let t = time::Instant::now();
     let reader = mf4::Reader::new(BufReader::new(File::open(&input)?))?;
@@ -612,15 +675,26 @@ fn cmd_parse_mf4(
             objects.len(),
             t.elapsed().as_secs_f32()
         );
-        if signals.is_some() || someip_signals_path.is_some() {
-            let can_db = signals
-                .as_ref()
-                .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
-                .transpose()?;
-            let someip_db = someip_signals_path
-                .as_ref()
-                .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
-                .transpose()?;
+        let can_db = signals
+            .as_ref()
+            .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
+            .transpose()?;
+        let someip_db = someip_signals_path
+            .as_ref()
+            .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
+            .transpose()?;
+        if pdu_list {
+            match can_db.as_ref() {
+                Some(db) => {
+                    let counts = collect_pdu_counts(objects.iter(), db);
+                    print_pdu_table(&counts, db);
+                }
+                None => {
+                    eprintln!("error: --pdu-list requires --can-signals");
+                    std::process::exit(1);
+                }
+            }
+        } else if can_db.is_some() || someip_db.is_some() {
             print_signal_table(objects.iter(), can_db.as_ref(), someip_db.as_ref());
         } else {
             print_table(objects.iter());
@@ -806,6 +880,7 @@ fn main() -> Result<()> {
             threads,
             someip_signals,
             quiet,
+            pdu_list,
         } => cmd_parse(
             input,
             output,
@@ -814,6 +889,7 @@ fn main() -> Result<()> {
             threads,
             someip_signals,
             quiet,
+            pdu_list,
         ),
     }
 }

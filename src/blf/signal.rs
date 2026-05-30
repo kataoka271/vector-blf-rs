@@ -337,6 +337,15 @@ impl CanSignalDb {
         self.containers.contains_key(&can_id)
     }
 
+    /// Signal definitions for a specific container (can_id, pdu_id).
+    pub fn container_signals(&self, can_id: u32, pdu_id: u32) -> &[SignalDef] {
+        self.containers
+            .get(&can_id)
+            .and_then(|m| m.get(&pdu_id))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     /// All regular-frame signal definitions for the given CAN ID.
     pub fn signals(&self, message_id: u32) -> &[SignalDef] {
         self.frames

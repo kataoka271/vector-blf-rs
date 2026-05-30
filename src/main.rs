@@ -3,8 +3,8 @@ pub mod mf4;
 mod table;
 
 use blf::{
-    check_can_csv, check_someip_csv, BaseObject, CanSignalDb, Dir, Message, ParseError,
-    SomeIpSignalDb, Timestamp, Writer,
+    check_can_csv, check_someip_csv, BaseObject, CanSignalDb, ContainerHeader, Dir, Ip, Message,
+    ParseError, SomeIp, SomeIpSignalDb, Timestamp, Transport, Writer,
 };
 use clap::{Parser, Subcommand};
 use std::borrow::Borrow;
@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type SomeIpDecoded<'a> = Option<(u16, u16, Vec<(&'a str, f64)>)>;
 
 #[derive(Parser)]
 #[command(
@@ -252,6 +253,150 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
     tbl.print();
 }
 
+fn try_someip_decode<'a>(
+    db: &'a SomeIpSignalDb,
+    ether_type: u16,
+    data: &[u8],
+) -> SomeIpDecoded<'a> {
+    let ip = Ip::parse(ether_type, data).ok()?;
+    let transport = match &ip {
+        Ip::V4(v4) => v4.parse_transport().ok()?,
+        Ip::V6(v6) => v6.parse_transport().ok()?,
+    };
+    let someip_data: &[u8] = match &transport {
+        Transport::Udp(u) => &u.data,
+        Transport::Tcp(t) => &t.data,
+    };
+    let someip = SomeIp::parse(someip_data).ok()?;
+    let vals = db.extract(someip.service_id, someip.method_id, &someip.payload);
+    if vals.is_empty() {
+        None
+    } else {
+        Some((someip.service_id, someip.method_id, vals))
+    }
+}
+
+fn print_signal_table<T: Borrow<BaseObject>>(
+    objects: impl IntoIterator<Item = T>,
+    can_db: Option<&CanSignalDb>,
+    someip_db: Option<&SomeIpSignalDb>,
+) {
+    let mut tbl = table::Table::new(&[
+        ("timestamp_ns", false),
+        ("type", false),
+        ("ch", true),
+        ("id", false),
+        ("signal", false),
+        ("value", true),
+    ]);
+
+    for item in objects {
+        let obj = item.borrow();
+        let ns = ts_ns(obj.timestamp)
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+
+        match &obj.message {
+            Message::Can(m) => {
+                if let Some(db) = can_db {
+                    let vals = if db.is_container(m.id) {
+                        db.extract_container(m.id, &m.data, ContainerHeader::Short)
+                    } else {
+                        db.extract(m.id, &m.data)
+                    };
+                    let id = format!("0x{:X}", m.id);
+                    for (name, value) in vals {
+                        tbl.push(vec![
+                            ns.clone(),
+                            "CAN".into(),
+                            m.channel.to_string(),
+                            id.clone(),
+                            name.to_string(),
+                            value.to_string(),
+                        ]);
+                    }
+                }
+            }
+            Message::CanFd(m) => {
+                if let Some(db) = can_db {
+                    let vals = if db.is_container(m.id) {
+                        db.extract_container(m.id, &m.data, ContainerHeader::Short)
+                    } else {
+                        db.extract(m.id, &m.data)
+                    };
+                    let id = format!("0x{:X}", m.id);
+                    for (name, value) in vals {
+                        tbl.push(vec![
+                            ns.clone(),
+                            "CAN-FD".into(),
+                            m.channel.to_string(),
+                            id.clone(),
+                            name.to_string(),
+                            value.to_string(),
+                        ]);
+                    }
+                }
+            }
+            Message::CanFd64(m) => {
+                if let Some(db) = can_db {
+                    let vals = if db.is_container(m.id) {
+                        db.extract_container(m.id, &m.data, ContainerHeader::Short)
+                    } else {
+                        db.extract(m.id, &m.data)
+                    };
+                    let id = format!("0x{:X}", m.id);
+                    for (name, value) in vals {
+                        tbl.push(vec![
+                            ns.clone(),
+                            "CAN-FD64".into(),
+                            (m.channel as u16).to_string(),
+                            id.clone(),
+                            name.to_string(),
+                            value.to_string(),
+                        ]);
+                    }
+                }
+            }
+            Message::Ethernet(m) => {
+                if let Some(db) = someip_db {
+                    if let Some((svc, mth, vals)) = try_someip_decode(db, m.ether_type, &m.data) {
+                        let id = format!("0x{:04X}{:04X}", svc, mth);
+                        for (name, value) in vals {
+                            tbl.push(vec![
+                                ns.clone(),
+                                "Ethernet".into(),
+                                m.channel.to_string(),
+                                id.clone(),
+                                name.to_string(),
+                                value.to_string(),
+                            ]);
+                        }
+                    }
+                }
+            }
+            Message::EthernetEx(m) => {
+                if let Some(db) = someip_db {
+                    if let Some((svc, mth, vals)) = try_someip_decode(db, m.ether_type, &m.data) {
+                        let id = format!("0x{:04X}{:04X}", svc, mth);
+                        for (name, value) in vals {
+                            tbl.push(vec![
+                                ns.clone(),
+                                "EthernetEx".into(),
+                                m.channel.to_string(),
+                                id.clone(),
+                                name.to_string(),
+                                value.to_string(),
+                            ]);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    tbl.print();
+}
+
 fn check_boundaries(chunks: &[Vec<BaseObject>]) {
     for i in 0..chunks.len().saturating_sub(1) {
         if let (Some(a), Some(b)) = (chunks[i].last(), chunks[i + 1].first()) {
@@ -427,7 +572,23 @@ fn cmd_parse(
         }
     }
     if !quiet {
-        print_table(chunk_results.iter().flatten());
+        if signals.is_some() || someip_signals_path.is_some() {
+            let can_db = signals
+                .as_ref()
+                .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
+                .transpose()?;
+            let someip_db = someip_signals_path
+                .as_ref()
+                .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
+                .transpose()?;
+            print_signal_table(
+                chunk_results.iter().flatten(),
+                can_db.as_ref(),
+                someip_db.as_ref(),
+            );
+        } else {
+            print_table(chunk_results.iter().flatten());
+        }
     }
     Ok(())
 }
@@ -451,7 +612,19 @@ fn cmd_parse_mf4(
             objects.len(),
             t.elapsed().as_secs_f32()
         );
-        print_table(objects.iter());
+        if signals.is_some() || someip_signals_path.is_some() {
+            let can_db = signals
+                .as_ref()
+                .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
+                .transpose()?;
+            let someip_db = someip_signals_path
+                .as_ref()
+                .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
+                .transpose()?;
+            print_signal_table(objects.iter(), can_db.as_ref(), someip_db.as_ref());
+        } else {
+            print_table(objects.iter());
+        }
         if let Some(ref out) = output {
             let t2 = time::Instant::now();
             let output_ext = ext(out);

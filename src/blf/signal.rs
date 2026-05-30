@@ -709,6 +709,8 @@ impl SomeIpSignalDb {
 pub fn check_can_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
     let mut errors = Vec::new();
     let mut lineno = 0usize;
+    // (message_id) -> (is_container, first_lineno) — detect mixed regular/container rows
+    let mut first_seen: HashMap<u32, (bool, usize)> = HashMap::new();
     for line in std::io::BufReader::new(reader).lines() {
         lineno += 1;
         let line = match line {
@@ -759,6 +761,25 @@ pub fn check_can_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
         }
         if p.len() >= 9 && !p[8].is_empty() && parse_u32(p[8]).is_err() {
             errors.push((lineno, format!("invalid pdu_id: {:?}", p[8])));
+        }
+        if let Ok(mid) = parse_u32(p[0]) {
+            let is_container = p.len() >= 9 && !p[8].is_empty();
+            match first_seen.get(&mid) {
+                Some(&(prev, prev_line)) if prev != is_container => {
+                    let (regular_line, container_line) = if prev {
+                        (lineno, prev_line)
+                    } else {
+                        (prev_line, lineno)
+                    };
+                    errors.push((lineno, format!(
+                        "message_id 0x{mid:X} mixes regular-frame (line {regular_line}) and container-frame (line {container_line}) rows; regular signals will be silently ignored"
+                    )));
+                }
+                None => {
+                    first_seen.insert(mid, (is_container, lineno));
+                }
+                _ => {}
+            }
         }
     }
     errors
@@ -1009,6 +1030,34 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
         // scale=1.0, offset=0.0: raw=7 → 7.0
         let vals = db.extract(0x0010, 0x0001, &[7]);
         assert_eq!(vals.first().map(|(_, v)| *v), Some(7.0));
+    }
+
+    #[test]
+    fn check_csv_mixed_regular_and_container() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x100,Direct,0,8,Intel,false,1.0,0.0\n\
+                   0x100,Contained,0,8,Intel,false,1.0,0.0,0x01\n";
+        let errs = check_can_csv(csv.as_bytes());
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].1.contains("0x100"));
+        assert!(errs[0].1.contains("regular"));
+        assert!(errs[0].1.contains("container"));
+    }
+
+    #[test]
+    fn check_csv_pure_regular_no_error() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,Sig1,0,8,Intel,false,1.0,0.0\n\
+                   0x100,Sig2,8,8,Intel,false,1.0,0.0\n";
+        assert!(check_can_csv(csv.as_bytes()).is_empty());
+    }
+
+    #[test]
+    fn check_csv_pure_container_no_error() {
+        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x200,Sig1,0,8,Intel,false,1.0,0.0,0x01\n\
+                   0x200,Sig2,0,8,Intel,false,1.0,0.0,0x02\n";
+        assert!(check_can_csv(csv.as_bytes()).is_empty());
     }
 
     #[test]

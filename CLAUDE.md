@@ -55,6 +55,21 @@ uv run python <script.py>                  # run a script against the installed 
 `maturin` is a dev dependency in `pyproject.toml` and is available via `uv run`.
 The `python` Cargo feature gates all PyO3 code; omit it for pure-Rust builds.
 
+**Gotcha: `uv` overwrites `maturin develop` on every `uv run` invocation.**
+`uv` caches the built wheel keyed on the source directory mtime, which does not
+change when only file *contents* are modified (no files added/removed). As a
+result, every subsequent `uv run <cmd>` silently restores the old cached binary,
+undoing the `maturin develop` build.
+
+After editing Rust source files, use this instead of `maturin develop`:
+
+```bash
+uv sync --reinstall-package vector-blf    # force uv to rebuild from source and update its cache
+```
+
+This rebuilds through uv's own pipeline so the new binary is cached correctly
+and will not be reverted by future `uv run` calls.
+
 ## Project Overview
 
 A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format — the standard for logging automotive network traffic (CAN, CAN-FD, Ethernet, diagnostic protocols).

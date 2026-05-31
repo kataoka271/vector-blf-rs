@@ -92,13 +92,6 @@ SIGNALS_PATH = spark.conf.get("blf.signals_path", "")  # noqa: F821
 SOMEIP_SIGNALS_PATH = spark.conf.get("blf.someip_signals_path", "")  # noqa: F821
 CONTAINER_LONG_HEADER: bool = spark.conf.get("blf.container_long_header", "false").lower() == "true"  # noqa: F821
 
-# ── protocol constants ────────────────────────────────────────────────────────
-
-_ETHERTYPE_IPV4: int = 0x0800
-_ETHERTYPE_IPV6: int = 0x86DD
-_IPPROTO_TCP: int = 6
-_IPPROTO_UDP: int = 17
-
 # ── bronze output schema (flat rows emitted by _parse_blf_batch) ──────────────
 
 _BRONZE_OUTPUT_SCHEMA = StructType(
@@ -619,142 +612,17 @@ def blf_silver_eth():
 # ── silver layer — parsed Ethernet payload signals ────────────────────────────
 
 
-def _eth_parse_tcp(data: bytes, out: list) -> None:
-    if len(data) < 20:
-        return
-    out.extend(
-        [
-            {
-                "signal_name": "tcp.src_port",
-                "signal_value": float((data[0] << 8) | data[1]),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "tcp.dst_port",
-                "signal_value": float((data[2] << 8) | data[3]),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "tcp.flags",
-                "signal_value": float(data[13] & 0x3F),
-                "signal_str": None,
-            },
-        ]
-    )
-
-
-def _eth_parse_udp(data: bytes, out: list) -> None:
-    if len(data) < 8:
-        return
-    out.extend(
-        [
-            {
-                "signal_name": "udp.src_port",
-                "signal_value": float((data[0] << 8) | data[1]),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "udp.dst_port",
-                "signal_value": float((data[2] << 8) | data[3]),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "udp.payload_bytes",
-                "signal_value": float(((data[4] << 8) | data[5]) - 8),
-                "signal_str": None,
-            },
-        ]
-    )
-
-
-def _eth_parse_ipv4(data: bytes, out: list) -> None:
-    if len(data) < 20:
-        return
-    ihl = (data[0] & 0x0F) * 4
-    protocol = data[9]
-    out.extend(
-        [
-            {
-                "signal_name": "ip.protocol",
-                "signal_value": float(protocol),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "ip.ttl",
-                "signal_value": float(data[8]),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "ip.total_len",
-                "signal_value": float((data[2] << 8) | data[3]),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "ip.src",
-                "signal_value": None,
-                "signal_str": ".".join(str(b) for b in data[12:16]),
-            },
-            {
-                "signal_name": "ip.dst",
-                "signal_value": None,
-                "signal_str": ".".join(str(b) for b in data[16:20]),
-            },
-        ]
-    )
-    transport = data[ihl:] if ihl <= len(data) else b""
-    if protocol == _IPPROTO_TCP:
-        _eth_parse_tcp(transport, out)
-    elif protocol == _IPPROTO_UDP:
-        _eth_parse_udp(transport, out)
-
-
-def _eth_parse_ipv6(data: bytes, out: list) -> None:
-    if len(data) < 40:
-        return
-    next_header = data[6]
-    out.extend(
-        [
-            {
-                "signal_name": "ip.protocol",
-                "signal_value": float(next_header),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "ip.hop_limit",
-                "signal_value": float(data[7]),
-                "signal_str": None,
-            },
-            {
-                "signal_name": "ip.src",
-                "signal_value": None,
-                "signal_str": ":".join(f"{(data[8 + i * 2] << 8 | data[9 + i * 2]):04x}" for i in range(8)),
-            },
-            {
-                "signal_name": "ip.dst",
-                "signal_value": None,
-                "signal_str": ":".join(f"{(data[24 + i * 2] << 8 | data[25 + i * 2]):04x}" for i in range(8)),
-            },
-        ]
-    )
-    transport = data[40:]
-    if next_header == _IPPROTO_TCP:
-        _eth_parse_tcp(transport, out)
-    elif next_header == _IPPROTO_UDP:
-        _eth_parse_udp(transport, out)
-
-
 @pandas_udf(_ETH_SIGNAL_RESULT_SCHEMA)
 def _parse_eth_payload(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
     """Extract IP/TCP/UDP header fields from the Ethernet payload as named signals."""
+    import vector_blf  # noqa: PLC0415
+
     result = []
     for ether_type, data in zip(ether_types, data_col):
-        signals: list = []
         if data is not None:
-            raw = bytes(data)
-            if ether_type == _ETHERTYPE_IPV4:
-                _eth_parse_ipv4(raw, signals)
-            elif ether_type == _ETHERTYPE_IPV6:
-                _eth_parse_ipv6(raw, signals)
+            signals = vector_blf.parse_eth_payload_signals(int(ether_type), bytes(data))
+        else:
+            signals = []
         result.append(signals)
     return pd.Series(result)
 

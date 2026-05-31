@@ -819,77 +819,12 @@ fn ipv6_str(addr: &[u8; 16]) -> String {
         .join(":")
 }
 
-fn service_name(sid: blf::ServiceId) -> String {
-    match sid {
-        blf::ServiceId::DiagnosticSessionControl => "DiagnosticSessionControl".into(),
-        blf::ServiceId::EcuReset => "EcuReset".into(),
-        blf::ServiceId::ClearDiagnosticInformation => "ClearDiagnosticInformation".into(),
-        blf::ServiceId::ReadDtcInformation => "ReadDtcInformation".into(),
-        blf::ServiceId::ReadDataByIdentifier => "ReadDataByIdentifier".into(),
-        blf::ServiceId::ReadMemoryByAddress => "ReadMemoryByAddress".into(),
-        blf::ServiceId::ReadScalingDataByIdentifier => "ReadScalingDataByIdentifier".into(),
-        blf::ServiceId::SecurityAccess => "SecurityAccess".into(),
-        blf::ServiceId::CommunicationControl => "CommunicationControl".into(),
-        blf::ServiceId::Authentication => "Authentication".into(),
-        blf::ServiceId::ReadDataByPeriodicIdentifier => "ReadDataByPeriodicIdentifier".into(),
-        blf::ServiceId::DynamicallyDefineDataIdentifier => "DynamicallyDefineDataIdentifier".into(),
-        blf::ServiceId::WriteDataByIdentifier => "WriteDataByIdentifier".into(),
-        blf::ServiceId::InputOutputControlByIdentifier => "InputOutputControlByIdentifier".into(),
-        blf::ServiceId::RoutineControl => "RoutineControl".into(),
-        blf::ServiceId::RequestDownload => "RequestDownload".into(),
-        blf::ServiceId::RequestUpload => "RequestUpload".into(),
-        blf::ServiceId::TransferData => "TransferData".into(),
-        blf::ServiceId::RequestTransferExit => "RequestTransferExit".into(),
-        blf::ServiceId::RequestFileTransfer => "RequestFileTransfer".into(),
-        blf::ServiceId::WriteMemoryByAddress => "WriteMemoryByAddress".into(),
-        blf::ServiceId::TesterPresent => "TesterPresent".into(),
-        blf::ServiceId::AccessTimingParameter => "AccessTimingParameter".into(),
-        blf::ServiceId::SecuredDataTransmission => "SecuredDataTransmission".into(),
-        blf::ServiceId::ControlDtcSetting => "ControlDtcSetting".into(),
-        blf::ServiceId::ResponseOnEvent => "ResponseOnEvent".into(),
-        blf::ServiceId::LinkControl => "LinkControl".into(),
-        blf::ServiceId::Other(v) => format!("Unknown_0x{v:02X}"),
-    }
-}
-
-fn nrc_name(nrc: blf::Nrc) -> String {
-    match nrc {
-        blf::Nrc::GeneralReject => "GeneralReject".into(),
-        blf::Nrc::ServiceNotSupported => "ServiceNotSupported".into(),
-        blf::Nrc::SubFunctionNotSupported => "SubFunctionNotSupported".into(),
-        blf::Nrc::IncorrectMessageLengthOrInvalidFormat => {
-            "IncorrectMessageLengthOrInvalidFormat".into()
-        }
-        blf::Nrc::ResponseTooLong => "ResponseTooLong".into(),
-        blf::Nrc::BusyRepeatRequest => "BusyRepeatRequest".into(),
-        blf::Nrc::ConditionsNotCorrect => "ConditionsNotCorrect".into(),
-        blf::Nrc::RequestSequenceError => "RequestSequenceError".into(),
-        blf::Nrc::NoResponseFromSubnetComponent => "NoResponseFromSubnetComponent".into(),
-        blf::Nrc::FailurePreventsExecution => "FailurePreventsExecutionOfRequestedAction".into(),
-        blf::Nrc::RequestOutOfRange => "RequestOutOfRange".into(),
-        blf::Nrc::SecurityAccessDenied => "SecurityAccessDenied".into(),
-        blf::Nrc::InvalidKey => "InvalidKey".into(),
-        blf::Nrc::ExceededNumberOfAttempts => "ExceededNumberOfAttempts".into(),
-        blf::Nrc::RequiredTimeDelayNotExpired => "RequiredTimeDelayNotExpired".into(),
-        blf::Nrc::UploadDownloadNotAccepted => "UploadDownloadNotAccepted".into(),
-        blf::Nrc::TransferDataSuspended => "TransferDataSuspended".into(),
-        blf::Nrc::GeneralProgrammingFailure => "GeneralProgrammingFailure".into(),
-        blf::Nrc::WrongBlockSequenceCounter => "WrongBlockSequenceCounter".into(),
-        blf::Nrc::ResponsePending => "RequestCorrectlyReceivedResponsePending".into(),
-        blf::Nrc::SubFunctionNotSupportedInActiveSession => {
-            "SubFunctionNotSupportedInActiveSession".into()
-        }
-        blf::Nrc::ServiceNotSupportedInActiveSession => "ServiceNotSupportedInActiveSession".into(),
-        blf::Nrc::Other(v) => format!("Unknown_0x{v:02X}"),
-    }
-}
-
 fn uds_to_tuple(uds: blf::Uds) -> (String, i32, String, Option<i32>, Option<String>, Vec<u8>) {
     match uds {
         blf::Uds::Request { service, data } => (
             "Request".into(),
             service.to_u8() as i32,
-            service_name(service),
+            service.name(),
             None,
             None,
             data,
@@ -897,7 +832,7 @@ fn uds_to_tuple(uds: blf::Uds) -> (String, i32, String, Option<i32>, Option<Stri
         blf::Uds::PositiveResponse { service, data } => (
             "PositiveResponse".into(),
             service.to_u8() as i32,
-            service_name(service),
+            service.name(),
             None,
             None,
             data,
@@ -905,40 +840,110 @@ fn uds_to_tuple(uds: blf::Uds) -> (String, i32, String, Option<i32>, Option<Stri
         blf::Uds::NegativeResponse { service, nrc } => (
             "NegativeResponse".into(),
             service.to_u8() as i32,
-            service_name(service),
-            Some(nrc_to_u8(nrc) as i32),
-            Some(nrc_name(nrc)),
+            service.name(),
+            Some(nrc.to_u8() as i32),
+            Some(nrc.name()),
             vec![],
         ),
     }
 }
 
-fn nrc_to_u8(nrc: blf::Nrc) -> u8 {
-    match nrc {
-        blf::Nrc::GeneralReject => 0x10,
-        blf::Nrc::ServiceNotSupported => 0x11,
-        blf::Nrc::SubFunctionNotSupported => 0x12,
-        blf::Nrc::IncorrectMessageLengthOrInvalidFormat => 0x13,
-        blf::Nrc::ResponseTooLong => 0x14,
-        blf::Nrc::BusyRepeatRequest => 0x21,
-        blf::Nrc::ConditionsNotCorrect => 0x22,
-        blf::Nrc::RequestSequenceError => 0x24,
-        blf::Nrc::NoResponseFromSubnetComponent => 0x25,
-        blf::Nrc::FailurePreventsExecution => 0x26,
-        blf::Nrc::RequestOutOfRange => 0x31,
-        blf::Nrc::SecurityAccessDenied => 0x33,
-        blf::Nrc::InvalidKey => 0x35,
-        blf::Nrc::ExceededNumberOfAttempts => 0x36,
-        blf::Nrc::RequiredTimeDelayNotExpired => 0x37,
-        blf::Nrc::UploadDownloadNotAccepted => 0x70,
-        blf::Nrc::TransferDataSuspended => 0x71,
-        blf::Nrc::GeneralProgrammingFailure => 0x72,
-        blf::Nrc::WrongBlockSequenceCounter => 0x73,
-        blf::Nrc::ResponsePending => 0x78,
-        blf::Nrc::SubFunctionNotSupportedInActiveSession => 0x7E,
-        blf::Nrc::ServiceNotSupportedInActiveSession => 0x7F,
-        blf::Nrc::Other(v) => v,
+/// Parse IP/TCP/UDP header fields from an Ethernet frame payload as named signals.
+///
+/// Returns a list of dicts matching ``_ETH_SIGNAL_RESULT_SCHEMA``:
+/// ``{signal_name: str, signal_value: float | None, signal_str: str | None}``.
+/// IPv4 and IPv6 are both supported.  Returns an empty list for non-IP frames or
+/// frames that cannot be parsed.
+///
+/// Signal names emitted:
+///   ``ip.protocol``, ``ip.ttl`` / ``ip.hop_limit``, ``ip.total_len`` (IPv4 only),
+///   ``ip.src``, ``ip.dst``, ``tcp.src_port``, ``tcp.dst_port``, ``tcp.flags``,
+///   ``udp.src_port``, ``udp.dst_port``, ``udp.payload_bytes``.
+#[allow(clippy::useless_conversion)]
+#[pyfunction]
+fn parse_eth_payload_signals<'py>(
+    py: Python<'py>,
+    ether_type: u16,
+    eth_payload: &[u8],
+) -> PyResult<Vec<Bound<'py, PyDict>>> {
+    let ip = match blf::Ip::parse(ether_type, eth_payload) {
+        Ok(ip) => ip,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let mut out: Vec<Bound<'py, PyDict>> = Vec::new();
+
+    macro_rules! sig_num {
+        ($name:expr, $value:expr) => {{
+            let d = PyDict::new_bound(py);
+            d.set_item("signal_name", $name)?;
+            d.set_item("signal_value", $value as f64)?;
+            d.set_item("signal_str", py.None())?;
+            out.push(d);
+        }};
     }
+    macro_rules! sig_str {
+        ($name:expr, $value:expr) => {{
+            let d = PyDict::new_bound(py);
+            d.set_item("signal_name", $name)?;
+            d.set_item("signal_value", py.None())?;
+            d.set_item("signal_str", $value)?;
+            out.push(d);
+        }};
+    }
+
+    let transport_result = match &ip {
+        blf::Ip::V4(v4) => {
+            sig_num!("ip.protocol", v4.protocol.to_u8());
+            sig_num!("ip.ttl", v4.ttl);
+            sig_num!("ip.total_len", v4.total_length);
+            sig_str!(
+                "ip.src",
+                format!(
+                    "{}.{}.{}.{}",
+                    v4.src_addr[0], v4.src_addr[1], v4.src_addr[2], v4.src_addr[3]
+                )
+            );
+            sig_str!(
+                "ip.dst",
+                format!(
+                    "{}.{}.{}.{}",
+                    v4.dst_addr[0], v4.dst_addr[1], v4.dst_addr[2], v4.dst_addr[3]
+                )
+            );
+            v4.parse_transport()
+        }
+        blf::Ip::V6(v6) => {
+            sig_num!("ip.protocol", v6.next_header.to_u8());
+            sig_num!("ip.hop_limit", v6.hop_limit);
+            sig_str!("ip.src", ipv6_str(&v6.src_addr));
+            sig_str!("ip.dst", ipv6_str(&v6.dst_addr));
+            v6.parse_transport()
+        }
+    };
+
+    if let Ok(transport) = transport_result {
+        match transport {
+            blf::transport::Transport::Tcp(tcp) => {
+                sig_num!("tcp.src_port", tcp.src_port);
+                sig_num!("tcp.dst_port", tcp.dst_port);
+                let flags_byte = (tcp.flags.fin as u8)
+                    | (tcp.flags.syn as u8) << 1
+                    | (tcp.flags.rst as u8) << 2
+                    | (tcp.flags.psh as u8) << 3
+                    | (tcp.flags.ack as u8) << 4
+                    | (tcp.flags.urg as u8) << 5;
+                sig_num!("tcp.flags", flags_byte);
+            }
+            blf::transport::Transport::Udp(udp) => {
+                sig_num!("udp.src_port", udp.src_port);
+                sig_num!("udp.dst_port", udp.dst_port);
+                sig_num!("udp.payload_bytes", udp.data.len());
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 fn convert_base_object(py: Python<'_>, obj: blf::BaseObject) -> BaseObject {
@@ -1054,5 +1059,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_someip_udp, m)?)?;
     m.add_function(wrap_pyfunction!(parse_doip_diag, m)?)?;
     m.add_function(wrap_pyfunction!(parse_uds, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_eth_payload_signals, m)?)?;
     Ok(())
 }

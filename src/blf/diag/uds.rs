@@ -101,6 +101,39 @@ impl ServiceId {
             Self::Other(v) => v,
         }
     }
+
+    pub fn name(self) -> String {
+        match self {
+            Self::DiagnosticSessionControl => "DiagnosticSessionControl".into(),
+            Self::EcuReset => "EcuReset".into(),
+            Self::ClearDiagnosticInformation => "ClearDiagnosticInformation".into(),
+            Self::ReadDtcInformation => "ReadDtcInformation".into(),
+            Self::ReadDataByIdentifier => "ReadDataByIdentifier".into(),
+            Self::ReadMemoryByAddress => "ReadMemoryByAddress".into(),
+            Self::ReadScalingDataByIdentifier => "ReadScalingDataByIdentifier".into(),
+            Self::SecurityAccess => "SecurityAccess".into(),
+            Self::CommunicationControl => "CommunicationControl".into(),
+            Self::Authentication => "Authentication".into(),
+            Self::ReadDataByPeriodicIdentifier => "ReadDataByPeriodicIdentifier".into(),
+            Self::DynamicallyDefineDataIdentifier => "DynamicallyDefineDataIdentifier".into(),
+            Self::WriteDataByIdentifier => "WriteDataByIdentifier".into(),
+            Self::InputOutputControlByIdentifier => "InputOutputControlByIdentifier".into(),
+            Self::RoutineControl => "RoutineControl".into(),
+            Self::RequestDownload => "RequestDownload".into(),
+            Self::RequestUpload => "RequestUpload".into(),
+            Self::TransferData => "TransferData".into(),
+            Self::RequestTransferExit => "RequestTransferExit".into(),
+            Self::RequestFileTransfer => "RequestFileTransfer".into(),
+            Self::WriteMemoryByAddress => "WriteMemoryByAddress".into(),
+            Self::TesterPresent => "TesterPresent".into(),
+            Self::AccessTimingParameter => "AccessTimingParameter".into(),
+            Self::SecuredDataTransmission => "SecuredDataTransmission".into(),
+            Self::ControlDtcSetting => "ControlDtcSetting".into(),
+            Self::ResponseOnEvent => "ResponseOnEvent".into(),
+            Self::LinkControl => "LinkControl".into(),
+            Self::Other(v) => format!("Unknown_0x{v:02X}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +189,66 @@ impl Nrc {
             0x7E => Self::SubFunctionNotSupportedInActiveSession,
             0x7F => Self::ServiceNotSupportedInActiveSession,
             v => Self::Other(v),
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::GeneralReject => 0x10,
+            Self::ServiceNotSupported => 0x11,
+            Self::SubFunctionNotSupported => 0x12,
+            Self::IncorrectMessageLengthOrInvalidFormat => 0x13,
+            Self::ResponseTooLong => 0x14,
+            Self::BusyRepeatRequest => 0x21,
+            Self::ConditionsNotCorrect => 0x22,
+            Self::RequestSequenceError => 0x24,
+            Self::NoResponseFromSubnetComponent => 0x25,
+            Self::FailurePreventsExecution => 0x26,
+            Self::RequestOutOfRange => 0x31,
+            Self::SecurityAccessDenied => 0x33,
+            Self::InvalidKey => 0x35,
+            Self::ExceededNumberOfAttempts => 0x36,
+            Self::RequiredTimeDelayNotExpired => 0x37,
+            Self::UploadDownloadNotAccepted => 0x70,
+            Self::TransferDataSuspended => 0x71,
+            Self::GeneralProgrammingFailure => 0x72,
+            Self::WrongBlockSequenceCounter => 0x73,
+            Self::ResponsePending => 0x78,
+            Self::SubFunctionNotSupportedInActiveSession => 0x7E,
+            Self::ServiceNotSupportedInActiveSession => 0x7F,
+            Self::Other(v) => v,
+        }
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            Self::GeneralReject => "GeneralReject".into(),
+            Self::ServiceNotSupported => "ServiceNotSupported".into(),
+            Self::SubFunctionNotSupported => "SubFunctionNotSupported".into(),
+            Self::IncorrectMessageLengthOrInvalidFormat => {
+                "IncorrectMessageLengthOrInvalidFormat".into()
+            }
+            Self::ResponseTooLong => "ResponseTooLong".into(),
+            Self::BusyRepeatRequest => "BusyRepeatRequest".into(),
+            Self::ConditionsNotCorrect => "ConditionsNotCorrect".into(),
+            Self::RequestSequenceError => "RequestSequenceError".into(),
+            Self::NoResponseFromSubnetComponent => "NoResponseFromSubnetComponent".into(),
+            Self::FailurePreventsExecution => "FailurePreventsExecutionOfRequestedAction".into(),
+            Self::RequestOutOfRange => "RequestOutOfRange".into(),
+            Self::SecurityAccessDenied => "SecurityAccessDenied".into(),
+            Self::InvalidKey => "InvalidKey".into(),
+            Self::ExceededNumberOfAttempts => "ExceededNumberOfAttempts".into(),
+            Self::RequiredTimeDelayNotExpired => "RequiredTimeDelayNotExpired".into(),
+            Self::UploadDownloadNotAccepted => "UploadDownloadNotAccepted".into(),
+            Self::TransferDataSuspended => "TransferDataSuspended".into(),
+            Self::GeneralProgrammingFailure => "GeneralProgrammingFailure".into(),
+            Self::WrongBlockSequenceCounter => "WrongBlockSequenceCounter".into(),
+            Self::ResponsePending => "RequestCorrectlyReceivedResponsePending".into(),
+            Self::SubFunctionNotSupportedInActiveSession => {
+                "SubFunctionNotSupportedInActiveSession".into()
+            }
+            Self::ServiceNotSupportedInActiveSession => "ServiceNotSupportedInActiveSession".into(),
+            Self::Other(v) => format!("Unknown_0x{v:02X}"),
         }
     }
 }

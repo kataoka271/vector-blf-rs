@@ -41,6 +41,7 @@ impl IpProtocol {
 pub struct Ipv4 {
     pub dscp: u8,
     pub ecn: u8,
+    pub total_length: u16,
     pub id: u16,
     pub dont_fragment: bool,
     pub more_fragments: bool,
@@ -90,6 +91,7 @@ impl Ipv4 {
         Ok(Ipv4 {
             dscp: dscp_ecn >> 2,
             ecn: dscp_ecn & 0x3,
+            total_length,
             id,
             dont_fragment,
             more_fragments,

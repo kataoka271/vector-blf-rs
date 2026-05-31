@@ -11,6 +11,7 @@ Layer layout
   blf_silver_can             streaming table — CAN / CAN-FD / CAN-FD64 messages
   blf_silver_eth             streaming table — Ethernet / EthernetEx messages
   blf_silver_someip          streaming table — SOME/IP messages parsed from Ethernet UDP frames
+  blf_silver_can_container_pdus streaming table — raw I-PDU payloads demuxed from container CAN-FD frames
   blf_silver_can_signals     streaming table — decoded physical signal values (long format)
   blf_silver_eth_signals     streaming table — IP/TCP/UDP protocol fields as signals (long format)
   blf_silver_someip_signals  streaming table — SOME/IP application signals (long format)
@@ -48,7 +49,8 @@ Setup
 
    message_id accepts hex (0x...) or decimal.  byte_order is Intel or Motorola
    (case-insensitive).  is_signed accepts true/false or 1/0.
-   If blf.signals_path is not set, blf_silver_can_signals will be empty.
+   If blf.signals_path is not set, blf_silver_can_container_pdus and
+   blf_silver_can_signals will both be empty.
 
    SOME/IP signal CSV format (header required):
        service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
@@ -145,6 +147,15 @@ _SIGNAL_RESULT_SCHEMA = ArrayType(
         [
             StructField("signal_name", StringType(), nullable=False),
             StructField("signal_value", DoubleType(), nullable=False),
+        ]
+    )
+)
+
+_PDU_RESULT_SCHEMA = ArrayType(
+    StructType(
+        [
+            StructField("pdu_id", LongType(), nullable=False),
+            StructField("pdu_payload", BinaryType(), nullable=False),
         ]
     )
 )
@@ -498,15 +509,12 @@ def _decode_signals(
     paths: pd.Series,
     long_headers: pd.Series,
 ) -> pd.Series:
-    """Decode all matching CAN signals for each (can_id, data) row.
+    """Decode signals for non-container CAN frames.
 
-    `paths` and `long_headers` carry per-batch constants via F.lit so the
-    values are available on executors without relying on driver-side state.
-    Container-frame CAN IDs (those with a pdu_id column in the CSV) are
-    demultiplexed via decode_container; regular frames use decode.
+    Container-frame CAN IDs are skipped here; they are handled by the
+    blf_silver_can_container_pdus -> _decode_pdu_signals path.
     """
     csv_path = paths.iloc[0] if len(paths) else ""
-    use_long = bool(long_headers.iloc[0]) if len(long_headers) else False
     db = _load_signal_db(csv_path)
 
     result = []
@@ -514,14 +522,119 @@ def _decode_signals(
         decoded = []
         if data is not None and db is not None:
             mid = int(can_id)
-            if db.is_container(mid):
-                pairs = db.decode_container(mid, bytes(data), use_long)
-            else:
-                pairs = db.decode(mid, bytes(data))
-            decoded = [{"signal_name": name, "signal_value": value} for name, value in pairs]
+            if not db.is_container(mid):
+                decoded = [{"signal_name": name, "signal_value": value} for name, value in db.decode(mid, bytes(data))]
         result.append(decoded)
 
     return pd.Series(result)
+
+
+@pandas_udf(_PDU_RESULT_SCHEMA)
+def _extract_container_pdus(
+    can_ids: pd.Series,
+    data_col: pd.Series,
+    paths: pd.Series,
+    long_headers: pd.Series,
+) -> pd.Series:
+    """Demultiplex container-frame CAN IDs into raw (pdu_id, pdu_payload) pairs.
+
+    Non-container rows return an empty array.
+    """
+    csv_path = paths.iloc[0] if len(paths) else ""
+    use_long = bool(long_headers.iloc[0]) if len(long_headers) else False
+    db = _load_signal_db(csv_path)
+
+    result = []
+    for can_id, data in zip(can_ids, data_col):
+        pdus = []
+        if data is not None and db is not None:
+            mid = int(can_id)
+            if db.is_container(mid):
+                pdus = [
+                    {"pdu_id": pdu_id, "pdu_payload": bytes(payload)}
+                    for pdu_id, payload in db.extract_container_pdus(mid, bytes(data), use_long)
+                ]
+        result.append(pdus)
+
+    return pd.Series(result)
+
+
+@pandas_udf(_SIGNAL_RESULT_SCHEMA)
+def _decode_pdu_signals(
+    can_ids: pd.Series,
+    pdu_ids: pd.Series,
+    payloads: pd.Series,
+    paths: pd.Series,
+) -> pd.Series:
+    """Decode signals from a single already-demuxed I-PDU row."""
+    csv_path = paths.iloc[0] if len(paths) else ""
+    db = _load_signal_db(csv_path)
+
+    result = []
+    for can_id, pdu_id, payload in zip(can_ids, pdu_ids, payloads):
+        decoded = []
+        if payload is not None and db is not None:
+            decoded = [
+                {"signal_name": name, "signal_value": value}
+                for name, value in db.decode_pdu(int(can_id), int(pdu_id), bytes(payload))
+            ]
+        result.append(decoded)
+
+    return pd.Series(result)
+
+
+@dlt.table(
+    name="blf_silver_can_container_pdus",
+    comment=(
+        "Raw I-PDU payloads demultiplexed from AUTOSAR Container PDU CAN-FD frames. "
+        "One row per I-PDU; pdu_payload holds the raw bytes before signal decoding. "
+        "Empty when blf.signals_path is not set."
+    ),
+    table_properties={
+        "quality": "silver",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+    partition_cols=["message_type"],
+)
+def blf_silver_can_container_pdus():
+    return (
+        dlt.read_stream("blf_silver_can")
+        .withColumn(
+            "_pdus",
+            _extract_container_pdus(
+                F.col("can_id"),
+                F.col("data"),
+                F.lit(SIGNALS_PATH),
+                F.lit(CONTAINER_LONG_HEADER),
+            ),
+        )
+        .filter(F.size("_pdus") > 0)
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "can_id",
+            "can_id_hex",
+            "dir",
+            F.explode("_pdus").alias("_pdu"),
+        )
+        .select(
+            "_source_file",
+            "_ingested_at",
+            "message_type",
+            "timestamp_ns",
+            "timestamp_s",
+            "channel",
+            "can_id",
+            "can_id_hex",
+            "dir",
+            F.col("_pdu.pdu_id").alias("pdu_id"),
+            F.col("_pdu.pdu_payload").alias("pdu_payload"),
+        )
+    )
 
 
 @dlt.table(
@@ -529,7 +642,9 @@ def _decode_signals(
     comment=(
         "Physical signal values decoded from CAN / CAN-FD / CAN-FD64 messages "
         "using the signal definition CSV at blf.signals_path. "
-        "Long format: one row per (message, signal)."
+        "Long format: one row per (message, signal). "
+        "Non-container frames are decoded directly from blf_silver_can; "
+        "container I-PDUs are decoded from blf_silver_can_container_pdus."
     ),
     table_properties={
         "quality": "silver",
@@ -538,7 +653,21 @@ def _decode_signals(
     partition_cols=["message_type"],
 )
 def blf_silver_can_signals():
-    return (
+    _sig_cols = [
+        "_source_file",
+        "_ingested_at",
+        "message_type",
+        "timestamp_ns",
+        "timestamp_s",
+        "channel",
+        "can_id",
+        "can_id_hex",
+        "dir",
+        F.col("_sig.signal_name"),
+        F.col("_sig.signal_value"),
+    ]
+
+    non_container = (
         dlt.read_stream("blf_silver_can")
         .withColumn(
             "_signals",
@@ -562,6 +691,21 @@ def blf_silver_can_signals():
             "dir",
             F.explode("_signals").alias("_sig"),
         )
+        .select(*_sig_cols)
+    )
+
+    container = (
+        dlt.read_stream("blf_silver_can_container_pdus")
+        .withColumn(
+            "_signals",
+            _decode_pdu_signals(
+                F.col("can_id"),
+                F.col("pdu_id"),
+                F.col("pdu_payload"),
+                F.lit(SIGNALS_PATH),
+            ),
+        )
+        .filter(F.size("_signals") > 0)
         .select(
             "_source_file",
             "_ingested_at",
@@ -572,10 +716,12 @@ def blf_silver_can_signals():
             "can_id",
             "can_id_hex",
             "dir",
-            F.col("_sig.signal_name"),
-            F.col("_sig.signal_value"),
+            F.explode("_signals").alias("_sig"),
         )
+        .select(*_sig_cols)
     )
+
+    return non_container.union(container)
 
 
 @dlt.table(

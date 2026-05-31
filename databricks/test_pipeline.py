@@ -583,7 +583,22 @@ def test_decode_signals_with_csv() -> None:
 
 
 @_needs_vector_blf
-def test_decode_signals_container_frame_short_header() -> None:
+def test_decode_signals_skips_container_frame() -> None:
+    # CAN ID 0x600 is a container frame; _decode_signals must return empty — container
+    # rows are handled by the _extract_container_pdus -> _decode_pdu_signals path.
+    csv_path = str(ASSETS_DIR / "can_signals.csv")
+    frame = bytes([0x00, 0x00, 0x01, 0x05, 0x10, 0x00, 0x00, 0x00, 0x00])
+    result = pipeline._decode_signals(
+        pd.Series([0x600]),
+        pd.Series([frame]),
+        pd.Series([csv_path]),
+        pd.Series([False]),
+    )
+    assert result.iloc[0] == []
+
+
+@_needs_vector_blf
+def test_extract_container_pdus_short_header() -> None:
     csv_path = str(ASSETS_DIR / "can_signals.csv")
     # CAN ID 0x600 is a container frame with two PDUs defined in can_signals.csv:
     #   PDU 0x01: Radar_Distance_m (bits 0-15, Intel, scale 0.01)
@@ -615,22 +630,22 @@ def test_decode_signals_container_frame_short_header() -> None:
             0x00,  # PDU 0x02 payload -> CabinTemp_degC raw=20
         ]
     )
-    result = pipeline._decode_signals(
+    result = pipeline._extract_container_pdus(
         pd.Series([0x600]),
         pd.Series([frame]),
         pd.Series([csv_path]),
         pd.Series([False]),
     )
-    by_name = {s["signal_name"]: s["signal_value"] for s in result.iloc[0]}
-    assert by_name["Radar_Distance_m"] == pytest.approx(0.16)  # 16 * 0.01
-    assert by_name["CabinTemp_degC"] == pytest.approx(-30.0)  # 20 * 0.5 - 40
+    pdus = {p["pdu_id"]: p["pdu_payload"] for p in result.iloc[0]}
+    assert set(pdus.keys()) == {1, 2}
+    assert pdus[1] == bytes([0x10, 0x00, 0x00, 0x00, 0x00])
+    assert pdus[2] == bytes([0x14, 0x00, 0x00])
 
 
 @_needs_vector_blf
-def test_decode_signals_container_frame_long_header() -> None:
+def test_extract_container_pdus_long_header() -> None:
     csv_path = str(ASSETS_DIR / "can_signals.csv")
     # Long header: [pdu_id_32bit_BE, byte_length_32bit_BE] + payload (8-byte overhead per PDU)
-    # byte_length is the actual payload length in bytes (not a DLC code).
     frame = bytes(
         [
             0x00,
@@ -648,14 +663,53 @@ def test_decode_signals_container_frame_long_header() -> None:
             0x00,  # PDU 0x01 payload -> Radar_Distance_m raw=16
         ]
     )
-    result = pipeline._decode_signals(
+    result = pipeline._extract_container_pdus(
         pd.Series([0x600]),
         pd.Series([frame]),
         pd.Series([csv_path]),
-        pd.Series([True]),  # long_header=True
+        pd.Series([True]),
+    )
+    pdus = {p["pdu_id"]: p["pdu_payload"] for p in result.iloc[0]}
+    assert 1 in pdus
+    assert pdus[1] == bytes([0x10, 0x00, 0x00, 0x00, 0x00])
+
+
+@_needs_vector_blf
+def test_extract_container_pdus_non_container_returns_empty() -> None:
+    csv_path = str(ASSETS_DIR / "can_signals.csv")
+    result = pipeline._extract_container_pdus(
+        pd.Series([0x100]),  # regular frame, not a container
+        pd.Series([bytes([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])]),
+        pd.Series([csv_path]),
+        pd.Series([False]),
+    )
+    assert result.iloc[0] == []
+
+
+@_needs_vector_blf
+def test_decode_pdu_signals_short_header_two_pdus() -> None:
+    csv_path = str(ASSETS_DIR / "can_signals.csv")
+    # PDU 0x01 of container 0x600: Radar_Distance_m raw=16 -> 0.16
+    pdu1_payload = bytes([0x10, 0x00, 0x00, 0x00, 0x00])
+    result = pipeline._decode_pdu_signals(
+        pd.Series([0x600]),
+        pd.Series([1]),
+        pd.Series([pdu1_payload]),
+        pd.Series([csv_path]),
     )
     by_name = {s["signal_name"]: s["signal_value"] for s in result.iloc[0]}
-    assert by_name["Radar_Distance_m"] == pytest.approx(0.16)
+    assert by_name["Radar_Distance_m"] == pytest.approx(0.16)  # 16 * 0.01
+
+    # PDU 0x02 of container 0x600: CabinTemp_degC raw=20 -> -30
+    pdu2_payload = bytes([0x14, 0x00, 0x00])
+    result2 = pipeline._decode_pdu_signals(
+        pd.Series([0x600]),
+        pd.Series([2]),
+        pd.Series([pdu2_payload]),
+        pd.Series([csv_path]),
+    )
+    by_name2 = {s["signal_name"]: s["signal_value"] for s in result2.iloc[0]}
+    assert by_name2["CabinTemp_degC"] == pytest.approx(-30.0)  # 20 * 0.5 - 40
 
 
 @_needs_vector_blf

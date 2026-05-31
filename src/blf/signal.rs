@@ -389,6 +389,38 @@ impl CanSignalDb {
         result
     }
 
+    /// Demultiplex a container frame into raw `(pdu_id, pdu_payload)` pairs without
+    /// decoding signals.  Returns an empty vec if `can_id` is not a known container.
+    pub fn demux_pdus(
+        &self,
+        can_id: u32,
+        data: &[u8],
+        header: ContainerHeader,
+    ) -> Vec<(u32, Vec<u8>)> {
+        if !self.is_container(can_id) {
+            return vec![];
+        }
+        demux_container(data, header)
+            .into_iter()
+            .map(|(id, payload)| (id, payload.to_vec()))
+            .collect()
+    }
+
+    /// Decode signals for a single already-demuxed I-PDU identified by `(can_id, pdu_id)`.
+    ///
+    /// Bit positions in `data` are relative to the I-PDU payload start.
+    pub fn extract_pdu(&self, can_id: u32, pdu_id: u32, data: &[u8]) -> Vec<(&str, f64)> {
+        let Some(pdu_map) = self.containers.get(&can_id) else {
+            return vec![];
+        };
+        let Some(defs) = pdu_map.get(&pdu_id) else {
+            return vec![];
+        };
+        defs.iter()
+            .filter_map(|def| def.signal.decode(data).map(|v| (def.name.as_str(), v)))
+            .collect()
+    }
+
     /// Write all signal definitions to `w` in the canonical CSV format.
     ///
     /// Regular-frame rows have an empty `pdu_id` column; container-frame rows

@@ -559,6 +559,38 @@ impl CanSignalDb {
             .map(|(name, val)| (name.to_string(), val))
             .collect()
     }
+
+    /// Demultiplex a CAN-FD container frame into raw ``(pdu_id, pdu_payload)`` pairs
+    /// without decoding signals.
+    ///
+    /// Returns an empty list if ``message_id`` is not a known container frame.
+    /// ``long_header`` selects the 8-byte-overhead long header (default: 4-byte short).
+    #[pyo3(signature = (message_id, data, long_header = false))]
+    fn extract_container_pdus(
+        &self,
+        message_id: u32,
+        data: &[u8],
+        long_header: bool,
+    ) -> Vec<(u32, Vec<u8>)> {
+        let header = if long_header {
+            ContainerHeader::Long
+        } else {
+            ContainerHeader::Short
+        };
+        self.inner.demux_pdus(message_id, data, header)
+    }
+
+    /// Decode signals for a single I-PDU previously extracted from a container frame.
+    ///
+    /// ``can_id`` is the parent container CAN ID; ``pdu_id`` identifies the I-PDU.
+    /// Returns ``(signal_name, signal_value)`` tuples.
+    fn decode_pdu(&self, can_id: u32, pdu_id: u32, data: &[u8]) -> Vec<(String, f64)> {
+        self.inner
+            .extract_pdu(can_id, pdu_id, data)
+            .into_iter()
+            .map(|(name, val)| (name.to_string(), val))
+            .collect()
+    }
 }
 
 /// SOME/IP signal database loaded from a CSV file.

@@ -135,6 +135,27 @@ class CanSignalDb:
         """
         ...
 
+    def extract_container_pdus(
+        self,
+        message_id: int,
+        data: bytes,
+        long_header: bool = False,
+    ) -> List[Tuple[int, bytes]]:
+        """Demultiplex a CAN-FD container frame into raw (pdu_id, pdu_payload) pairs.
+
+        Returns an empty list if message_id is not a known container frame.
+        long_header selects the 8-byte-overhead long header (default: 4-byte short).
+        """
+        ...
+
+    def decode_pdu(self, can_id: int, pdu_id: int, data: bytes) -> List[Tuple[str, float]]:
+        """Decode signals for a single I-PDU previously extracted from a container frame.
+
+        can_id is the parent container CAN ID; pdu_id identifies the I-PDU within it.
+        Returns a list of (signal_name, value) tuples.
+        """
+        ...
+
 class SomeIpSignalDb:
     """SOME/IP signal database loaded from a CSV file.
 

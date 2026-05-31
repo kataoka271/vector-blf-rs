@@ -11,7 +11,8 @@ Also ships **Python bindings** via PyO3 + maturin as the `vector_blf` package.
 - Parse BLF files: CAN, CAN-FD, CAN-FD64, Ethernet, EthernetEx
 - Parallel decompression of log containers (`--threads N`)
 - BLF → BLF copy with optional repetition
-- BLF → CSV export (raw messages or with signal decoding)
+- BLF/MF4 → CSV export (raw messages or with signal decoding)
+- BLF/MF4 → MF4 export for CAN, CAN-FD, Ethernet, and scalar signals
 - CAN signal decoding via a DBC-like CSV signal database
 - ISO-TP reassembly, UDS, DoIP, SOME/IP parsing
 - Python bindings exposing a simple iterator API
@@ -21,7 +22,7 @@ Also ships **Python bindings** via PyO3 + maturin as the `vector_blf` package.
 ## CLI
 
 ```
-vector-blf-rs parse <input.blf|.mf4> [output.blf|.csv] [--can-signals FILE] [--someip-signals FILE] [--repeat N] [--threads N]
+vector-blf-rs parse <input.blf|.mf4|.mdf> [output.blf|.csv|.mf4|.mdf] [--can-signals FILE] [--someip-signals FILE] [--repeat N] [--threads N]
 vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay FILE]
 vector-blf-rs check <signals.csv>
 ```
@@ -35,6 +36,9 @@ vector-blf-rs parse data/test_logfile.blf data/bench_large.blf --repeat 200000
 
 # Export to CSV
 vector-blf-rs parse data/test_logfile.blf out.csv
+
+# Export to MF4
+vector-blf-rs parse data/test_logfile.blf out.mf4
 
 # Export to CSV with CAN signal decoding
 vector-blf-rs parse data/test_logfile.blf out.csv --can-signals assets/can_signals.csv
@@ -89,14 +93,23 @@ for obj in vector_blf.Reader("path/to/file.blf"):
 
 ### Python API
 
-| Class | Fields |
+| Class / Function | Fields / Signature |
 |---|---|
-| `Reader(path, types=None)` | Iterator of `BaseObject`; `types` filters message types in Rust (e.g. `["Can", "CanFd"]`) |
-| `BaseObject` | `timestamp_ns: int`, `message: Can \| CanFd \| CanFd64 \| Ethernet \| EthernetEx \| None` |
+| `Reader(path, types=None)` | Iterator of `BaseObject` for `.blf`, `.mf4`, `.mdf` files; `types` filters in Rust (e.g. `["Can", "CanFd", "Mf4Signal"]`) |
+| `Reader.read_batch(n=50000)` | Returns a column-oriented `dict` ready for `pd.DataFrame`, or `None` at EOF |
+| `BaseObject` | `timestamp_ns: int`, `message: Can \| CanFd \| CanFd64 \| Ethernet \| EthernetEx \| Mf4Signal \| None` |
 | `Can` | `channel`, `id`, `is_ext_id`, `dir`, `rtr`, `dlc`, `data` |
 | `CanFd` | + `fdf`, `brs`, `esi` |
 | `CanFd64` | same as `CanFd` but `channel` is `int` (u8) |
 | `Ethernet` / `EthernetEx` | `channel`, `dir`, `src_addr`, `dst_addr`, `ether_type`, `data` |
+| `Mf4Signal` | `group`, `name`, `value`, `unit` |
+| `CanSignalDb(path)` | `.decode(message_id, data)`, `.is_container(message_id)`, `.decode_container(message_id, data, long_header=False)`, `.extract_container_pdus(message_id, data, long_header=False)`, `.decode_pdu(can_id, pdu_id, data)` |
+| `SomeIpSignalDb(path)` | `.decode(service_id, method_id, payload)` |
+| `IsoTpReassembler()` | `.push(data)` — stateful ISO-TP reassembler; returns `(uds_type, service_id, service_name, nrc, nrc_name, data)` or `None` |
+| `parse_uds(data)` | Parse a raw UDS payload; returns `(uds_type, service_id, service_name, nrc, nrc_name, data)` or `None` |
+| `parse_someip_udp(ether_type, eth_payload)` | Parse SOME/IP messages from an Ethernet frame payload (IPv4/IPv6, UDP, container PDUs); returns list of dicts |
+| `parse_doip_diag(ether_type, eth_payload)` | Parse DoIP DiagMessages; returns `[(src_addr, target_addr, uds_payload)]` |
+| `parse_eth_payload_signals(ether_type, eth_payload)` | Extract IP/TCP/UDP header fields as named signals; returns list of dicts |
 
 `dir` is a raw `int` (0 = Tx, 1 = Rx, 2 = TxRq). `Message::Other` variants (unsupported object types) appear as `None`.
 

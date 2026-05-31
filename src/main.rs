@@ -44,11 +44,11 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         overlay: Option<PathBuf>,
     },
-    /// Parse a BLF or MF4 file; optionally export to CSV, BLF, or MF4
+    /// Parse a BLF, MF4, or MDF file; optionally export to CSV, BLF, MF4, or MDF
     Parse {
-        /// Input file (.blf or .mf4)
+        /// Input file (.blf, .mf4, or .mdf)
         input: PathBuf,
-        /// Output file (.blf or .csv); omit to benchmark parse only
+        /// Output file (.blf, .csv, .mf4, or .mdf); omit to benchmark parse only
         output: Option<PathBuf>,
         /// CAN signal definitions CSV (used when output is .csv)
         #[arg(long, value_name = "FILE")]
@@ -56,7 +56,7 @@ enum Command {
         /// SOME/IP signal definitions CSV
         #[arg(long, value_name = "FILE")]
         someip_signals: Option<PathBuf>,
-        /// Repeat input N times into BLF output
+        /// Repeat BLF input N times when writing BLF, MF4, or MDF output
         #[arg(long, default_value = "1", value_name = "N")]
         repeat: u32,
         /// Number of parser threads

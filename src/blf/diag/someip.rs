@@ -68,6 +68,23 @@ pub enum ReturnCode {
 }
 
 impl ReturnCode {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Ok => 0x00,
+            Self::NotOk => 0x01,
+            Self::UnknownService => 0x02,
+            Self::UnknownMethod => 0x03,
+            Self::NotReady => 0x04,
+            Self::NotReachable => 0x05,
+            Self::Timeout => 0x06,
+            Self::WrongProtocolVersion => 0x07,
+            Self::WrongInterfaceVersion => 0x08,
+            Self::MalformedMessage => 0x09,
+            Self::WrongMessageType => 0x0A,
+            Self::Other(v) => v,
+        }
+    }
+
     pub fn from_u8(v: u8) -> Self {
         match v {
             0x00 => Self::Ok,

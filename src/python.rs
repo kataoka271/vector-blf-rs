@@ -1,9 +1,17 @@
+// PyO3's macro-generated error conversions trigger this lint as a false positive.
+#![allow(clippy::useless_conversion)]
+
+use crate::blf::diag::doip::DOIP_PORT;
 use crate::blf::{self, ContainerHeader};
 use crate::mf4;
-use pyo3::exceptions::PyStopIteration;
+use pyo3::exceptions::{PyStopIteration, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyList};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor};
+
+// (uds_type, service_id, service_name, nrc, nrc_name, data)
+type UdsTuple = (String, i32, String, Option<i32>, Option<String>, Vec<u8>);
 
 // ── message classes ──────────────────────────────────────────────────────────
 
@@ -208,7 +216,7 @@ fn parse_filter(types: Option<Vec<String>>) -> PyResult<u8> {
             "ethernetex"  => F_ETHERNETEX,
             "mf4signal"   => F_MF4SIGNAL,
             "other"       => F_OTHER,
-            other => return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            other => return Err(PyValueError::new_err(format!(
                 "unknown message type {other:?}; valid: Can, CanFd, CanFd64, Ethernet, EthernetEx, Mf4Signal, Other"
             ))),
         };
@@ -274,11 +282,11 @@ impl Reader {
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         let inner = if ext == "mf4" || ext == "mdf" {
             let r = mf4::Reader::new(BufReader::new(f))
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
             InnerReader::Mf4(r)
         } else {
             let r = blf::Reader::new(BufReader::new(f))
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
             InnerReader::Blf(r)
         };
         Ok(Self { inner, filter })
@@ -292,7 +300,7 @@ impl Reader {
         loop {
             match slf.inner.next_item() {
                 None => return Err(PyStopIteration::new_err(())),
-                Some(Err(e)) => return Err(pyo3::exceptions::PyValueError::new_err(e.to_string())),
+                Some(Err(e)) => return Err(PyValueError::new_err(e.to_string())),
                 Some(Ok(obj)) => {
                     if slf.filter == 0 || slf.filter & message_bit(&obj.message) != 0 {
                         return Ok(convert_base_object(py, obj));
@@ -300,6 +308,186 @@ impl Reader {
                 }
             }
         }
+    }
+
+    /// Read up to ``n`` records and return a column-oriented dict ready for
+    /// ``pd.DataFrame(batch)``.  Returns ``None`` at EOF.
+    ///
+    /// Columns match the bronze output schema:
+    /// ``timestamp_ns``, ``message_type``, ``channel``, ``can_id``,
+    /// ``is_ext_id``, ``dir``, ``rtr``, ``dlc``, ``data``, ``fdf``,
+    /// ``brs``, ``esi``, ``src_addr``, ``dst_addr``, ``ether_type``,
+    /// ``mf4_group``, ``mf4_name``, ``mf4_value``, ``mf4_unit``.
+    #[allow(clippy::useless_conversion)]
+    #[pyo3(signature = (n = 50_000))]
+    fn read_batch<'py>(
+        &mut self,
+        py: Python<'py>,
+        n: usize,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        // Column accumulators — all same length after the loop.
+        let mut timestamp_ns: Vec<u64> = Vec::with_capacity(n);
+        let mut message_type: Vec<&'static str> = Vec::with_capacity(n);
+        let mut channel: Vec<PyObject> = Vec::with_capacity(n);
+        let mut can_id: Vec<PyObject> = Vec::with_capacity(n);
+        let mut is_ext_id: Vec<PyObject> = Vec::with_capacity(n);
+        let mut dir: Vec<PyObject> = Vec::with_capacity(n);
+        let mut rtr: Vec<PyObject> = Vec::with_capacity(n);
+        let mut dlc: Vec<PyObject> = Vec::with_capacity(n);
+        let mut data: Vec<PyObject> = Vec::with_capacity(n);
+        let mut fdf: Vec<PyObject> = Vec::with_capacity(n);
+        let mut brs: Vec<PyObject> = Vec::with_capacity(n);
+        let mut esi: Vec<PyObject> = Vec::with_capacity(n);
+        let mut src_addr: Vec<PyObject> = Vec::with_capacity(n);
+        let mut dst_addr: Vec<PyObject> = Vec::with_capacity(n);
+        let mut ether_type: Vec<PyObject> = Vec::with_capacity(n);
+        let mut mf4_group: Vec<PyObject> = Vec::with_capacity(n);
+        let mut mf4_name: Vec<PyObject> = Vec::with_capacity(n);
+        let mut mf4_value: Vec<PyObject> = Vec::with_capacity(n);
+        let mut mf4_unit: Vec<PyObject> = Vec::with_capacity(n);
+
+        let none = py.None();
+
+        macro_rules! push_none {
+            ($($col:ident),+) => { $( $col.push(none.clone_ref(py)); )+ };
+        }
+
+        let mut count = 0usize;
+        loop {
+            if count >= n {
+                break;
+            }
+            match self.inner.next_item() {
+                None => break,
+                Some(Err(e)) => return Err(PyValueError::new_err(e.to_string())),
+                Some(Ok(obj)) => {
+                    if self.filter != 0 && self.filter & message_bit(&obj.message) == 0 {
+                        continue;
+                    }
+                    let ts = ts_ns(obj.timestamp);
+                    timestamp_ns.push(ts);
+
+                    match obj.message {
+                        blf::Message::Can(m) => {
+                            message_type.push("CAN");
+                            channel.push((m.channel as i64).into_py(py));
+                            can_id.push((m.id as i64).into_py(py));
+                            is_ext_id.push(m.is_ext_id.into_py(py));
+                            dir.push((m.dir.to_u8() as i64).into_py(py));
+                            rtr.push(m.rtr.into_py(py));
+                            dlc.push((m.dlc as i64).into_py(py));
+                            data.push(PyBytes::new_bound(py, &m.data).into_any().unbind());
+                            push_none!(
+                                fdf, brs, esi, src_addr, dst_addr, ether_type, mf4_group, mf4_name,
+                                mf4_value, mf4_unit
+                            );
+                        }
+                        blf::Message::CanFd(m) => {
+                            message_type.push("CAN_FD");
+                            channel.push((m.channel as i64).into_py(py));
+                            can_id.push((m.id as i64).into_py(py));
+                            is_ext_id.push(m.is_ext_id.into_py(py));
+                            dir.push((m.dir.to_u8() as i64).into_py(py));
+                            rtr.push(m.rtr.into_py(py));
+                            dlc.push((m.dlc as i64).into_py(py));
+                            data.push(PyBytes::new_bound(py, &m.data).into_any().unbind());
+                            fdf.push(m.fdf.into_py(py));
+                            brs.push(m.brs.into_py(py));
+                            esi.push(m.esi.into_py(py));
+                            push_none!(
+                                src_addr, dst_addr, ether_type, mf4_group, mf4_name, mf4_value,
+                                mf4_unit
+                            );
+                        }
+                        blf::Message::CanFd64(m) => {
+                            message_type.push("CAN_FD64");
+                            channel.push((m.channel as i64).into_py(py));
+                            can_id.push((m.id as i64).into_py(py));
+                            is_ext_id.push(m.is_ext_id.into_py(py));
+                            dir.push((m.dir.to_u8() as i64).into_py(py));
+                            rtr.push(m.rtr.into_py(py));
+                            dlc.push((m.dlc as i64).into_py(py));
+                            data.push(PyBytes::new_bound(py, &m.data).into_any().unbind());
+                            fdf.push(m.fdf.into_py(py));
+                            brs.push(m.brs.into_py(py));
+                            esi.push(m.esi.into_py(py));
+                            push_none!(
+                                src_addr, dst_addr, ether_type, mf4_group, mf4_name, mf4_value,
+                                mf4_unit
+                            );
+                        }
+                        blf::Message::Ethernet(m) => {
+                            message_type.push("ETH");
+                            channel.push((m.channel as i64).into_py(py));
+                            push_none!(can_id, is_ext_id, rtr, dlc, fdf, brs, esi);
+                            dir.push((m.dir.to_u8() as i64).into_py(py));
+                            data.push(PyBytes::new_bound(py, &m.data).into_any().unbind());
+                            src_addr.push(PyBytes::new_bound(py, &m.src_addr).into_any().unbind());
+                            dst_addr.push(PyBytes::new_bound(py, &m.dst_addr).into_any().unbind());
+                            ether_type.push((m.ether_type as i64).into_py(py));
+                            push_none!(mf4_group, mf4_name, mf4_value, mf4_unit);
+                        }
+                        blf::Message::EthernetEx(m) => {
+                            message_type.push("ETH_EX");
+                            channel.push((m.channel as i64).into_py(py));
+                            push_none!(can_id, is_ext_id, rtr, dlc, fdf, brs, esi);
+                            dir.push((m.dir.to_u8() as i64).into_py(py));
+                            data.push(PyBytes::new_bound(py, &m.data).into_any().unbind());
+                            src_addr.push(PyBytes::new_bound(py, &m.src_addr).into_any().unbind());
+                            dst_addr.push(PyBytes::new_bound(py, &m.dst_addr).into_any().unbind());
+                            ether_type.push((m.ether_type as i64).into_py(py));
+                            push_none!(mf4_group, mf4_name, mf4_value, mf4_unit);
+                        }
+                        blf::Message::Mf4Signal(m) => {
+                            message_type.push("MF4_SIGNAL");
+                            push_none!(
+                                channel, can_id, is_ext_id, dir, rtr, dlc, data, fdf, brs, esi,
+                                src_addr, dst_addr, ether_type
+                            );
+                            mf4_group.push(m.group.into_py(py));
+                            mf4_name.push(m.name.into_py(py));
+                            mf4_value.push(m.value.into_py(py));
+                            mf4_unit.push(m.unit.into_py(py));
+                        }
+                        blf::Message::Other(_, _) => {
+                            message_type.push("OTHER");
+                            push_none!(
+                                channel, can_id, is_ext_id, dir, rtr, dlc, data, fdf, brs, esi,
+                                src_addr, dst_addr, ether_type, mf4_group, mf4_name, mf4_value,
+                                mf4_unit
+                            );
+                        }
+                    }
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            return Ok(None);
+        }
+
+        let d = PyDict::new_bound(py);
+        d.set_item("timestamp_ns", PyList::new_bound(py, &timestamp_ns))?;
+        d.set_item("message_type", PyList::new_bound(py, &message_type))?;
+        d.set_item("channel", PyList::new_bound(py, &channel))?;
+        d.set_item("can_id", PyList::new_bound(py, &can_id))?;
+        d.set_item("is_ext_id", PyList::new_bound(py, &is_ext_id))?;
+        d.set_item("dir", PyList::new_bound(py, &dir))?;
+        d.set_item("rtr", PyList::new_bound(py, &rtr))?;
+        d.set_item("dlc", PyList::new_bound(py, &dlc))?;
+        d.set_item("data", PyList::new_bound(py, &data))?;
+        d.set_item("fdf", PyList::new_bound(py, &fdf))?;
+        d.set_item("brs", PyList::new_bound(py, &brs))?;
+        d.set_item("esi", PyList::new_bound(py, &esi))?;
+        d.set_item("src_addr", PyList::new_bound(py, &src_addr))?;
+        d.set_item("dst_addr", PyList::new_bound(py, &dst_addr))?;
+        d.set_item("ether_type", PyList::new_bound(py, &ether_type))?;
+        d.set_item("mf4_group", PyList::new_bound(py, &mf4_group))?;
+        d.set_item("mf4_name", PyList::new_bound(py, &mf4_name))?;
+        d.set_item("mf4_value", PyList::new_bound(py, &mf4_value))?;
+        d.set_item("mf4_unit", PyList::new_bound(py, &mf4_unit))?;
+        Ok(Some(d))
     }
 }
 
@@ -326,8 +514,7 @@ impl CanSignalDb {
     fn new(path: &str) -> PyResult<Self> {
         let f =
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        let db = blf::CanSignalDb::from_csv(f)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let db = blf::CanSignalDb::from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner: db })
     }
 
@@ -394,8 +581,8 @@ impl SomeIpSignalDb {
     fn new(path: &str) -> PyResult<Self> {
         let f =
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        let db = blf::SomeIpSignalDb::from_csv(f)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let db =
+            blf::SomeIpSignalDb::from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner: db })
     }
 
@@ -412,6 +599,198 @@ impl SomeIpSignalDb {
     }
 }
 
+// ── IsoTpReassembler ─────────────────────────────────────────────────────────
+
+/// Stateful ISO-TP (ISO 15765-2) reassembler for a single sender/receiver conversation.
+///
+/// Create one instance per ``(channel, can_id)`` pair and call ``push()`` for
+/// every CAN frame in timestamp order.  Handles standard and extended
+/// (CAN-FD) Single-Frame and First-Frame formats automatically.
+///
+/// Example::
+///
+///     r = vector_blf.IsoTpReassembler()
+///     result = r.push(frame_data)  # returns tuple or None
+#[pyclass]
+pub struct IsoTpReassembler {
+    inner: blf::Reassembler,
+}
+
+#[pymethods]
+impl IsoTpReassembler {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: blf::Reassembler::new(),
+        }
+    }
+
+    /// Feed one CAN frame payload.
+    ///
+    /// Returns ``(uds_type, service_id, service_name, nrc, nrc_name, data)``
+    /// when a complete UDS PDU is assembled, or ``None`` if more frames are needed.
+    ///
+    /// ``uds_type`` is one of ``"Request"``, ``"PositiveResponse"``, or
+    /// ``"NegativeResponse"``.  ``nrc`` and ``nrc_name`` are ``None`` unless
+    /// the PDU is a ``NegativeResponse``.
+    fn push(&mut self, data: &[u8]) -> Option<UdsTuple> {
+        let frame = blf::IsoTpFrame::parse(data).ok()?;
+        let uds = self.inner.push(&frame).ok()??;
+        Some(uds_to_tuple(uds))
+    }
+}
+
+// ── module-level protocol parse functions ────────────────────────────────────
+
+/// Parse SOME/IP messages from an Ethernet frame payload.
+///
+/// Supports IPv4 and IPv6 outer headers, UDP transport, and AUTOSAR Container
+/// PDU Transport (multiple back-to-back SOME/IP PDUs per UDP datagram).
+/// SOME/IP-SD (service_id=0xFFFF) frames are silently skipped.
+///
+/// Returns a list of dicts.  Keys match the ``_SOMEIP_ROW_SCHEMA`` used in the
+/// DLT pipeline: ``src_ip``, ``dst_ip``, ``udp_src_port``, ``udp_dst_port``,
+/// ``someip_service_id``, ``someip_method_id``, ``someip_length``,
+/// ``someip_client_id``, ``someip_session_id``, ``someip_protocol_version``,
+/// ``someip_interface_version``, ``someip_msg_type``, ``someip_return_code``,
+/// ``payload``.
+#[allow(clippy::useless_conversion)]
+#[pyfunction]
+fn parse_someip_udp<'py>(
+    py: Python<'py>,
+    ether_type: u16,
+    eth_payload: &[u8],
+) -> PyResult<Vec<Bound<'py, PyDict>>> {
+    let ip = match blf::Ip::parse(ether_type, eth_payload) {
+        Ok(ip) => ip,
+        Err(_) => return Ok(vec![]),
+    };
+    let (src_ip, dst_ip, transport_data) = match &ip {
+        blf::Ip::V4(v4) => (
+            format!(
+                "{}.{}.{}.{}",
+                v4.src_addr[0], v4.src_addr[1], v4.src_addr[2], v4.src_addr[3]
+            ),
+            format!(
+                "{}.{}.{}.{}",
+                v4.dst_addr[0], v4.dst_addr[1], v4.dst_addr[2], v4.dst_addr[3]
+            ),
+            v4.parse_transport(),
+        ),
+        blf::Ip::V6(v6) => (
+            ipv6_str(&v6.src_addr),
+            ipv6_str(&v6.dst_addr),
+            v6.parse_transport(),
+        ),
+    };
+    let udp = match transport_data {
+        Ok(blf::transport::Transport::Udp(u)) => u,
+        _ => return Ok(vec![]),
+    };
+
+    let mut results = Vec::new();
+    let mut pos = 0usize;
+    while pos < udp.data.len() {
+        let slice = &udp.data[pos..];
+        let msg = match blf::SomeIp::parse(Cursor::new(slice)) {
+            Ok(m) => m,
+            Err(_) => break,
+        };
+        // skip SOME/IP-SD and frames with invalid protocol version
+        if !msg.is_sd() && msg.protocol_version == 0x01 {
+            let valid_msg_types: &[u8] = &[0x00, 0x01, 0x02, 0x80, 0x81];
+            if valid_msg_types.contains(&msg.message_type.to_u8()) {
+                let d = PyDict::new_bound(py);
+                d.set_item("src_ip", &src_ip)?;
+                d.set_item("dst_ip", &dst_ip)?;
+                d.set_item("udp_src_port", udp.src_port as i64)?;
+                d.set_item("udp_dst_port", udp.dst_port as i64)?;
+                d.set_item("someip_service_id", msg.service_id as i64)?;
+                d.set_item("someip_method_id", msg.method_id as i64)?;
+                // length field = 8 (fixed header after length) + payload
+                let length = (8 + msg.payload.len()) as i64;
+                d.set_item("someip_length", length)?;
+                d.set_item("someip_client_id", msg.client_id as i64)?;
+                d.set_item("someip_session_id", msg.session_id as i64)?;
+                d.set_item("someip_protocol_version", msg.protocol_version as i64)?;
+                d.set_item("someip_interface_version", msg.interface_version as i64)?;
+                d.set_item("someip_msg_type", msg.message_type.to_u8() as i64)?;
+                d.set_item("someip_return_code", msg.return_code.to_u8() as i64)?;
+                d.set_item("payload", PyBytes::new_bound(py, &msg.payload))?;
+                results.push(d);
+            }
+        }
+        // advance: 8-byte fixed header (service+method+length) + length-field-value (8+payload)
+        pos += 16 + msg.payload.len();
+    }
+    Ok(results)
+}
+
+/// Parse DoIP DiagMessages from an Ethernet frame payload.
+///
+/// Strips the IP and TCP headers (port 13400), then iterates over back-to-back
+/// DoIP frames in the TCP segment.  Each DiagMessage yields a
+/// ``(src_addr, target_addr, uds_payload)`` tuple where addresses are DoIP
+/// logical addresses (integers) and ``uds_payload`` is the raw UDS bytes.
+///
+/// Returns an empty list if the frame is not TCP/13400 or contains no
+/// DiagMessages.
+#[allow(clippy::useless_conversion)]
+#[pyfunction]
+fn parse_doip_diag<'py>(
+    py: Python<'py>,
+    ether_type: u16,
+    eth_payload: &[u8],
+) -> PyResult<Vec<(i64, i64, Bound<'py, PyBytes>)>> {
+    let ip = match blf::Ip::parse(ether_type, eth_payload) {
+        Ok(ip) => ip,
+        Err(_) => return Ok(vec![]),
+    };
+    let transport_data = match &ip {
+        blf::Ip::V4(v4) => v4.parse_transport(),
+        blf::Ip::V6(v6) => v6.parse_transport(),
+    };
+    let tcp = match transport_data {
+        Ok(blf::transport::Transport::Tcp(t)) => t,
+        _ => return Ok(vec![]),
+    };
+    if tcp.src_port != DOIP_PORT && tcp.dst_port != DOIP_PORT {
+        return Ok(vec![]);
+    }
+
+    let mut results = Vec::new();
+    let mut pos = 0usize;
+    while pos + 8 <= tcp.data.len() {
+        let msg = match blf::DoIp::parse(Cursor::new(&tcp.data[pos..])) {
+            Ok(m) => m,
+            Err(_) => break,
+        };
+        let consumed = 8 + msg.payload.len();
+        if msg.payload_type == blf::PayloadType::DiagMessage {
+            if let Ok(diag) = msg.parse_diag_message() {
+                let uds_bytes = PyBytes::new_bound(py, &diag.data);
+                results.push((diag.src_addr as i64, diag.target_addr as i64, uds_bytes));
+            }
+        }
+        pos += consumed;
+    }
+    Ok(results)
+}
+
+/// Parse a raw UDS payload (ISO 14229-1).
+///
+/// Returns ``(uds_type, service_id, service_name, nrc, nrc_name, data)``
+/// or ``None`` if the payload is empty or malformed.
+///
+/// ``uds_type`` is one of ``"Request"``, ``"PositiveResponse"``, or
+/// ``"NegativeResponse"``.  ``nrc`` and ``nrc_name`` are ``None`` unless
+/// the PDU is a ``NegativeResponse``.
+#[pyfunction]
+fn parse_uds(data: &[u8]) -> Option<UdsTuple> {
+    let uds = blf::Uds::parse(data).ok()?;
+    Some(uds_to_tuple(uds))
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn hex(data: &[u8]) -> String {
@@ -425,6 +804,140 @@ fn ts_ns(ts: blf::Timestamp) -> u64 {
     match ts {
         blf::Timestamp::Nanosecond(ns) => ns,
         blf::Timestamp::Microsecond(us) => us * 1_000,
+    }
+}
+
+fn ipv6_str(addr: &[u8; 16]) -> String {
+    (0..8)
+        .map(|i| {
+            format!(
+                "{:04x}",
+                ((addr[i * 2] as u16) << 8) | addr[i * 2 + 1] as u16
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn service_name(sid: blf::ServiceId) -> String {
+    match sid {
+        blf::ServiceId::DiagnosticSessionControl => "DiagnosticSessionControl".into(),
+        blf::ServiceId::EcuReset => "EcuReset".into(),
+        blf::ServiceId::ClearDiagnosticInformation => "ClearDiagnosticInformation".into(),
+        blf::ServiceId::ReadDtcInformation => "ReadDtcInformation".into(),
+        blf::ServiceId::ReadDataByIdentifier => "ReadDataByIdentifier".into(),
+        blf::ServiceId::ReadMemoryByAddress => "ReadMemoryByAddress".into(),
+        blf::ServiceId::ReadScalingDataByIdentifier => "ReadScalingDataByIdentifier".into(),
+        blf::ServiceId::SecurityAccess => "SecurityAccess".into(),
+        blf::ServiceId::CommunicationControl => "CommunicationControl".into(),
+        blf::ServiceId::Authentication => "Authentication".into(),
+        blf::ServiceId::ReadDataByPeriodicIdentifier => "ReadDataByPeriodicIdentifier".into(),
+        blf::ServiceId::DynamicallyDefineDataIdentifier => "DynamicallyDefineDataIdentifier".into(),
+        blf::ServiceId::WriteDataByIdentifier => "WriteDataByIdentifier".into(),
+        blf::ServiceId::InputOutputControlByIdentifier => "InputOutputControlByIdentifier".into(),
+        blf::ServiceId::RoutineControl => "RoutineControl".into(),
+        blf::ServiceId::RequestDownload => "RequestDownload".into(),
+        blf::ServiceId::RequestUpload => "RequestUpload".into(),
+        blf::ServiceId::TransferData => "TransferData".into(),
+        blf::ServiceId::RequestTransferExit => "RequestTransferExit".into(),
+        blf::ServiceId::RequestFileTransfer => "RequestFileTransfer".into(),
+        blf::ServiceId::WriteMemoryByAddress => "WriteMemoryByAddress".into(),
+        blf::ServiceId::TesterPresent => "TesterPresent".into(),
+        blf::ServiceId::AccessTimingParameter => "AccessTimingParameter".into(),
+        blf::ServiceId::SecuredDataTransmission => "SecuredDataTransmission".into(),
+        blf::ServiceId::ControlDtcSetting => "ControlDtcSetting".into(),
+        blf::ServiceId::ResponseOnEvent => "ResponseOnEvent".into(),
+        blf::ServiceId::LinkControl => "LinkControl".into(),
+        blf::ServiceId::Other(v) => format!("Unknown_0x{v:02X}"),
+    }
+}
+
+fn nrc_name(nrc: blf::Nrc) -> String {
+    match nrc {
+        blf::Nrc::GeneralReject => "GeneralReject".into(),
+        blf::Nrc::ServiceNotSupported => "ServiceNotSupported".into(),
+        blf::Nrc::SubFunctionNotSupported => "SubFunctionNotSupported".into(),
+        blf::Nrc::IncorrectMessageLengthOrInvalidFormat => {
+            "IncorrectMessageLengthOrInvalidFormat".into()
+        }
+        blf::Nrc::ResponseTooLong => "ResponseTooLong".into(),
+        blf::Nrc::BusyRepeatRequest => "BusyRepeatRequest".into(),
+        blf::Nrc::ConditionsNotCorrect => "ConditionsNotCorrect".into(),
+        blf::Nrc::RequestSequenceError => "RequestSequenceError".into(),
+        blf::Nrc::NoResponseFromSubnetComponent => "NoResponseFromSubnetComponent".into(),
+        blf::Nrc::FailurePreventsExecution => "FailurePreventsExecutionOfRequestedAction".into(),
+        blf::Nrc::RequestOutOfRange => "RequestOutOfRange".into(),
+        blf::Nrc::SecurityAccessDenied => "SecurityAccessDenied".into(),
+        blf::Nrc::InvalidKey => "InvalidKey".into(),
+        blf::Nrc::ExceededNumberOfAttempts => "ExceededNumberOfAttempts".into(),
+        blf::Nrc::RequiredTimeDelayNotExpired => "RequiredTimeDelayNotExpired".into(),
+        blf::Nrc::UploadDownloadNotAccepted => "UploadDownloadNotAccepted".into(),
+        blf::Nrc::TransferDataSuspended => "TransferDataSuspended".into(),
+        blf::Nrc::GeneralProgrammingFailure => "GeneralProgrammingFailure".into(),
+        blf::Nrc::WrongBlockSequenceCounter => "WrongBlockSequenceCounter".into(),
+        blf::Nrc::ResponsePending => "RequestCorrectlyReceivedResponsePending".into(),
+        blf::Nrc::SubFunctionNotSupportedInActiveSession => {
+            "SubFunctionNotSupportedInActiveSession".into()
+        }
+        blf::Nrc::ServiceNotSupportedInActiveSession => "ServiceNotSupportedInActiveSession".into(),
+        blf::Nrc::Other(v) => format!("Unknown_0x{v:02X}"),
+    }
+}
+
+fn uds_to_tuple(uds: blf::Uds) -> (String, i32, String, Option<i32>, Option<String>, Vec<u8>) {
+    match uds {
+        blf::Uds::Request { service, data } => (
+            "Request".into(),
+            service.to_u8() as i32,
+            service_name(service),
+            None,
+            None,
+            data,
+        ),
+        blf::Uds::PositiveResponse { service, data } => (
+            "PositiveResponse".into(),
+            service.to_u8() as i32,
+            service_name(service),
+            None,
+            None,
+            data,
+        ),
+        blf::Uds::NegativeResponse { service, nrc } => (
+            "NegativeResponse".into(),
+            service.to_u8() as i32,
+            service_name(service),
+            Some(nrc_to_u8(nrc) as i32),
+            Some(nrc_name(nrc)),
+            vec![],
+        ),
+    }
+}
+
+fn nrc_to_u8(nrc: blf::Nrc) -> u8 {
+    match nrc {
+        blf::Nrc::GeneralReject => 0x10,
+        blf::Nrc::ServiceNotSupported => 0x11,
+        blf::Nrc::SubFunctionNotSupported => 0x12,
+        blf::Nrc::IncorrectMessageLengthOrInvalidFormat => 0x13,
+        blf::Nrc::ResponseTooLong => 0x14,
+        blf::Nrc::BusyRepeatRequest => 0x21,
+        blf::Nrc::ConditionsNotCorrect => 0x22,
+        blf::Nrc::RequestSequenceError => 0x24,
+        blf::Nrc::NoResponseFromSubnetComponent => 0x25,
+        blf::Nrc::FailurePreventsExecution => 0x26,
+        blf::Nrc::RequestOutOfRange => 0x31,
+        blf::Nrc::SecurityAccessDenied => 0x33,
+        blf::Nrc::InvalidKey => 0x35,
+        blf::Nrc::ExceededNumberOfAttempts => 0x36,
+        blf::Nrc::RequiredTimeDelayNotExpired => 0x37,
+        blf::Nrc::UploadDownloadNotAccepted => 0x70,
+        blf::Nrc::TransferDataSuspended => 0x71,
+        blf::Nrc::GeneralProgrammingFailure => 0x72,
+        blf::Nrc::WrongBlockSequenceCounter => 0x73,
+        blf::Nrc::ResponsePending => 0x78,
+        blf::Nrc::SubFunctionNotSupportedInActiveSession => 0x7E,
+        blf::Nrc::ServiceNotSupportedInActiveSession => 0x7F,
+        blf::Nrc::Other(v) => v,
     }
 }
 
@@ -537,5 +1050,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Mf4Signal>()?;
     m.add_class::<CanSignalDb>()?;
     m.add_class::<SomeIpSignalDb>()?;
+    m.add_class::<IsoTpReassembler>()?;
+    m.add_function(wrap_pyfunction!(parse_someip_udp, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_doip_diag, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_uds, m)?)?;
     Ok(())
 }

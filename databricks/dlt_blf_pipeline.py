@@ -85,12 +85,12 @@ from pyspark.sql.types import (
 
 # ── pipeline parameters ───────────────────────────────────────────────────────
 
-SOURCE_PATH = spark.conf.get("blf.source_path")  # noqa: F821
-TARGET_CATALOG = spark.conf.get("blf.target_catalog", "main")  # noqa: F821
-TARGET_SCHEMA = spark.conf.get("blf.target_schema", "blf")  # noqa: F821
-SIGNALS_PATH = spark.conf.get("blf.signals_path", "")  # noqa: F821
-SOMEIP_SIGNALS_PATH = spark.conf.get("blf.someip_signals_path", "")  # noqa: F821
-CONTAINER_LONG_HEADER: bool = spark.conf.get("blf.container_long_header", "false").lower() == "true"  # noqa: F821
+SOURCE_PATH = spark.conf.get("blf.source_path")
+TARGET_CATALOG = spark.conf.get("blf.target_catalog", "main")
+TARGET_SCHEMA = spark.conf.get("blf.target_schema", "blf")
+SIGNALS_PATH = spark.conf.get("blf.signals_path", "")
+SOMEIP_SIGNALS_PATH = spark.conf.get("blf.someip_signals_path", "")
+CONTAINER_LONG_HEADER: bool = spark.conf.get("blf.container_long_header", "false").lower() == "true"
 
 # ── bronze output schema (flat rows emitted by _parse_blf_batch) ──────────────
 
@@ -213,7 +213,7 @@ def _parse_blf_batch(iterator):
     """
     from datetime import datetime, timezone
 
-    import vector_blf  # noqa: PLC0415
+    import vector_blf
 
     for batch_df in iterator:
         now = datetime.now(timezone.utc)
@@ -379,7 +379,7 @@ def _parse_blf_batch(iterator):
                 if uds_rows:
                     yield pd.DataFrame(uds_rows)
 
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 print(f"[blf_pipeline] failed to parse {spark_path!r}: {exc}")
 
 
@@ -399,7 +399,7 @@ def _parse_blf_batch(iterator):
 def blf_bronze():
     """Stream new BLF files via Auto Loader; expand each file into rows."""
     return (
-        spark.readStream.format("cloudFiles")  # noqa: F821
+        spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "binaryFile")
         .option("pathGlobFilter", "*.{blf,mf4,mdf}")
         # Auto Loader tracks processed files in a _checkpoint directory.
@@ -482,7 +482,7 @@ _SIGNAL_DB_CACHE: dict = {}
 def _load_signal_db(csv_path: str):
     if csv_path in _SIGNAL_DB_CACHE:
         return _SIGNAL_DB_CACHE[csv_path]
-    import vector_blf  # noqa: PLC0415
+    import vector_blf
 
     db = None
     if csv_path:
@@ -615,7 +615,7 @@ def blf_silver_eth():
 @pandas_udf(_ETH_SIGNAL_RESULT_SCHEMA)
 def _parse_eth_payload(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
     """Extract IP/TCP/UDP header fields from the Ethernet payload as named signals."""
-    import vector_blf  # noqa: PLC0415
+    import vector_blf
 
     result = []
     for ether_type, data in zip(ether_types, data_col):
@@ -738,7 +738,7 @@ def _load_someip_signal_db(csv_path: str):
     """Load SOME/IP signal CSV; returns a vector_blf.SomeIpSignalDb or None."""
     if csv_path in _SOMEIP_SIGNAL_DB_CACHE:
         return _SOMEIP_SIGNAL_DB_CACHE[csv_path]
-    import vector_blf  # noqa: PLC0415
+    import vector_blf
 
     db = None
     if csv_path:
@@ -755,7 +755,7 @@ def _parse_someip(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
     parses all back-to-back SOME/IP PDUs.  IPv4 and IPv6 outer headers are
     both handled in Rust.
     """
-    import vector_blf  # noqa: PLC0415
+    import vector_blf
 
     result = []
     for ether_type, data in zip(ether_types, data_col):

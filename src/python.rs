@@ -341,6 +341,9 @@ impl Reader {
         let mut src_addr: Vec<PyObject> = Vec::with_capacity(n);
         let mut dst_addr: Vec<PyObject> = Vec::with_capacity(n);
         let mut ether_type: Vec<PyObject> = Vec::with_capacity(n);
+        let mut vlan_tpid: Vec<PyObject> = Vec::with_capacity(n);
+        let mut vlan_cos: Vec<PyObject> = Vec::with_capacity(n);
+        let mut vlan_id: Vec<PyObject> = Vec::with_capacity(n);
         let mut mf4_group: Vec<PyObject> = Vec::with_capacity(n);
         let mut mf4_name: Vec<PyObject> = Vec::with_capacity(n);
         let mut mf4_value: Vec<PyObject> = Vec::with_capacity(n);
@@ -378,8 +381,8 @@ impl Reader {
                             dlc.push((m.dlc as i64).into_py(py));
                             data.push(PyBytes::new_bound(py, &m.data).into_any().unbind());
                             push_none!(
-                                fdf, brs, esi, src_addr, dst_addr, ether_type, mf4_group, mf4_name,
-                                mf4_value, mf4_unit
+                                fdf, brs, esi, src_addr, dst_addr, ether_type, vlan_tpid,
+                                vlan_cos, vlan_id, mf4_group, mf4_name, mf4_value, mf4_unit
                             );
                         }
                         blf::Message::CanFd(m) => {
@@ -395,8 +398,8 @@ impl Reader {
                             brs.push(m.brs.into_py(py));
                             esi.push(m.esi.into_py(py));
                             push_none!(
-                                src_addr, dst_addr, ether_type, mf4_group, mf4_name, mf4_value,
-                                mf4_unit
+                                src_addr, dst_addr, ether_type, vlan_tpid, vlan_cos, vlan_id,
+                                mf4_group, mf4_name, mf4_value, mf4_unit
                             );
                         }
                         blf::Message::CanFd64(m) => {
@@ -412,8 +415,8 @@ impl Reader {
                             brs.push(m.brs.into_py(py));
                             esi.push(m.esi.into_py(py));
                             push_none!(
-                                src_addr, dst_addr, ether_type, mf4_group, mf4_name, mf4_value,
-                                mf4_unit
+                                src_addr, dst_addr, ether_type, vlan_tpid, vlan_cos, vlan_id,
+                                mf4_group, mf4_name, mf4_value, mf4_unit
                             );
                         }
                         blf::Message::Ethernet(m) => {
@@ -425,6 +428,14 @@ impl Reader {
                             src_addr.push(PyBytes::new_bound(py, &m.src_addr).into_any().unbind());
                             dst_addr.push(PyBytes::new_bound(py, &m.dst_addr).into_any().unbind());
                             ether_type.push((m.ether_type as i64).into_py(py));
+                            match &m.vlan {
+                                Some(v) => {
+                                    vlan_tpid.push((v.tpid as i64).into_py(py));
+                                    vlan_cos.push((v.pri as i64).into_py(py));
+                                    vlan_id.push((v.vid as i64).into_py(py));
+                                }
+                                None => { push_none!(vlan_tpid, vlan_cos, vlan_id); }
+                            }
                             push_none!(mf4_group, mf4_name, mf4_value, mf4_unit);
                         }
                         blf::Message::EthernetEx(m) => {
@@ -436,13 +447,21 @@ impl Reader {
                             src_addr.push(PyBytes::new_bound(py, &m.src_addr).into_any().unbind());
                             dst_addr.push(PyBytes::new_bound(py, &m.dst_addr).into_any().unbind());
                             ether_type.push((m.ether_type as i64).into_py(py));
+                            match &m.vlan {
+                                Some(v) => {
+                                    vlan_tpid.push((v.tpid as i64).into_py(py));
+                                    vlan_cos.push((v.pri as i64).into_py(py));
+                                    vlan_id.push((v.vid as i64).into_py(py));
+                                }
+                                None => { push_none!(vlan_tpid, vlan_cos, vlan_id); }
+                            }
                             push_none!(mf4_group, mf4_name, mf4_value, mf4_unit);
                         }
                         blf::Message::Mf4Signal(m) => {
                             message_type.push("MF4_SIGNAL");
                             push_none!(
                                 channel, can_id, is_ext_id, dir, rtr, dlc, data, fdf, brs, esi,
-                                src_addr, dst_addr, ether_type
+                                src_addr, dst_addr, ether_type, vlan_tpid, vlan_cos, vlan_id
                             );
                             mf4_group.push(m.group.into_py(py));
                             mf4_name.push(m.name.into_py(py));
@@ -453,8 +472,8 @@ impl Reader {
                             message_type.push("OTHER");
                             push_none!(
                                 channel, can_id, is_ext_id, dir, rtr, dlc, data, fdf, brs, esi,
-                                src_addr, dst_addr, ether_type, mf4_group, mf4_name, mf4_value,
-                                mf4_unit
+                                src_addr, dst_addr, ether_type, vlan_tpid, vlan_cos, vlan_id,
+                                mf4_group, mf4_name, mf4_value, mf4_unit
                             );
                         }
                     }
@@ -483,6 +502,9 @@ impl Reader {
         d.set_item("src_addr", PyList::new_bound(py, &src_addr))?;
         d.set_item("dst_addr", PyList::new_bound(py, &dst_addr))?;
         d.set_item("ether_type", PyList::new_bound(py, &ether_type))?;
+        d.set_item("vlan_tpid", PyList::new_bound(py, &vlan_tpid))?;
+        d.set_item("vlan_cos", PyList::new_bound(py, &vlan_cos))?;
+        d.set_item("vlan_id", PyList::new_bound(py, &vlan_id))?;
         d.set_item("mf4_group", PyList::new_bound(py, &mf4_group))?;
         d.set_item("mf4_name", PyList::new_bound(py, &mf4_name))?;
         d.set_item("mf4_value", PyList::new_bound(py, &mf4_value))?;

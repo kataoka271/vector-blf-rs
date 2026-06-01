@@ -88,7 +88,13 @@ class Reader:
 
         Returns None at EOF. Columns: timestamp_ns, message_type, channel, can_id,
         is_ext_id, dir, rtr, dlc, data, fdf, brs, esi, src_addr, dst_addr,
-        ether_type, mf4_group, mf4_name, mf4_value, mf4_unit.
+        ether_type, vlan_tpid, vlan_cos, vlan_id,
+        mf4_group, mf4_name, mf4_value, mf4_unit.
+
+        vlan_tpid / vlan_cos / vlan_id are non-null only for ETH/ETH_EX rows
+        where the frame carries an 802.1Q (0x8100) or 802.1AD (0x88A8) VLAN tag.
+        The Rust codec strips the tag before populating ether_type and data, so
+        ether_type is already the inner EtherType and data starts at the actual payload.
         """
         ...
 

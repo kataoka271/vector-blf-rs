@@ -191,14 +191,14 @@ cargo build --release
 # → ~33 MB, 3.4M objects
 ```
 
-**2. Benchmark parse throughput** (the CLI prints timing for each phase):
+**2. Benchmark parse throughput** (use `--quiet` to suppress table output and get clean timing lines):
 
 ```bash
 # single-threaded
-./target/release/vector-blf-rs parse data/bench_large.blf
+./target/release/vector-blf-rs parse data/bench_large.blf --quiet
 
 # multi-threaded
-./target/release/vector-blf-rs parse data/bench_large.blf --threads 4
+./target/release/vector-blf-rs parse data/bench_large.blf --threads 4 --quiet
 ```
 
 Output shows scan time (I/O-bound, benefits from BufReader) and parse time (zlib-bound, scales with `--threads`).
@@ -209,13 +209,13 @@ Output shows scan time (I/O-bound, benefits from BufReader) and parse time (zlib
 ./target/release/vector-blf-rs parse data/bench_large.blf out.csv
 ```
 
-**Key numbers on a 33 MB / 58K-container file (for regression detection):**
+**Key numbers on a 32 MB / 58K-container file (for regression detection):**
 
 | Phase | Expected |
 |-------|----------|
-| Scan (1 thread) | ~0.25 s |
-| Parse (1 thread) | ~2.3 s |
-| Parse (4 threads) | ~1.2 s |
+| Scan (1 thread) | ~0.28 s |
+| Parse (1 thread) | ~2.25 s |
+| Parse (4 threads) | ~1.3 s |
 | CSV export | ~0.18 s |
 
 > `data/bench_large.blf` is gitignored. Regenerate it with the command above before benchmarking.

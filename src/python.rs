@@ -238,6 +238,13 @@ impl InnerReader {
             InnerReader::Mf4(r) => r.next(),
         }
     }
+
+    fn start_time_ns(&self) -> u64 {
+        match self {
+            InnerReader::Blf(r) => ts_ns(r.header.start_timestamp),
+            InnerReader::Mf4(r) => r.start_time_ns,
+        }
+    }
 }
 
 /// Iterator over BaseObjects in a BLF or MF4 file.
@@ -290,6 +297,15 @@ impl Reader {
             InnerReader::Blf(r)
         };
         Ok(Self { inner, filter })
+    }
+
+    /// Return the recording start time as nanoseconds since the Unix epoch.
+    ///
+    /// For BLF files this reads the ``start_timestamp`` field of the file header.
+    /// For MF4/MDF files this reads the HD block ``start_time_ns`` field.
+    /// Returns 0 when the file header contains no valid timestamp.
+    fn start_time_ns(&self) -> u64 {
+        self.inner.start_time_ns()
     }
 
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -381,8 +397,8 @@ impl Reader {
                             dlc.push((m.dlc as i64).into_py(py));
                             data.push(PyBytes::new_bound(py, &m.data).into_any().unbind());
                             push_none!(
-                                fdf, brs, esi, src_addr, dst_addr, ether_type, vlan_tpid,
-                                vlan_cos, vlan_id, mf4_group, mf4_name, mf4_value, mf4_unit
+                                fdf, brs, esi, src_addr, dst_addr, ether_type, vlan_tpid, vlan_cos,
+                                vlan_id, mf4_group, mf4_name, mf4_value, mf4_unit
                             );
                         }
                         blf::Message::CanFd(m) => {
@@ -434,7 +450,9 @@ impl Reader {
                                     vlan_cos.push((v.pri as i64).into_py(py));
                                     vlan_id.push((v.vid as i64).into_py(py));
                                 }
-                                None => { push_none!(vlan_tpid, vlan_cos, vlan_id); }
+                                None => {
+                                    push_none!(vlan_tpid, vlan_cos, vlan_id);
+                                }
                             }
                             push_none!(mf4_group, mf4_name, mf4_value, mf4_unit);
                         }
@@ -453,7 +471,9 @@ impl Reader {
                                     vlan_cos.push((v.pri as i64).into_py(py));
                                     vlan_id.push((v.vid as i64).into_py(py));
                                 }
-                                None => { push_none!(vlan_tpid, vlan_cos, vlan_id); }
+                                None => {
+                                    push_none!(vlan_tpid, vlan_cos, vlan_id);
+                                }
                             }
                             push_none!(mf4_group, mf4_name, mf4_value, mf4_unit);
                         }
@@ -1030,8 +1050,10 @@ fn parse_eth_payload_signals<'py>(
                     "igmp.group",
                     format!(
                         "{}.{}.{}.{}",
-                        igmp.group_addr[0], igmp.group_addr[1],
-                        igmp.group_addr[2], igmp.group_addr[3]
+                        igmp.group_addr[0],
+                        igmp.group_addr[1],
+                        igmp.group_addr[2],
+                        igmp.group_addr[3]
                     )
                 );
                 sig_num!("igmp.max_resp_time", igmp.max_resp_time);

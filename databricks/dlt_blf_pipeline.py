@@ -103,6 +103,7 @@ _BRONZE_OUTPUT_SCHEMA = StructType(
         StructField("_file_size_bytes", LongType()),
         StructField("_ingested_at", TimestampType(), nullable=False),
         StructField("timestamp_ns", LongType(), nullable=False),
+        StructField("event_time", TimestampType()),
         StructField("message_type", StringType(), nullable=False),
         # CAN / CAN-FD / CAN-FD64
         StructField("channel", IntegerType()),
@@ -249,6 +250,7 @@ def _parse_blf_batch(iterator):
                     local,
                     types=["Can", "CanFd", "CanFd64", "Ethernet", "EthernetEx", "Mf4Signal"],
                 )
+                start_ns = reader.start_time_ns()
                 while True:
                     batch = reader.read_batch(_PARSE_BATCH_SIZE)
                     if batch is None:
@@ -262,6 +264,13 @@ def _parse_blf_batch(iterator):
                     batch["_file_mtime"] = [file_mtime] * n
                     batch["_file_size_bytes"] = [file_size] * n
                     batch["_ingested_at"] = [now] * n
+                    if start_ns:
+                        batch["event_time"] = [
+                            datetime.fromtimestamp((start_ns + ts) / 1e9, tz=timezone.utc)
+                            for ts in batch["timestamp_ns"]
+                        ]
+                    else:
+                        batch["event_time"] = [None] * n
                     batch["transport"] = null_n
                     batch["doip_src_addr"] = null_n
                     batch["doip_target_addr"] = null_n
@@ -312,6 +321,9 @@ def _parse_blf_batch(iterator):
                                     "_file_size_bytes": None,
                                     "_ingested_at": now,
                                     "timestamp_ns": uds_ts,
+                                    "event_time": datetime.fromtimestamp((start_ns + uds_ts) / 1e9, tz=timezone.utc)
+                                    if start_ns
+                                    else None,
                                     "message_type": "UDS_CAN",
                                     "channel": channel_col[i],
                                     "can_id": can_id_col[i],
@@ -361,6 +373,9 @@ def _parse_blf_batch(iterator):
                                         "_file_size_bytes": None,
                                         "_ingested_at": now,
                                         "timestamp_ns": ts,
+                                        "event_time": datetime.fromtimestamp((start_ns + ts) / 1e9, tz=timezone.utc)
+                                        if start_ns
+                                        else None,
                                         "message_type": "UDS_DOIP",
                                         "channel": channel_col[i],
                                         "can_id": None,
@@ -465,6 +480,7 @@ def blf_silver_can():
             "message_type",
             "timestamp_ns",
             (F.col("timestamp_ns") / 1e9).alias("timestamp_s"),
+            "event_time",
             "channel",
             F.format_string("0x%08X", F.col("can_id")).alias("can_id_hex"),
             "can_id",
@@ -625,6 +641,7 @@ def blf_silver_can_container_pdus():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "can_id",
             "can_id_hex",
@@ -637,6 +654,7 @@ def blf_silver_can_container_pdus():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "can_id",
             "can_id_hex",
@@ -669,6 +687,7 @@ def blf_silver_can_signals():
         "message_type",
         "timestamp_ns",
         "timestamp_s",
+        "event_time",
         "channel",
         "can_id",
         "can_id_hex",
@@ -695,6 +714,7 @@ def blf_silver_can_signals():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "can_id",
             "can_id_hex",
@@ -722,6 +742,7 @@ def blf_silver_can_signals():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "can_id",
             "can_id_hex",
@@ -753,6 +774,7 @@ def blf_silver_eth():
             "message_type",
             "timestamp_ns",
             (F.col("timestamp_ns") / 1e9).alias("timestamp_s"),
+            "event_time",
             "channel",
             _DIR_LABEL.alias("dir"),
             _mac_str("src_addr").alias("src_mac"),
@@ -814,6 +836,7 @@ def blf_silver_eth_signals():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "dir",
             "src_mac",
@@ -828,6 +851,7 @@ def blf_silver_eth_signals():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "dir",
             "src_mac",
@@ -866,6 +890,7 @@ def blf_silver_mf4_signals():
             "_ingested_at",
             "timestamp_ns",
             (F.col("timestamp_ns") / 1e9).alias("timestamp_s"),
+            "event_time",
             F.col("mf4_group").alias("group_name"),
             F.col("mf4_name").alias("channel_name"),
             F.col("mf4_value").alias("value"),
@@ -952,6 +977,7 @@ def blf_silver_someip():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "dir",
             "src_mac",
@@ -964,6 +990,7 @@ def blf_silver_someip():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "dir",
             "src_mac",
@@ -1048,6 +1075,7 @@ def blf_silver_someip_signals():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "dir",
             "src_mac",
@@ -1069,6 +1097,7 @@ def blf_silver_someip_signals():
             "message_type",
             "timestamp_ns",
             "timestamp_s",
+            "event_time",
             "channel",
             "dir",
             "src_mac",
@@ -1125,6 +1154,7 @@ def blf_silver_diag():
             "_ingested_at",
             "timestamp_ns",
             (F.col("timestamp_ns") / 1e9).alias("timestamp_s"),
+            "event_time",
             "transport",
             "channel",
             "can_id",
@@ -1174,6 +1204,7 @@ def blf_gold_signals():
         "message_type",
         "timestamp_ns",
         "timestamp_s",
+        "event_time",
         "channel",
         F.lit("CAN").alias("signal_source"),
         F.col("can_id_hex").alias("message_id_str"),
@@ -1188,6 +1219,7 @@ def blf_gold_signals():
         "message_type",
         "timestamp_ns",
         "timestamp_s",
+        "event_time",
         "channel",
         F.lit("ETH").alias("signal_source"),
         F.col("ether_type_hex").alias("message_id_str"),
@@ -1202,6 +1234,7 @@ def blf_gold_signals():
         "message_type",
         "timestamp_ns",
         "timestamp_s",
+        "event_time",
         "channel",
         F.lit("SOMEIP").alias("signal_source"),
         F.concat_ws("/", "someip_service_id_hex", "someip_method_id_hex").alias("message_id_str"),

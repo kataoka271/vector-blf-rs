@@ -20,13 +20,13 @@ use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use object::{BaseObjectHeader, LogContainerHeader, ObjectHeaderV1, ObjectHeaderV2};
 use std::io::{Read, Seek, Write};
 
+pub use arp::{Arp, ArpOp};
 pub use diag::doip::{DiagMessage, DoIp, PayloadType};
 pub use diag::isotp::{FlowStatus, IsoTpFrame, Reassembler};
 pub use diag::someip::{MessageType, ReturnCode, SomeIp};
 pub use diag::uds::{Nrc, ServiceId, Uds};
 pub use encoder::Timestamp;
 pub use error::ParseError;
-pub use arp::{Arp, ArpOp};
 pub use igmp::{Igmp, IgmpType};
 pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Mf4Signal, Vlan};

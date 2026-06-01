@@ -81,6 +81,13 @@ class Reader:
     """
 
     def __init__(self, path: str, types: Optional[List[str]] = None) -> None: ...
+    def start_time_ns(self) -> int:
+        """Return the recording start time as nanoseconds since the Unix epoch.
+
+        For BLF files reads the start_timestamp field of the file header.
+        For MF4/MDF files reads the HD block start_time_ns field.
+        Returns 0 when the file header contains no valid timestamp.
+        """
     def __iter__(self) -> Iterator[BaseObject]: ...
     def __next__(self) -> BaseObject: ...
     def read_batch(self, n: int = 50000) -> Optional[Dict[str, List]]:

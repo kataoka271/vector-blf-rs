@@ -146,10 +146,10 @@ impl<R: Read> Decoder<R> for Timestamp {
         let msec = tm[7] as u32;
         match Utc.with_ymd_and_hms(year, month, day, hour, min, sec) {
             LocalResult::None => Ok(Timestamp::Nanosecond(0)),
-            LocalResult::Single(dt) => match dt.with_nanosecond(dt.second() + msec * 1000) {
-                Some(dt) => Ok(Timestamp::Nanosecond(dt.timestamp() as u64)),
-                None => Ok(Timestamp::Nanosecond(0)),
-            },
+            LocalResult::Single(dt) => {
+                let ns = dt.timestamp() * 1_000_000_000 + msec as i64 * 1_000_000;
+                Ok(Timestamp::Nanosecond(ns as u64))
+            }
             LocalResult::Ambiguous(_, _) => Ok(Timestamp::Nanosecond(0)),
         }
     }

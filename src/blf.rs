@@ -133,10 +133,10 @@ fn parse_objects_from_buf(
     Ok(())
 }
 
-/// Returns the byte offset of every LogContainer in the file.
+/// Returns the file header and the byte offset of every LogContainer in the file.
 /// Reads only the 16-byte `BaseObjectHeader` of each container (no decompression).
-pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<Vec<u64>> {
-    FileHeader::decode(&mut *r)?;
+pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<(FileHeader, Vec<u64>)> {
+    let header = FileHeader::decode(&mut *r)?;
     let mut offsets = Vec::new();
     loop {
         let pos = r.stream_position()?;
@@ -155,7 +155,7 @@ pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<Vec<u64>> {
         let padding = data_size % 4;
         r.seek(std::io::SeekFrom::Current(16 + data_size + padding))?;
     }
-    Ok(offsets)
+    Ok((header, offsets))
 }
 
 /// Seeks to each offset in `offsets`, decompresses the LogContainer there,

@@ -108,6 +108,7 @@ fn write_csv_with_signals(
     objects: impl Iterator<Item = impl Borrow<BaseObject>>,
     signals: Option<&Path>,
     someip_signals: Option<&Path>,
+    start_ns: u64,
 ) -> Result<usize> {
     if let Some(sp) = signals {
         let db = CanSignalDb::from_csv(BufReader::new(File::open(sp)?))?;
@@ -119,15 +120,28 @@ fn write_csv_with_signals(
             objects,
             &db,
             someip_db.as_ref(),
+            start_ns,
         )?)
     } else {
-        Ok(blf::csv::write_csv_raw(w, objects)?)
+        Ok(blf::csv::write_csv_raw(w, objects, start_ns)?)
     }
 }
 
-fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
+fn abs_ts_str(start_ns: u64, relative_ns: u64) -> String {
+    use chrono::{TimeZone, Utc};
+    let total = start_ns.saturating_add(relative_ns);
+    let secs = (total / 1_000_000_000) as i64;
+    let nanos = (total % 1_000_000_000) as u32;
+    Utc.timestamp_opt(secs, nanos)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string())
+        .unwrap_or_default()
+}
+
+fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>, start_ns: u64) {
     let mut tbl = table::Table::new(&[
         ("timestamp_ns", false),
+        ("absolute_timestamp", false),
         ("type", false),
         ("ch", true),
         ("dir", false),
@@ -143,12 +157,15 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
 
     for item in objects {
         let obj = item.borrow();
-        let ns = ts_ns(obj.timestamp)
-            .map(|n| n.to_string())
-            .unwrap_or_default();
+        let Some(ns) = ts_ns(obj.timestamp) else {
+            continue;
+        };
+        let abs = abs_ts_str(start_ns, ns);
+        let ns_str = ns.to_string();
         let row = match &obj.message {
             Message::Can(m) => vec![
-                ns,
+                ns_str,
+                abs,
                 "CAN".into(),
                 m.channel.to_string(),
                 dir_str(&m.dir).into(),
@@ -162,7 +179,8 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
                 hex_str(&m.data),
             ],
             Message::CanFd(m) => vec![
-                ns,
+                ns_str,
+                abs,
                 "CAN-FD".into(),
                 m.channel.to_string(),
                 dir_str(&m.dir).into(),
@@ -176,7 +194,8 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
                 hex_str(&m.data),
             ],
             Message::CanFd64(m) => vec![
-                ns,
+                ns_str,
+                abs,
                 "CAN-FD64".into(),
                 m.channel.to_string(),
                 dir_str(&m.dir).into(),
@@ -190,7 +209,8 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
                 hex_str(&m.data),
             ],
             Message::Ethernet(m) => vec![
-                ns,
+                ns_str,
+                abs,
                 "Ethernet".into(),
                 m.channel.to_string(),
                 dir_str(&m.dir).into(),
@@ -207,7 +227,8 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
                 hex_str(&m.data),
             ],
             Message::EthernetEx(m) => vec![
-                ns,
+                ns_str,
+                abs,
                 "EthernetEx".into(),
                 m.channel.to_string(),
                 dir_str(&m.dir).into(),
@@ -224,7 +245,8 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
                 hex_str(&m.data),
             ],
             Message::Mf4Signal(m) => vec![
-                ns,
+                ns_str,
+                abs,
                 "Mf4Signal".into(),
                 String::new(),
                 String::new(),
@@ -238,7 +260,8 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>) {
                 format!("{} {}", m.value, m.unit),
             ],
             Message::Other(ot, _) => vec![
-                ns,
+                ns_str,
+                abs,
                 "Other".into(),
                 String::new(),
                 String::new(),
@@ -284,9 +307,11 @@ fn print_signal_table<T: Borrow<BaseObject>>(
     objects: impl IntoIterator<Item = T>,
     can_db: Option<&CanSignalDb>,
     someip_db: Option<&SomeIpSignalDb>,
+    start_ns: u64,
 ) {
     let mut tbl = table::Table::new(&[
         ("timestamp_ns", false),
+        ("absolute_timestamp", false),
         ("type", false),
         ("ch", true),
         ("id", false),
@@ -296,9 +321,11 @@ fn print_signal_table<T: Borrow<BaseObject>>(
 
     for item in objects {
         let obj = item.borrow();
-        let ns = ts_ns(obj.timestamp)
-            .map(|n| n.to_string())
-            .unwrap_or_default();
+        let Some(ns) = ts_ns(obj.timestamp) else {
+            continue;
+        };
+        let abs = abs_ts_str(start_ns, ns);
+        let ns_str = ns.to_string();
 
         match &obj.message {
             Message::Can(m) => {
@@ -311,7 +338,8 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                     let id = format!("0x{:X}", m.id);
                     for (name, value) in vals {
                         tbl.push(vec![
-                            ns.clone(),
+                            ns_str.clone(),
+                            abs.clone(),
                             "CAN".into(),
                             m.channel.to_string(),
                             id.clone(),
@@ -331,7 +359,8 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                     let id = format!("0x{:X}", m.id);
                     for (name, value) in vals {
                         tbl.push(vec![
-                            ns.clone(),
+                            ns_str.clone(),
+                            abs.clone(),
                             "CAN-FD".into(),
                             m.channel.to_string(),
                             id.clone(),
@@ -351,7 +380,8 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                     let id = format!("0x{:X}", m.id);
                     for (name, value) in vals {
                         tbl.push(vec![
-                            ns.clone(),
+                            ns_str.clone(),
+                            abs.clone(),
                             "CAN-FD64".into(),
                             (m.channel as u16).to_string(),
                             id.clone(),
@@ -367,7 +397,8 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                         let id = format!("0x{:04X}{:04X}", svc, mth);
                         for (name, value) in vals {
                             tbl.push(vec![
-                                ns.clone(),
+                                ns_str.clone(),
+                                abs.clone(),
                                 "Ethernet".into(),
                                 m.channel.to_string(),
                                 id.clone(),
@@ -384,7 +415,8 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                         let id = format!("0x{:04X}{:04X}", svc, mth);
                         for (name, value) in vals {
                             tbl.push(vec![
-                                ns.clone(),
+                                ns_str.clone(),
+                                abs.clone(),
                                 "EthernetEx".into(),
                                 m.channel.to_string(),
                                 id.clone(),
@@ -577,7 +609,8 @@ fn cmd_parse(
 
     // Scan phase: index LogContainer offsets without decompression.
     let t = time::Instant::now();
-    let offsets = blf::scan_containers(&mut BufReader::new(File::open(&input)?))?;
+    let (file_header, offsets) = blf::scan_containers(&mut BufReader::new(File::open(&input)?))?;
+    let start_ns = ts_ns(file_header.start_timestamp).unwrap_or(0);
     println!(
         "found {} containers in {:.3}s",
         offsets.len(),
@@ -597,17 +630,18 @@ fn cmd_parse(
                 chunk_results.iter().flatten(),
                 signals.as_deref(),
                 someip_signals_path.as_deref(),
+                start_ns,
             )?;
             println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
         } else if output_is_mf4 {
-            let start_time_ns = chunk_results
+            let mf4_start_ns = chunk_results
                 .iter()
                 .flatten()
                 .next()
                 .and_then(|o| ts_ns(o.timestamp))
                 .unwrap_or(0);
             let count =
-                write_mf4_output(out, chunk_results.iter().flatten(), repeat, start_time_ns)?;
+                write_mf4_output(out, chunk_results.iter().flatten(), repeat, mf4_start_ns)?;
             println!(
                 "wrote {} objects in {:.3}s",
                 count,
@@ -647,9 +681,10 @@ fn cmd_parse(
                 chunk_results.iter().flatten(),
                 can_db.as_ref(),
                 someip_db.as_ref(),
+                start_ns,
             );
         } else {
-            print_table(chunk_results.iter().flatten());
+            print_table(chunk_results.iter().flatten(), start_ns);
         }
     }
     Ok(())
@@ -695,9 +730,14 @@ fn cmd_parse_mf4(
                 }
             }
         } else if can_db.is_some() || someip_db.is_some() {
-            print_signal_table(objects.iter(), can_db.as_ref(), someip_db.as_ref());
+            print_signal_table(
+                objects.iter(),
+                can_db.as_ref(),
+                someip_db.as_ref(),
+                start_time_ns,
+            );
         } else {
-            print_table(objects.iter());
+            print_table(objects.iter(), start_time_ns);
         }
         if let Some(ref out) = output {
             let t2 = time::Instant::now();
@@ -709,6 +749,7 @@ fn cmd_parse_mf4(
                     objects.iter(),
                     signals.as_deref(),
                     someip_signals_path.as_deref(),
+                    start_time_ns,
                 )?;
                 println!("wrote {} rows in {:.3}s", count, t2.elapsed().as_secs_f32());
             } else if matches!(output_ext, "mf4" | "mdf") {
@@ -752,6 +793,7 @@ fn cmd_parse_mf4(
             reader.filter_map(|r| r.ok()),
             signals.as_deref(),
             someip_signals_path.as_deref(),
+            start_time_ns,
         )?;
         println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
     } else if matches!(ext(out), "mf4" | "mdf") {
@@ -807,11 +849,13 @@ fn cmd_parse_csv_stream(
     let t = time::Instant::now();
     let mut w = BufWriter::new(File::create(output)?);
     let reader = blf::Reader::new(BufReader::new(File::open(input)?))?;
+    let start_ns = ts_ns(reader.header.start_timestamp).unwrap_or(0);
     let count = write_csv_with_signals(
         &mut w,
         reader.filter_map(|r| r.ok()),
         signals.as_deref(),
         someip_signals_path.as_deref(),
+        start_ns,
     )?;
     println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
     Ok(())

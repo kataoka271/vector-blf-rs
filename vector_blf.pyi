@@ -247,8 +247,15 @@ def parse_eth_payload_signals(ether_type: int, eth_payload: bytes) -> List[Dict[
     IPv4 and IPv6 are both supported. Returns an empty list for non-IP frames
     or frames that cannot be parsed.
 
-    Signal names emitted: ip.protocol, ip.ttl (IPv4) / ip.hop_limit (IPv6),
-    ip.total_len (IPv4 only), ip.src, ip.dst, tcp.src_port, tcp.dst_port,
-    tcp.flags, udp.src_port, udp.dst_port, udp.payload_bytes.
+    Signal names emitted:
+      ARP (ether_type 0x0806, IPv4-over-Ethernet only):
+        arp.op (signal_value), arp.op_name (signal_str),
+        arp.sender_ip, arp.target_ip (signal_str).
+      IPv4/IPv6: ip.protocol, ip.ttl / ip.hop_limit, ip.total_len (IPv4),
+        ip.src, ip.dst (signal_str).
+      TCP: tcp.src_port, tcp.dst_port, tcp.flags.
+      UDP: udp.src_port, udp.dst_port, udp.payload_bytes.
+      IGMP (IPv4 protocol 2): igmp.type (signal_value),
+        igmp.type_name, igmp.group (signal_str), igmp.max_resp_time.
     """
     ...

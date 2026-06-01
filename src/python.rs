@@ -920,11 +920,6 @@ fn parse_eth_payload_signals<'py>(
     ether_type: u16,
     eth_payload: &[u8],
 ) -> PyResult<Vec<Bound<'py, PyDict>>> {
-    let ip = match blf::Ip::parse(ether_type, eth_payload) {
-        Ok(ip) => ip,
-        Err(_) => return Ok(vec![]),
-    };
-
     let mut out: Vec<Bound<'py, PyDict>> = Vec::new();
 
     macro_rules! sig_num {
@@ -945,6 +940,34 @@ fn parse_eth_payload_signals<'py>(
             out.push(d);
         }};
     }
+
+    // ARP (EtherType 0x0806) — IPv4-over-Ethernet only.
+    if ether_type == 0x0806 {
+        if let Ok(arp) = blf::Arp::parse(eth_payload) {
+            sig_num!("arp.op", arp.operation.to_u16());
+            sig_str!("arp.op_name", arp.operation.name());
+            sig_str!(
+                "arp.sender_ip",
+                format!(
+                    "{}.{}.{}.{}",
+                    arp.sender_ip[0], arp.sender_ip[1], arp.sender_ip[2], arp.sender_ip[3]
+                )
+            );
+            sig_str!(
+                "arp.target_ip",
+                format!(
+                    "{}.{}.{}.{}",
+                    arp.target_ip[0], arp.target_ip[1], arp.target_ip[2], arp.target_ip[3]
+                )
+            );
+        }
+        return Ok(out);
+    }
+
+    let ip = match blf::Ip::parse(ether_type, eth_payload) {
+        Ok(ip) => ip,
+        Err(_) => return Ok(out),
+    };
 
     let transport_result = match &ip {
         blf::Ip::V4(v4) => {
@@ -993,6 +1016,25 @@ fn parse_eth_payload_signals<'py>(
                 sig_num!("udp.src_port", udp.src_port);
                 sig_num!("udp.dst_port", udp.dst_port);
                 sig_num!("udp.payload_bytes", udp.data.len());
+            }
+        }
+    }
+
+    // IGMP (IPv4 protocol 2) — parsed from the IPv4 payload.
+    if let blf::Ip::V4(v4) = &ip {
+        if v4.protocol == blf::IpProtocol::Igmp {
+            if let Ok(igmp) = blf::Igmp::parse(v4.data.as_slice()) {
+                sig_num!("igmp.type", igmp.igmp_type.to_u8());
+                sig_str!("igmp.type_name", igmp.igmp_type.name());
+                sig_str!(
+                    "igmp.group",
+                    format!(
+                        "{}.{}.{}.{}",
+                        igmp.group_addr[0], igmp.group_addr[1],
+                        igmp.group_addr[2], igmp.group_addr[3]
+                    )
+                );
+                sig_num!("igmp.max_resp_time", igmp.max_resp_time);
             }
         }
     }

@@ -791,9 +791,11 @@ def _parse_eth_payload(ether_types: pd.Series, data_col: pd.Series) -> pd.Series
     comment=(
         "Protocol-layer fields parsed from Ethernet payload data. "
         "Long format: one row per (message, signal). "
-        "Covers IPv4/IPv6 headers (ip.src, ip.dst, ip.protocol, ip.ttl) "
-        "and TCP/UDP transport (src_port, dst_port, tcp.flags, udp.payload_bytes). "
-        "Numeric fields in signal_value; address strings in signal_str."
+        "Covers ARP (arp.op, arp.op_name, arp.sender_ip, arp.target_ip), "
+        "IPv4/IPv6 headers (ip.src, ip.dst, ip.protocol, ip.ttl), "
+        "TCP/UDP transport (src_port, dst_port, tcp.flags, udp.payload_bytes), "
+        "and IGMP (igmp.type, igmp.type_name, igmp.group, igmp.max_resp_time). "
+        "Numeric fields in signal_value; address/name strings in signal_str."
     ),
     table_properties={
         "quality": "silver",

@@ -1,7 +1,10 @@
 use std::cell::RefCell;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::rc::Rc;
-use vector_blf::blf::{BaseObject, Can, CanFd, CanFd64, Dir, Message, Reader, Timestamp, Writer};
+use vector_blf::blf::{
+    parse_at, scan_containers, BaseObject, Can, CanFd, CanFd64, Dir, Message, ParseError, Reader,
+    Timestamp, Writer,
+};
 
 /// Shareable in-memory buffer implementing both Write+Seek and Read+Seek so
 /// the same underlying Cursor can be used for a Writer then a Reader.
@@ -284,7 +287,6 @@ fn reader_direct_mode_no_containers() {
 
 #[test]
 fn scan_containers_direct_mode_returns_none() {
-    use vector_blf::blf::scan_containers;
     let mut f = std::io::BufReader::new(
         std::fs::File::open("data/technica/errors/FileWithoutLogContainers.blf").unwrap(),
     );
@@ -292,6 +294,35 @@ fn scan_containers_direct_mode_returns_none() {
     assert!(
         offsets.is_none(),
         "expected None offsets for direct-mode BLF"
+    );
+}
+
+// ── truncated object detection ───────────────────────────────────────────────
+
+#[test]
+fn parse_at_errors_on_truncated_object() {
+    let path = "data/technica/errors/FileWithTruncatedCanMessage.blf";
+    let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    let (_header, offsets) = scan_containers(&mut f).unwrap();
+    let offsets = offsets.unwrap();
+    let result = parse_at(&mut std::fs::File::open(path).unwrap(), &offsets);
+    assert!(
+        matches!(result, Err(ParseError::Io(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof),
+        "expected UnexpectedEof, got {result:?}"
+    );
+}
+
+#[test]
+fn reader_errors_on_truncated_object() {
+    let path = "data/technica/errors/FileWithTruncatedCanMessage.blf";
+    let f = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    let results: Vec<_> = Reader::new(f).unwrap().collect();
+    let has_error = results.iter().any(
+        |r| matches!(r, Err(ParseError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof),
+    );
+    assert!(
+        has_error,
+        "expected an UnexpectedEof error, got {results:?}"
     );
 }
 

@@ -103,15 +103,11 @@ fn parse_objects_from_buf(
         if tmp.len() < data_size {
             tmp.resize(data_size, 0);
         }
-        if r.read_exact(&mut tmp[..data_size]).is_err() {
-            break;
-        }
+        r.read_exact(&mut tmp[..data_size])?;
         let padding_size = base_header.obj_size as usize % 4;
         if padding_size > 0 && base_header.obj_type.is_padding_needed() {
             let mut padding = [0u8; 4];
-            if r.read_exact(&mut padding[..padding_size]).is_err() {
-                break;
-            }
+            r.read_exact(&mut padding[..padding_size])?;
         }
         cursor += before - r.len();
         if !r.is_empty() {
@@ -223,7 +219,7 @@ impl<R: Read + Seek> Reader<R> {
         let mut r = &self.buf[self.cursor..];
         let before = r.len();
         let base_header = match BaseObjectHeader::decode(&mut r) {
-            Err(_) => return self.retry_read_base_object(),
+            Err(_) => return self.retry_read_base_object(false),
             Ok(h) => h,
         };
         let data_size = (base_header.obj_size - BASE_OBJECT_HEADER_SIZE) as usize;
@@ -231,13 +227,13 @@ impl<R: Read + Seek> Reader<R> {
             self.tmp.resize(data_size, 0);
         }
         if r.read_exact(&mut self.tmp[..data_size]).is_err() {
-            return self.retry_read_base_object();
+            return self.retry_read_base_object(true);
         }
         let padding_size = base_header.obj_size as usize % 4;
         if padding_size > 0 && base_header.obj_type.is_padding_needed() {
             let mut padding = [0u8; 4];
             if r.read_exact(&mut padding[..padding_size]).is_err() {
-                return self.retry_read_base_object();
+                return self.retry_read_base_object(true);
             }
         }
         self.cursor += before - r.len();
@@ -258,11 +254,26 @@ impl<R: Read + Seek> Reader<R> {
         Ok(BaseObject { timestamp, message })
     }
 
-    fn retry_read_base_object(&mut self) -> ParseResult<BaseObject> {
+    // `truncated`: true when we had a valid object header but could not read its data.
+    // In that case a container-load EOF is an error, not a clean end-of-stream.
+    fn retry_read_base_object(&mut self, truncated: bool) -> ParseResult<BaseObject> {
+        let eof_err = if truncated {
+            ParseError::Io(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+        } else {
+            ParseError::Eof
+        };
         match self.load_next_container() {
-            Err(ParseError::Eof) => Err(ParseError::Eof),
+            Err(ParseError::Eof) => {
+                if truncated {
+                    self.buf.clear();
+                }
+                Err(eof_err)
+            }
             Err(ParseError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                Err(ParseError::Eof)
+                if truncated {
+                    self.buf.clear();
+                }
+                Err(eof_err)
             }
             Err(e) => Err(e),
             Ok(_) => self.read_base_object(),

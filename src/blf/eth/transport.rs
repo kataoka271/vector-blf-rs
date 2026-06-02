@@ -1,6 +1,6 @@
-use super::error::{ParseError, ParseResult};
+use super::super::error::{ParseError, ParseResult};
+use super::super::read_util::{read_u16_be, read_u32_be};
 use super::ip::IpProtocol;
-use super::read_util::{read_u16_be, read_u32_be};
 use std::io::Read;
 
 #[derive(Debug)]

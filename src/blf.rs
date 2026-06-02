@@ -1,18 +1,15 @@
-pub mod arp;
 pub mod convert;
 pub mod csv;
 pub mod diag;
 mod encoder;
 mod error;
-pub mod igmp;
-pub mod ip;
+pub mod eth;
 pub mod message;
 mod message_codec;
 mod object;
 mod objtype;
 mod read_util;
 pub mod signal;
-pub mod transport;
 
 use encoder::{Decoder, Encoder};
 pub use error::ParseResult;
@@ -20,15 +17,16 @@ use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use object::{BaseObjectHeader, LogContainerHeader, ObjectHeaderV1, ObjectHeaderV2};
 use std::io::{Read, Seek, Write};
 
-pub use arp::{Arp, ArpOp};
 pub use diag::doip::{DiagMessage, DoIp, PayloadType};
 pub use diag::isotp::{FlowStatus, IsoTpFrame, Reassembler};
 pub use diag::someip::{MessageType, ReturnCode, SomeIp};
 pub use diag::uds::{Nrc, ServiceId, Uds};
 pub use encoder::Timestamp;
 pub use error::ParseError;
-pub use igmp::{Igmp, IgmpType};
-pub use ip::{Ip, IpProtocol, Ipv4, Ipv6};
+pub use eth::arp::{Arp, ArpOp};
+pub use eth::igmp::{Igmp, IgmpType};
+pub use eth::ip::{Ip, IpProtocol, Ipv4, Ipv6};
+pub use eth::transport::{Tcp, TcpFlags, Transport, Udp};
 pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Mf4Signal, Vlan};
 pub use object::FileHeader;
 pub use objtype::ObjType;
@@ -36,7 +34,6 @@ pub use signal::{
     check_can_csv, check_someip_csv, demux_container, ByteOrder, CanSignalDb, ContainerHeader,
     Signal, SignalDef, SomeIpSignalDb, SomeIpSignalDef,
 };
-pub use transport::{Tcp, TcpFlags, Transport, Udp};
 
 #[derive(Debug)]
 pub struct BaseObject {

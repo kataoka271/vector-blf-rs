@@ -1,5 +1,5 @@
-use super::error::ParseResult;
-use super::read_util::{read_u16_be, read_u8};
+use super::super::error::ParseResult;
+use super::super::read_util::{read_u16_be, read_u8};
 use std::io::Read;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

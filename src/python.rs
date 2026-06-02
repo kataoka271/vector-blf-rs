@@ -758,7 +758,7 @@ fn parse_someip_udp<'py>(
         ),
     };
     let udp = match transport_data {
-        Ok(blf::transport::Transport::Udp(u)) => u,
+        Ok(blf::eth::transport::Transport::Udp(u)) => u,
         _ => return Ok(vec![]),
     };
 
@@ -825,7 +825,7 @@ fn parse_doip_diag<'py>(
         blf::Ip::V6(v6) => v6.parse_transport(),
     };
     let tcp = match transport_data {
-        Ok(blf::transport::Transport::Tcp(t)) => t,
+        Ok(blf::eth::transport::Transport::Tcp(t)) => t,
         _ => return Ok(vec![]),
     };
     if tcp.src_port != DOIP_PORT && tcp.dst_port != DOIP_PORT {
@@ -1021,7 +1021,7 @@ fn parse_eth_payload_signals<'py>(
 
     if let Ok(transport) = transport_result {
         match transport {
-            blf::transport::Transport::Tcp(tcp) => {
+            blf::eth::transport::Transport::Tcp(tcp) => {
                 sig_num!("tcp.src_port", tcp.src_port);
                 sig_num!("tcp.dst_port", tcp.dst_port);
                 let flags_byte = (tcp.flags.fin as u8)
@@ -1032,7 +1032,7 @@ fn parse_eth_payload_signals<'py>(
                     | (tcp.flags.urg as u8) << 5;
                 sig_num!("tcp.flags", flags_byte);
             }
-            blf::transport::Transport::Udp(udp) => {
+            blf::eth::transport::Transport::Udp(udp) => {
                 sig_num!("udp.src_port", udp.src_port);
                 sig_num!("udp.dst_port", udp.dst_port);
                 sig_num!("udp.payload_bytes", udp.data.len());

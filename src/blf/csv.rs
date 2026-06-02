@@ -1,8 +1,8 @@
 use super::diag::someip::SomeIp;
-use super::ip::Ip;
+use super::eth::ip::Ip;
+use super::eth::transport::Transport;
 use super::message::Message;
 use super::signal::{CanSignalDb, ContainerHeader, SomeIpSignalDb};
-use super::transport::Transport;
 use super::BaseObject;
 use super::Timestamp;
 use chrono::{TimeZone, Utc};

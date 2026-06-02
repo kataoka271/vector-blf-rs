@@ -270,6 +270,31 @@ fn roundtrip_many_frames_spans_multiple_containers() {
     }
 }
 
+// ── direct-mode BLF (no LogContainers) ───────────────────────────────────────
+
+#[test]
+fn reader_direct_mode_no_containers() {
+    let f = std::fs::File::open("data/technica/errors/FileWithoutLogContainers.blf").unwrap();
+    let objects: Vec<_> = Reader::new(std::io::BufReader::new(f))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(!objects.is_empty(), "expected at least one object");
+}
+
+#[test]
+fn scan_containers_direct_mode_returns_none() {
+    use vector_blf::blf::scan_containers;
+    let mut f = std::io::BufReader::new(
+        std::fs::File::open("data/technica/errors/FileWithoutLogContainers.blf").unwrap(),
+    );
+    let (_header, offsets) = scan_containers(&mut f).unwrap();
+    assert!(
+        offsets.is_none(),
+        "expected None offsets for direct-mode BLF"
+    );
+}
+
 // ── FileHeader metadata ───────────────────────────────────────────────────────
 
 #[test]

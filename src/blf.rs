@@ -136,7 +136,10 @@ fn parse_objects_from_buf(
 
 /// Returns the file header and the byte offset of every LogContainer in the file.
 /// Reads only the 16-byte `BaseObjectHeader` of each container (no decompression).
-pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<(FileHeader, Vec<u64>)> {
+///
+/// Returns `None` for offsets when the file stores objects directly without
+/// `LogContainer` wrappers (older BLF format). Use `Reader` to iterate such files.
+pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<(FileHeader, Option<Vec<u64>>)> {
     let header = FileHeader::decode(&mut *r)?;
     let mut offsets = Vec::new();
     loop {
@@ -148,7 +151,9 @@ pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<(FileHeader, Ve
             Ok(h) => h,
         };
         if base_header.obj_type != ObjType::LogContainer {
-            return Err(ParseError::UnexpectedObjType(base_header.obj_type));
+            // Old-style BLF: objects stored directly, no LogContainer wrappers.
+            r.seek(std::io::SeekFrom::Start(pos))?;
+            return Ok((header, None));
         }
         offsets.push(pos);
         // Skip LogContainerHeader (16) + data + padding, then continue to next container.
@@ -156,7 +161,7 @@ pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<(FileHeader, Ve
         let padding = data_size % 4;
         r.seek(std::io::SeekFrom::Current(16 + data_size + padding))?;
     }
-    Ok((header, offsets))
+    Ok((header, Some(offsets)))
 }
 
 /// Seeks to each offset in `offsets`, decompresses the LogContainer there,
@@ -185,6 +190,9 @@ pub struct Reader<R: Read + Seek> {
 impl<R: Read + Seek> Reader<R> {
     pub fn new(mut r: R) -> ParseResult<Self> {
         let header = FileHeader::decode(&mut r)?;
+        let pos = r.stream_position()?;
+        let first = BaseObjectHeader::decode(&mut r);
+        r.seek(std::io::SeekFrom::Start(pos))?;
         let mut reader = Self {
             header,
             r,
@@ -192,7 +200,15 @@ impl<R: Read + Seek> Reader<R> {
             tmp: Vec::new(),
             cursor: 0,
         };
-        reader.load_next_container()?;
+        match first {
+            Ok(h) if h.obj_type != ObjType::LogContainer => {
+                // Old-style BLF: objects stored directly, slurp the whole payload.
+                reader.r.read_to_end(&mut reader.buf)?;
+            }
+            _ => {
+                reader.load_next_container()?;
+            }
+        }
         Ok(reader)
     }
 

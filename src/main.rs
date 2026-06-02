@@ -609,17 +609,34 @@ fn cmd_parse(
 
     // Scan phase: index LogContainer offsets without decompression.
     let t = time::Instant::now();
-    let (file_header, offsets) = blf::scan_containers(&mut BufReader::new(File::open(&input)?))?;
+    let (file_header, maybe_offsets) =
+        blf::scan_containers(&mut BufReader::new(File::open(&input)?))?;
     let start_ns = ts_ns(file_header.start_timestamp).unwrap_or(0);
-    println!(
-        "found {} containers in {:.3}s",
-        offsets.len(),
-        t.elapsed().as_secs_f32()
-    );
 
-    // Parallel parse phase.
-    let chunk_results = parse_parallel(&input, &offsets, n_threads)?;
-    check_boundaries(&chunk_results);
+    let chunk_results = if let Some(offsets) = maybe_offsets {
+        println!(
+            "found {} containers in {:.3}s",
+            offsets.len(),
+            t.elapsed().as_secs_f32()
+        );
+        let chunks = parse_parallel(&input, &offsets, n_threads)?;
+        check_boundaries(&chunks);
+        chunks
+    } else {
+        println!(
+            "no containers (direct mode) in {:.3}s",
+            t.elapsed().as_secs_f32()
+        );
+        let objects: Vec<BaseObject> = blf::Reader::new(BufReader::new(File::open(&input)?))?
+            .filter_map(|r| r.ok())
+            .collect();
+        println!(
+            "parsed {} objects across 1 chunks in {:.3}s",
+            objects.len(),
+            t.elapsed().as_secs_f32()
+        );
+        vec![objects]
+    };
 
     if let Some(ref out) = output {
         let t = time::Instant::now();

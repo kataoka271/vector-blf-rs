@@ -20,6 +20,7 @@ module-name = "vector_blf"
 dev = [
     "autosar-data>=0.10.1",
     "maturin>=1.13.3",
+    "openpyxl>=3.1.5",
     "pandas>=2.0",
     "pytest>=8.0",
     "python-can>=4.5.0",

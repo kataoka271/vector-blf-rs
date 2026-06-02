@@ -110,15 +110,15 @@ class CanSignalDb:
 
     CSV format (header required)::
 
-        message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset[,pdu_id]
-        0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
-        0x200,ContainerSig,0,8,Intel,false,1.0,0.0,0x10
+        message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset[,pdu_id]
+        0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
+        0x200,ContainerSig,0,0,8,Intel,false,1.0,0.0,0x10
 
     ``message_id`` accepts hex (``0x…``) or decimal.
     ``byte_order`` is ``Intel`` or ``Motorola`` (case-insensitive).
     ``is_signed`` accepts ``true``/``false`` or ``1``/``0``.
-    The optional ninth column ``pdu_id`` marks the row as a container-frame signal;
-    ``start_bit`` is then relative to the I-PDU payload after demultiplexing.
+    The optional tenth column ``pdu_id`` marks the row as a container-frame signal;
+    ``start_byte`` and ``start_bit`` are then relative to the I-PDU payload after demultiplexing.
     """
 
     def __init__(self, path: str) -> None: ...
@@ -174,8 +174,8 @@ class SomeIpSignalDb:
 
     CSV format (header required)::
 
-        service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-        0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
+        service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+        0x0064,0x0001,Temperature,0,0,16,Intel,false,0.01,0.0
 
     ``service_id`` and ``method_id`` accept hex (``0x…``) or decimal.
     Signals are decoded from the SOME/IP application payload (bytes after the

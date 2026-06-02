@@ -317,9 +317,9 @@ fn csv_raw_empty_data_field() {
 
 fn engine_signal_db() -> CanSignalDb {
     let csv = "\
-message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
-0x100,Throttle,16,8,Intel,false,0.4,0.0
+message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
+0x100,Throttle,2,0,8,Intel,false,0.4,0.0
 ";
     CanSignalDb::from_csv(csv.as_bytes()).unwrap()
 }
@@ -374,8 +374,8 @@ fn csv_signals_can_no_match() {
 #[test]
 fn csv_signals_row_format() {
     let db = {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x200,Voltage,0,8,Intel,false,1.0,0.0\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x200,Voltage,0,0,8,Intel,false,1.0,0.0\n";
         CanSignalDb::from_csv(csv.as_bytes()).unwrap()
     };
     // raw=42 → 42*1.0+0.0 = 42
@@ -435,8 +435,8 @@ fn csv_signals_canfd64_match() {
 fn csv_signals_canfd64_channel_cast_to_u32() {
     // CanFd64.channel is u8; verify it's emitted without loss
     let db = {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x300,Sig,0,8,Intel,false,1.0,0.0\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x300,Sig,0,0,8,Intel,false,1.0,0.0\n";
         CanSignalDb::from_csv(csv.as_bytes()).unwrap()
     };
     let obj = make_canfd64(0, 255, 0x300, &[1]);
@@ -479,9 +479,9 @@ fn csv_signals_mixed_ids_only_matching_emitted() {
 #[test]
 fn check_can_csv_valid() {
     let csv = "\
-message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
-0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
+0x200,BrakeForce,0,7,12,Motorola,true,0.1,-100.0
 ";
     assert!(check_can_csv(csv.as_bytes()).is_empty());
 }
@@ -492,12 +492,12 @@ fn check_can_csv_too_few_columns() {
     let errors = check_can_csv(csv.as_bytes());
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].0, 2);
-    assert!(errors[0].1.contains("expected at least 8 columns"));
+    assert!(errors[0].1.contains("expected at least 9 columns"));
 }
 
 #[test]
 fn check_can_csv_bad_message_id() {
-    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\nnot_a_number,Speed,0,16,Intel,false,1.0,0.0\n";
+    let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\nnot_a_number,Speed,0,0,16,Intel,false,1.0,0.0\n";
     let errors = check_can_csv(csv.as_bytes());
     assert_eq!(errors.len(), 1);
     assert!(errors[0].1.contains("invalid message_id"));
@@ -505,7 +505,7 @@ fn check_can_csv_bad_message_id() {
 
 #[test]
 fn check_can_csv_bad_byte_order() {
-    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,16,BigEndian,false,1.0,0.0\n";
+    let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,0,16,BigEndian,false,1.0,0.0\n";
     let errors = check_can_csv(csv.as_bytes());
     assert_eq!(errors.len(), 1);
     assert!(errors[0].1.contains("invalid byte_order"));
@@ -513,7 +513,7 @@ fn check_can_csv_bad_byte_order() {
 
 #[test]
 fn check_can_csv_bad_is_signed() {
-    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,16,Intel,yes,1.0,0.0\n";
+    let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,0,16,Intel,yes,1.0,0.0\n";
     let errors = check_can_csv(csv.as_bytes());
     assert_eq!(errors.len(), 1);
     assert!(errors[0].1.contains("invalid is_signed"));
@@ -521,7 +521,7 @@ fn check_can_csv_bad_is_signed() {
 
 #[test]
 fn check_can_csv_bad_scale_and_offset() {
-    let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,16,Intel,false,abc,xyz\n";
+    let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n0x100,Speed,0,0,16,Intel,false,abc,xyz\n";
     let errors = check_can_csv(csv.as_bytes());
     assert_eq!(errors.len(), 2);
     assert!(errors.iter().any(|(_, m)| m.contains("invalid scale")));
@@ -531,10 +531,10 @@ fn check_can_csv_bad_scale_and_offset() {
 #[test]
 fn check_can_csv_collects_multiple_rows() {
     let csv = "\
-message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-bad_id,Speed,0,16,Intel,false,1.0,0.0
-0x200,Throttle,7,12,Motorola,true,0.1,-100.0
-another_bad,Brake,0,8,Intel,false,1.0,0.0
+message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+bad_id,Speed,0,0,16,Intel,false,1.0,0.0
+0x200,Throttle,0,7,12,Motorola,true,0.1,-100.0
+another_bad,Brake,0,0,8,Intel,false,1.0,0.0
 ";
     let errors = check_can_csv(csv.as_bytes());
     assert_eq!(errors.len(), 2, "should collect errors from all bad rows");
@@ -546,9 +546,9 @@ another_bad,Brake,0,8,Intel,false,1.0,0.0
 fn check_can_csv_skips_comments_and_blanks() {
     let csv = "\
 # comment line
-message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
+message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
 
-0x100,Speed,0,16,Intel,false,1.0,0.0
+0x100,Speed,0,0,16,Intel,false,1.0,0.0
 ";
     assert!(check_can_csv(csv.as_bytes()).is_empty());
 }
@@ -558,8 +558,8 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
 #[test]
 fn check_someip_csv_valid() {
     let csv = "\
-service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
+service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x0064,0x0001,Temperature,0,0,16,Intel,false,0.01,0.0
 ";
     assert!(check_someip_csv(csv.as_bytes()).is_empty());
 }
@@ -569,12 +569,12 @@ fn check_someip_csv_too_few_columns() {
     let csv = "service_id,method_id\n0x64,0x01\n";
     let errors = check_someip_csv(csv.as_bytes());
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].1.contains("expected at least 9 columns"));
+    assert!(errors[0].1.contains("expected at least 10 columns"));
 }
 
 #[test]
 fn check_someip_csv_bad_service_and_method_id() {
-    let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\nnope,nope,Temp,0,16,Intel,false,1.0,0.0\n";
+    let csv = "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\nnope,nope,Temp,0,0,16,Intel,false,1.0,0.0\n";
     let errors = check_someip_csv(csv.as_bytes());
     assert_eq!(errors.len(), 2);
     assert!(errors.iter().any(|(_, m)| m.contains("invalid service_id")));
@@ -584,10 +584,10 @@ fn check_someip_csv_bad_service_and_method_id() {
 #[test]
 fn check_someip_csv_collects_multiple_rows() {
     let csv = "\
-service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-bad,0x01,Temp,0,16,Intel,false,1.0,0.0
-0x64,0x01,Temp,0,16,Intel,false,1.0,0.0
-bad,0x01,Pressure,0,8,Intel,false,1.0,0.0
+service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+bad,0x01,Temp,0,0,16,Intel,false,1.0,0.0
+0x64,0x01,Temp,0,0,16,Intel,false,1.0,0.0
+bad,0x01,Pressure,0,0,8,Intel,false,1.0,0.0
 ";
     let errors = check_someip_csv(csv.as_bytes());
     assert_eq!(errors.len(), 2);

@@ -186,15 +186,15 @@ impl SignalDef {
 ///
 /// CSV format (header required):
 /// ```text
-/// message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset[,pdu_id]
-/// 0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
-/// 0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
-/// 0x300,ContainerSig,0,8,Intel,false,1.0,0.0,0x10
+/// message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset[,pdu_id]
+/// 0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
+/// 0x200,BrakeForce,0,7,12,Motorola,true,0.1,-100.0
+/// 0x300,ContainerSig,0,0,8,Intel,false,1.0,0.0,0x10
 /// ```
 /// `message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`
 /// (case-insensitive). `is_signed` accepts `true`/`false` or `1`/`0`.
-/// The optional ninth column `pdu_id` marks the row as a container-frame signal;
-/// `start_bit` is then the bit offset within the I-PDU payload after demultiplexing.
+/// The optional tenth column `pdu_id` marks the row as a container-frame signal;
+/// `start_byte` and `start_bit` are then relative to the I-PDU payload after demultiplexing.
 #[derive(Debug, Default)]
 pub struct CanSignalDb {
     /// Regular-frame signals keyed by CAN ID.
@@ -218,10 +218,10 @@ impl CanSignalDb {
                 continue;
             }
             let p: Vec<&str> = line.split(',').map(str::trim).collect();
-            if p.len() < 8 {
+            if p.len() < 9 {
                 return Err(ParseError::Csv {
                     line: lineno,
-                    message: format!("expected at least 8 columns, got {}", p.len()),
+                    message: format!("expected at least 9 columns, got {}", p.len()),
                 });
             }
             let message_id = parse_u32(p[0]).map_err(|_| ParseError::Csv {
@@ -229,15 +229,19 @@ impl CanSignalDb {
                 message: format!("invalid message_id: {:?}", p[0]),
             })?;
             let name = p[1].to_string();
-            let start_bit = parse_u32(p[2]).map_err(|_| ParseError::Csv {
+            let start_byte = parse_u32(p[2]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid start_bit: {:?}", p[2]),
+                message: format!("invalid start_byte: {:?}", p[2]),
             })?;
-            let bit_length = parse_u32(p[3]).map_err(|_| ParseError::Csv {
+            let start_bit_in_byte = parse_u32(p[3]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid bit_length: {:?}", p[3]),
+                message: format!("invalid start_bit: {:?}", p[3]),
             })?;
-            let byte_order = match p[4].to_lowercase().as_str() {
+            let bit_length = parse_u32(p[4]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid bit_length: {:?}", p[4]),
+            })?;
+            let byte_order = match p[5].to_lowercase().as_str() {
                 "intel" => ByteOrder::Intel,
                 "motorola" => ByteOrder::Motorola,
                 _ => {
@@ -245,37 +249,38 @@ impl CanSignalDb {
                         line: lineno,
                         message: format!(
                             "invalid byte_order: {:?}, expected Intel or Motorola",
-                            p[4]
+                            p[5]
                         ),
                     })
                 }
             };
-            let is_signed = match p[5].to_lowercase().as_str() {
+            let is_signed = match p[6].to_lowercase().as_str() {
                 "true" | "1" => true,
                 "false" | "0" => false,
                 _ => {
                     return Err(ParseError::Csv {
                         line: lineno,
-                        message: format!("invalid is_signed: {:?}, expected true/false/1/0", p[5]),
+                        message: format!("invalid is_signed: {:?}, expected true/false/1/0", p[6]),
                     })
                 }
             };
-            let scale = if p[6].is_empty() {
+            let scale = if p[7].is_empty() {
                 1.0
-            } else {
-                p[6].parse::<f64>().map_err(|_| ParseError::Csv {
-                    line: lineno,
-                    message: format!("invalid scale: {:?}", p[6]),
-                })?
-            };
-            let offset = if p[7].is_empty() {
-                0.0
             } else {
                 p[7].parse::<f64>().map_err(|_| ParseError::Csv {
                     line: lineno,
-                    message: format!("invalid offset: {:?}", p[7]),
+                    message: format!("invalid scale: {:?}", p[7]),
                 })?
             };
+            let offset = if p[8].is_empty() {
+                0.0
+            } else {
+                p[8].parse::<f64>().map_err(|_| ParseError::Csv {
+                    line: lineno,
+                    message: format!("invalid offset: {:?}", p[8]),
+                })?
+            };
+            let start_bit = start_byte * 8 + start_bit_in_byte;
             let def = SignalDef {
                 name,
                 message_id,
@@ -288,10 +293,10 @@ impl CanSignalDb {
                     offset,
                 },
             };
-            if p.len() >= 9 && !p[8].is_empty() {
-                let pdu_id = parse_u32(p[8]).map_err(|_| ParseError::Csv {
+            if p.len() >= 10 && !p[9].is_empty() {
+                let pdu_id = parse_u32(p[9]).map_err(|_| ParseError::Csv {
                     line: lineno,
-                    message: format!("invalid pdu_id: {:?}", p[8]),
+                    message: format!("invalid pdu_id: {:?}", p[9]),
                 })?;
                 db.insert_container(def, pdu_id);
             } else {
@@ -438,7 +443,7 @@ impl CanSignalDb {
         };
         writeln!(
             w,
-            "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id"
+            "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id"
         )?;
         let mut msg_ids: Vec<u32> = self.frames.keys().copied().collect();
         msg_ids.sort_unstable();
@@ -448,10 +453,11 @@ impl CanSignalDb {
             for d in defs {
                 writeln!(
                     w,
-                    "0x{:X},{},{},{},{},{},{},{}",
+                    "0x{:X},{},{},{},{},{},{},{},{}",
                     id,
                     d.name,
-                    d.signal.start_bit,
+                    d.signal.start_bit / 8,
+                    d.signal.start_bit % 8,
                     d.signal.bit_length,
                     bo(d.signal.byte_order),
                     d.signal.is_signed,
@@ -471,10 +477,11 @@ impl CanSignalDb {
                 for d in defs {
                     writeln!(
                         w,
-                        "0x{:X},{},{},{},{},{},{},{},0x{:X}",
+                        "0x{:X},{},{},{},{},{},{},{},{},0x{:X}",
                         id,
                         d.name,
-                        d.signal.start_bit,
+                        d.signal.start_bit / 8,
+                        d.signal.start_bit % 8,
                         d.signal.bit_length,
                         bo(d.signal.byte_order),
                         d.signal.is_signed,
@@ -549,8 +556,8 @@ impl SomeIpSignalDef {
 ///
 /// CSV format (header required):
 /// ```text
-/// service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-/// 0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
+/// service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+/// 0x0064,0x0001,Temperature,0,0,16,Intel,false,0.01,0.0
 /// ```
 /// `service_id` and `method_id` accept hex (`0x…`) or decimal.
 /// Signals are decoded from the SOME/IP payload (bytes after the 16-byte header).
@@ -574,10 +581,10 @@ impl SomeIpSignalDb {
                 continue;
             }
             let p: Vec<&str> = line.split(',').map(str::trim).collect();
-            if p.len() < 9 {
+            if p.len() < 10 {
                 return Err(ParseError::Csv {
                     line: lineno,
-                    message: format!("expected at least 9 columns, got {}", p.len()),
+                    message: format!("expected at least 10 columns, got {}", p.len()),
                 });
             }
             let service_id = parse_u16(p[0]).map_err(|_| ParseError::Csv {
@@ -589,15 +596,19 @@ impl SomeIpSignalDb {
                 message: format!("invalid method_id: {:?}", p[1]),
             })?;
             let name = p[2].to_string();
-            let start_bit = parse_u32(p[3]).map_err(|_| ParseError::Csv {
+            let start_byte = parse_u32(p[3]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid start_bit: {:?}", p[3]),
+                message: format!("invalid start_byte: {:?}", p[3]),
             })?;
-            let bit_length = parse_u32(p[4]).map_err(|_| ParseError::Csv {
+            let start_bit_in_byte = parse_u32(p[4]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid bit_length: {:?}", p[4]),
+                message: format!("invalid start_bit: {:?}", p[4]),
             })?;
-            let byte_order = match p[5].to_lowercase().as_str() {
+            let bit_length = parse_u32(p[5]).map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid bit_length: {:?}", p[5]),
+            })?;
+            let byte_order = match p[6].to_lowercase().as_str() {
                 "intel" => ByteOrder::Intel,
                 "motorola" => ByteOrder::Motorola,
                 _ => {
@@ -605,37 +616,38 @@ impl SomeIpSignalDb {
                         line: lineno,
                         message: format!(
                             "invalid byte_order: {:?}, expected Intel or Motorola",
-                            p[5]
+                            p[6]
                         ),
                     })
                 }
             };
-            let is_signed = match p[6].to_lowercase().as_str() {
+            let is_signed = match p[7].to_lowercase().as_str() {
                 "true" | "1" => true,
                 "false" | "0" => false,
                 _ => {
                     return Err(ParseError::Csv {
                         line: lineno,
-                        message: format!("invalid is_signed: {:?}, expected true/false/1/0", p[6]),
+                        message: format!("invalid is_signed: {:?}, expected true/false/1/0", p[7]),
                     })
                 }
             };
-            let scale = if p[7].is_empty() {
+            let scale = if p[8].is_empty() {
                 1.0
-            } else {
-                p[7].parse::<f64>().map_err(|_| ParseError::Csv {
-                    line: lineno,
-                    message: format!("invalid scale: {:?}", p[7]),
-                })?
-            };
-            let offset = if p[8].is_empty() {
-                0.0
             } else {
                 p[8].parse::<f64>().map_err(|_| ParseError::Csv {
                     line: lineno,
-                    message: format!("invalid offset: {:?}", p[8]),
+                    message: format!("invalid scale: {:?}", p[8]),
                 })?
             };
+            let offset = if p[9].is_empty() {
+                0.0
+            } else {
+                p[9].parse::<f64>().map_err(|_| ParseError::Csv {
+                    line: lineno,
+                    message: format!("invalid offset: {:?}", p[9]),
+                })?
+            };
+            let start_bit = start_byte * 8 + start_bit_in_byte;
             db.insert(SomeIpSignalDef {
                 name,
                 service_id,
@@ -695,7 +707,7 @@ impl SomeIpSignalDb {
         };
         writeln!(
             w,
-            "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset"
+            "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset"
         )?;
         let mut keys: Vec<(u16, u16)> = self.map.keys().copied().collect();
         keys.sort_unstable();
@@ -705,11 +717,12 @@ impl SomeIpSignalDb {
             for d in defs {
                 writeln!(
                     w,
-                    "0x{:04X},0x{:04X},{},{},{},{},{},{},{}",
+                    "0x{:04X},0x{:04X},{},{},{},{},{},{},{},{}",
                     svc,
                     mth,
                     d.name,
-                    d.signal.start_bit,
+                    d.signal.start_bit / 8,
+                    d.signal.start_bit % 8,
                     d.signal.bit_length,
                     bo(d.signal.byte_order),
                     d.signal.is_signed,
@@ -757,10 +770,10 @@ pub fn check_can_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             continue;
         }
         let p: Vec<&str> = line.split(',').map(str::trim).collect();
-        if p.len() < 8 {
+        if p.len() < 9 {
             errors.push((
                 lineno,
-                format!("expected at least 8 columns, got {}", p.len()),
+                format!("expected at least 9 columns, got {}", p.len()),
             ));
             continue;
         }
@@ -768,34 +781,37 @@ pub fn check_can_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             errors.push((lineno, format!("invalid message_id: {:?}", p[0])));
         }
         if parse_u32(p[2]).is_err() {
-            errors.push((lineno, format!("invalid start_bit: {:?}", p[2])));
+            errors.push((lineno, format!("invalid start_byte: {:?}", p[2])));
         }
         if parse_u32(p[3]).is_err() {
-            errors.push((lineno, format!("invalid bit_length: {:?}", p[3])));
+            errors.push((lineno, format!("invalid start_bit: {:?}", p[3])));
         }
-        if !matches!(p[4].to_lowercase().as_str(), "intel" | "motorola") {
+        if parse_u32(p[4]).is_err() {
+            errors.push((lineno, format!("invalid bit_length: {:?}", p[4])));
+        }
+        if !matches!(p[5].to_lowercase().as_str(), "intel" | "motorola") {
             errors.push((
                 lineno,
-                format!("invalid byte_order: {:?}, expected Intel or Motorola", p[4]),
+                format!("invalid byte_order: {:?}, expected Intel or Motorola", p[5]),
             ));
         }
-        if !matches!(p[5].to_lowercase().as_str(), "true" | "false" | "1" | "0") {
+        if !matches!(p[6].to_lowercase().as_str(), "true" | "false" | "1" | "0") {
             errors.push((
                 lineno,
-                format!("invalid is_signed: {:?}, expected true/false/1/0", p[5]),
+                format!("invalid is_signed: {:?}, expected true/false/1/0", p[6]),
             ));
-        }
-        if !p[6].is_empty() && p[6].parse::<f64>().is_err() {
-            errors.push((lineno, format!("invalid scale: {:?}", p[6])));
         }
         if !p[7].is_empty() && p[7].parse::<f64>().is_err() {
-            errors.push((lineno, format!("invalid offset: {:?}", p[7])));
+            errors.push((lineno, format!("invalid scale: {:?}", p[7])));
         }
-        if p.len() >= 9 && !p[8].is_empty() && parse_u32(p[8]).is_err() {
-            errors.push((lineno, format!("invalid pdu_id: {:?}", p[8])));
+        if !p[8].is_empty() && p[8].parse::<f64>().is_err() {
+            errors.push((lineno, format!("invalid offset: {:?}", p[8])));
+        }
+        if p.len() >= 10 && !p[9].is_empty() && parse_u32(p[9]).is_err() {
+            errors.push((lineno, format!("invalid pdu_id: {:?}", p[9])));
         }
         if let Ok(mid) = parse_u32(p[0]) {
-            let is_container = p.len() >= 9 && !p[8].is_empty();
+            let is_container = p.len() >= 10 && !p[9].is_empty();
             match first_seen.get(&mid) {
                 Some(&(prev, prev_line)) if prev != is_container => {
                     let (regular_line, container_line) = if prev {
@@ -839,10 +855,10 @@ pub fn check_someip_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             continue;
         }
         let p: Vec<&str> = line.split(',').map(str::trim).collect();
-        if p.len() < 9 {
+        if p.len() < 10 {
             errors.push((
                 lineno,
-                format!("expected at least 9 columns, got {}", p.len()),
+                format!("expected at least 10 columns, got {}", p.len()),
             ));
             continue;
         }
@@ -853,28 +869,31 @@ pub fn check_someip_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             errors.push((lineno, format!("invalid method_id: {:?}", p[1])));
         }
         if parse_u32(p[3]).is_err() {
-            errors.push((lineno, format!("invalid start_bit: {:?}", p[3])));
+            errors.push((lineno, format!("invalid start_byte: {:?}", p[3])));
         }
         if parse_u32(p[4]).is_err() {
-            errors.push((lineno, format!("invalid bit_length: {:?}", p[4])));
+            errors.push((lineno, format!("invalid start_bit: {:?}", p[4])));
         }
-        if !matches!(p[5].to_lowercase().as_str(), "intel" | "motorola") {
+        if parse_u32(p[5]).is_err() {
+            errors.push((lineno, format!("invalid bit_length: {:?}", p[5])));
+        }
+        if !matches!(p[6].to_lowercase().as_str(), "intel" | "motorola") {
             errors.push((
                 lineno,
-                format!("invalid byte_order: {:?}, expected Intel or Motorola", p[5]),
+                format!("invalid byte_order: {:?}, expected Intel or Motorola", p[6]),
             ));
         }
-        if !matches!(p[6].to_lowercase().as_str(), "true" | "false" | "1" | "0") {
+        if !matches!(p[7].to_lowercase().as_str(), "true" | "false" | "1" | "0") {
             errors.push((
                 lineno,
-                format!("invalid is_signed: {:?}, expected true/false/1/0", p[6]),
+                format!("invalid is_signed: {:?}, expected true/false/1/0", p[7]),
             ));
-        }
-        if !p[7].is_empty() && p[7].parse::<f64>().is_err() {
-            errors.push((lineno, format!("invalid scale: {:?}", p[7])));
         }
         if !p[8].is_empty() && p[8].parse::<f64>().is_err() {
-            errors.push((lineno, format!("invalid offset: {:?}", p[8])));
+            errors.push((lineno, format!("invalid scale: {:?}", p[8])));
+        }
+        if !p[9].is_empty() && p[9].parse::<f64>().is_err() {
+            errors.push((lineno, format!("invalid offset: {:?}", p[9])));
         }
     }
     errors
@@ -948,10 +967,10 @@ mod tests {
     #[test]
     fn csv_round_trip() {
         let csv = "\
-message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
-0x100,Throttle,16,8,Intel,false,0.4,0.0
-0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
+0x100,Throttle,2,0,8,Intel,false,0.4,0.0
+0x200,BrakeForce,0,7,12,Motorola,true,0.1,-100.0
 ";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x100).len(), 2);
@@ -970,18 +989,18 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
 
     #[test]
     fn csv_decimal_id() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   256,Sig,0,8,Intel,false,1.0,0.0\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   256,Sig,0,0,8,Intel,false,1.0,0.0\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(256).len(), 1); // 256 == 0x100
     }
 
     #[test]
     fn csv_skips_comments_and_blanks() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
                    # this is a comment\n\
                    \n\
-                   0x10,Voltage,0,8,Intel,false,0.1,0.0\n";
+                   0x10,Voltage,0,0,8,Intel,false,0.1,0.0\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x10).len(), 1);
     }
@@ -989,10 +1008,10 @@ message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
     #[test]
     fn someip_csv_round_trip() {
         let csv = "\
-service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
-0x0064,0x0001,Pressure,16,8,Intel,false,1.0,0.0
-0x0064,0x0002,Speed,0,16,Motorola,false,0.5,0.0
+service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x0064,0x0001,Temperature,0,0,16,Intel,false,0.01,0.0
+0x0064,0x0001,Pressure,2,0,8,Intel,false,1.0,0.0
+0x0064,0x0002,Speed,0,0,16,Motorola,false,0.5,0.0
 ";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x0064, 0x0001).len(), 2);
@@ -1014,32 +1033,32 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn someip_csv_decimal_ids() {
-        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   100,1,Sig,0,8,Intel,false,1.0,0.0\n";
+        let csv = "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   100,1,Sig,0,0,8,Intel,false,1.0,0.0\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(100, 1).len(), 1); // 100 == 0x64, 1 == 0x01
     }
 
     #[test]
     fn csv_trailing_comma_regular() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x100,Speed,0,16,Intel,false,0.25,0.0,\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,Speed,0,0,16,Intel,false,0.25,0.0,\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x100).len(), 1);
     }
 
     #[test]
     fn csv_trailing_comma_container() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
-                   0x200,Sig,0,8,Intel,false,1.0,0.0,0x10,\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x200,Sig,0,0,8,Intel,false,1.0,0.0,0x10,\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert!(db.is_container(0x200));
     }
 
     #[test]
     fn csv_default_scale_offset() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x100,Speed,0,8,Intel,false,,\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,Speed,0,0,8,Intel,false,,\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         // scale=1.0, offset=0.0: raw=42 → 42.0
         let vals = db.extract(0x100, &[42]);
@@ -1048,16 +1067,16 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn someip_csv_trailing_comma() {
-        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0,\n";
+        let csv = "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x0064,0x0001,Temperature,0,0,16,Intel,false,0.01,0.0,\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x0064, 0x0001).len(), 1);
     }
 
     #[test]
     fn someip_csv_default_scale_offset() {
-        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x0010,0x0001,Sig,0,8,Intel,false,,\n";
+        let csv = "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x0010,0x0001,Sig,0,0,8,Intel,false,,\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         // scale=1.0, offset=0.0: raw=7 → 7.0
         let vals = db.extract(0x0010, 0x0001, &[7]);
@@ -1066,9 +1085,9 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn check_csv_mixed_regular_and_container() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
-                   0x100,Direct,0,8,Intel,false,1.0,0.0\n\
-                   0x100,Contained,0,8,Intel,false,1.0,0.0,0x01\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x100,Direct,0,0,8,Intel,false,1.0,0.0\n\
+                   0x100,Contained,0,0,8,Intel,false,1.0,0.0,0x01\n";
         let errs = check_can_csv(csv.as_bytes());
         assert_eq!(errs.len(), 1);
         assert!(errs[0].1.contains("0x100"));
@@ -1078,34 +1097,34 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn check_csv_pure_regular_no_error() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x100,Sig1,0,8,Intel,false,1.0,0.0\n\
-                   0x100,Sig2,8,8,Intel,false,1.0,0.0\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,Sig1,0,0,8,Intel,false,1.0,0.0\n\
+                   0x100,Sig2,1,0,8,Intel,false,1.0,0.0\n";
         assert!(check_can_csv(csv.as_bytes()).is_empty());
     }
 
     #[test]
     fn check_csv_pure_container_no_error() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
-                   0x200,Sig1,0,8,Intel,false,1.0,0.0,0x01\n\
-                   0x200,Sig2,0,8,Intel,false,1.0,0.0,0x02\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x200,Sig1,0,0,8,Intel,false,1.0,0.0,0x01\n\
+                   0x200,Sig2,0,0,8,Intel,false,1.0,0.0,0x02\n";
         assert!(check_can_csv(csv.as_bytes()).is_empty());
     }
 
     #[test]
     fn someip_csv_skips_header_and_blanks() {
-        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+        let csv = "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
                    # comment\n\
                    \n\
-                   0x0001,0x0002,Sig,0,8,Intel,false,1.0,0.0\n";
+                   0x0001,0x0002,Sig,0,0,8,Intel,false,1.0,0.0\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(0x0001, 0x0002).len(), 1);
     }
 
     #[test]
     fn someip_csv_signed_scale_offset() {
-        let csv = "service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
-                   0x0010,0x0003,Temp,0,8,Intel,true,0.5,-40.0\n";
+        let csv = "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x0010,0x0003,Temp,0,0,8,Intel,true,0.5,-40.0\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         // raw=0xFF = -1 signed → -1 * 0.5 - 40.0 = -40.5
         let vals = db.extract(0x0010, 0x0003, &[0xFF]);
@@ -1160,10 +1179,10 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn container_csv_round_trip() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
-                   0x200,Sig1,0,8,Intel,false,1.0,0.0,0x10\n\
-                   0x200,Sig2,8,8,Intel,false,2.0,0.0,0x10\n\
-                   0x200,Sig3,0,8,Intel,false,0.5,0.0,0x20\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x200,Sig1,0,0,8,Intel,false,1.0,0.0,0x10\n\
+                   0x200,Sig2,1,0,8,Intel,false,2.0,0.0,0x10\n\
+                   0x200,Sig3,0,0,8,Intel,false,0.5,0.0,0x20\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert!(db.is_container(0x200));
         assert!(!db.is_container(0x100));
@@ -1182,9 +1201,9 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn container_pdu_order_independent() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
-                   0x600,Radar_Distance_m,0,16,Intel,false,0.01,0.0,0x01\n\
-                   0x600,CabinTemp_degC,0,8,Intel,true,0.5,-40.0,0x02\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x600,Radar_Distance_m,0,0,16,Intel,false,0.01,0.0,0x01\n\
+                   0x600,CabinTemp_degC,0,0,8,Intel,true,0.5,-40.0,0x02\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
 
         // PDU 0x01 first, then PDU 0x02
@@ -1218,9 +1237,9 @@ service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale
 
     #[test]
     fn container_and_regular_signals_coexist() {
-        let csv = "message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
-                   0x100,Direct,0,8,Intel,false,1.0,0.0\n\
-                   0x200,Contained,0,8,Intel,false,1.0,0.0,0x01\n";
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x100,Direct,0,0,8,Intel,false,1.0,0.0\n\
+                   0x200,Contained,0,0,8,Intel,false,1.0,0.0,0x01\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert!(!db.is_container(0x100));
         assert!(db.is_container(0x200));

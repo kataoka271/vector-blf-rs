@@ -539,8 +539,8 @@ impl Reader {
 ///
 /// CSV format (header required)::
 ///
-///     message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-///     0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
+///     message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+///     0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
 ///
 /// ``message_id`` accepts hex (``0x…``) or decimal.
 /// ``byte_order`` is ``Intel`` or ``Motorola`` (case-insensitive).
@@ -639,8 +639,8 @@ impl CanSignalDb {
 ///
 /// CSV format (header required)::
 ///
-///     service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-///     0x0064,0x0001,Temperature,0,16,Intel,false,0.01,0.0
+///     service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+///     0x0064,0x0001,Temperature,0,0,16,Intel,false,0.01,0.0
 ///
 /// ``service_id`` and ``method_id`` accept hex (``0x…``) or decimal.
 /// Signals are decoded from the SOME/IP application payload (bytes after the 16-byte header).

@@ -275,7 +275,12 @@ impl<R: Read + Seek> Reader<R> {
                 }
                 Err(eof_err)
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                if truncated {
+                    self.buf.clear();
+                }
+                Err(e)
+            }
             Ok(_) => self.read_base_object(),
         }
     }

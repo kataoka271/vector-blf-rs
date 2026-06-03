@@ -3,8 +3,9 @@ pub mod mf4;
 mod table;
 
 use blf::{
-    check_can_csv, check_someip_csv, BaseObject, CanSignalDb, ContainerHeader, Dir, Ip, Message,
-    ParseError, SomeIp, SomeIpSignalDb, Timestamp, Transport, Writer,
+    check_can_csv, check_someip_csv, BaseObject, CanSignalDb, ChannelDb, ChannelType,
+    ContainerHeader, Dir, Ip, Message, ParseError, SomeIp, SomeIpSignalDb, Timestamp, Transport,
+    Writer,
 };
 use clap::{Parser, Subcommand};
 use std::borrow::Borrow;
@@ -56,6 +57,9 @@ enum Command {
         /// SOME/IP signal definitions CSV
         #[arg(long, value_name = "FILE")]
         someip_signals: Option<PathBuf>,
+        /// Channel number to channel name mapping CSV
+        #[arg(long, value_name = "FILE")]
+        channels: Option<PathBuf>,
         /// Repeat BLF input N times when writing BLF, MF4, or MDF output
         #[arg(long, default_value = "1", value_name = "N")]
         repeat: u32,
@@ -103,12 +107,19 @@ fn mac_str(addr: &[u8; 6]) -> String {
     )
 }
 
+fn ch_name(db: Option<&ChannelDb>, ty: ChannelType, ch: u32) -> String {
+    db.and_then(|d| d.name(ty, ch))
+        .map(String::from)
+        .unwrap_or_else(|| ch.to_string())
+}
+
 fn write_csv_with_signals(
     w: &mut BufWriter<File>,
     objects: impl Iterator<Item = impl Borrow<BaseObject>>,
     signals: Option<&Path>,
     someip_signals: Option<&Path>,
     start_ns: u64,
+    channel_db: Option<&ChannelDb>,
 ) -> Result<usize> {
     if let Some(sp) = signals {
         let db = CanSignalDb::from_csv(BufReader::new(File::open(sp)?))?;
@@ -121,9 +132,10 @@ fn write_csv_with_signals(
             &db,
             someip_db.as_ref(),
             start_ns,
+            channel_db,
         )?)
     } else {
-        Ok(blf::csv::write_csv_raw(w, objects, start_ns)?)
+        Ok(blf::csv::write_csv_raw(w, objects, start_ns, channel_db)?)
     }
 }
 
@@ -138,7 +150,11 @@ fn abs_ts_str(start_ns: u64, relative_ns: u64) -> String {
         .unwrap_or_default()
 }
 
-fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>, start_ns: u64) {
+fn print_table<T: Borrow<BaseObject>>(
+    objects: impl IntoIterator<Item = T>,
+    start_ns: u64,
+    channel_db: Option<&ChannelDb>,
+) {
     let mut tbl = table::Table::new(&[
         ("timestamp_ns", false),
         ("absolute_timestamp", false),
@@ -167,7 +183,7 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>, star
                 ns_str,
                 abs,
                 "CAN".into(),
-                m.channel.to_string(),
+                ch_name(channel_db, ChannelType::Can, m.channel as u32),
                 dir_str(&m.dir).into(),
                 String::new(),
                 String::new(),
@@ -182,7 +198,7 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>, star
                 ns_str,
                 abs,
                 "CAN-FD".into(),
-                m.channel.to_string(),
+                ch_name(channel_db, ChannelType::Can, m.channel as u32),
                 dir_str(&m.dir).into(),
                 String::new(),
                 String::new(),
@@ -197,7 +213,7 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>, star
                 ns_str,
                 abs,
                 "CAN-FD64".into(),
-                m.channel.to_string(),
+                ch_name(channel_db, ChannelType::Can, m.channel as u32),
                 dir_str(&m.dir).into(),
                 String::new(),
                 String::new(),
@@ -212,7 +228,7 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>, star
                 ns_str,
                 abs,
                 "Ethernet".into(),
-                m.channel.to_string(),
+                ch_name(channel_db, ChannelType::Ethernet, m.channel as u32),
                 dir_str(&m.dir).into(),
                 mac_str(&m.src_addr),
                 mac_str(&m.dst_addr),
@@ -230,7 +246,7 @@ fn print_table<T: Borrow<BaseObject>>(objects: impl IntoIterator<Item = T>, star
                 ns_str,
                 abs,
                 "EthernetEx".into(),
-                m.channel.to_string(),
+                ch_name(channel_db, ChannelType::Ethernet, m.channel as u32),
                 dir_str(&m.dir).into(),
                 mac_str(&m.src_addr),
                 mac_str(&m.dst_addr),
@@ -308,6 +324,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
     can_db: Option<&CanSignalDb>,
     someip_db: Option<&SomeIpSignalDb>,
     start_ns: u64,
+    channel_db: Option<&ChannelDb>,
 ) {
     let mut tbl = table::Table::new(&[
         ("timestamp_ns", false),
@@ -336,12 +353,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                         db.extract(m.id, &m.data)
                     };
                     let id = format!("0x{:X}", m.id);
+                    let ch = ch_name(channel_db, ChannelType::Can, m.channel as u32);
                     for (name, value) in vals {
                         tbl.push(vec![
                             ns_str.clone(),
                             abs.clone(),
                             "CAN".into(),
-                            m.channel.to_string(),
+                            ch.clone(),
                             id.clone(),
                             name.to_string(),
                             value.to_string(),
@@ -357,12 +375,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                         db.extract(m.id, &m.data)
                     };
                     let id = format!("0x{:X}", m.id);
+                    let ch = ch_name(channel_db, ChannelType::Can, m.channel as u32);
                     for (name, value) in vals {
                         tbl.push(vec![
                             ns_str.clone(),
                             abs.clone(),
                             "CAN-FD".into(),
-                            m.channel.to_string(),
+                            ch.clone(),
                             id.clone(),
                             name.to_string(),
                             value.to_string(),
@@ -378,12 +397,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                         db.extract(m.id, &m.data)
                     };
                     let id = format!("0x{:X}", m.id);
+                    let ch = ch_name(channel_db, ChannelType::Can, m.channel as u32);
                     for (name, value) in vals {
                         tbl.push(vec![
                             ns_str.clone(),
                             abs.clone(),
                             "CAN-FD64".into(),
-                            (m.channel as u16).to_string(),
+                            ch.clone(),
                             id.clone(),
                             name.to_string(),
                             value.to_string(),
@@ -395,12 +415,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                 if let Some(db) = someip_db {
                     if let Some((svc, mth, vals)) = try_someip_decode(db, m.ether_type, &m.data) {
                         let id = format!("0x{:04X}{:04X}", svc, mth);
+                        let ch = ch_name(channel_db, ChannelType::Ethernet, m.channel as u32);
                         for (name, value) in vals {
                             tbl.push(vec![
                                 ns_str.clone(),
                                 abs.clone(),
                                 "Ethernet".into(),
-                                m.channel.to_string(),
+                                ch.clone(),
                                 id.clone(),
                                 name.to_string(),
                                 value.to_string(),
@@ -413,12 +434,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                 if let Some(db) = someip_db {
                     if let Some((svc, mth, vals)) = try_someip_decode(db, m.ether_type, &m.data) {
                         let id = format!("0x{:04X}{:04X}", svc, mth);
+                        let ch = ch_name(channel_db, ChannelType::Ethernet, m.channel as u32);
                         for (name, value) in vals {
                             tbl.push(vec![
                                 ns_str.clone(),
                                 abs.clone(),
                                 "EthernetEx".into(),
-                                m.channel.to_string(),
+                                ch.clone(),
                                 id.clone(),
                                 name.to_string(),
                                 value.to_string(),
@@ -584,12 +606,25 @@ fn cmd_parse(
     repeat: u32,
     n_threads: usize,
     someip_signals_path: Option<PathBuf>,
+    channels_path: Option<PathBuf>,
     quiet: bool,
     pdu_list: bool,
 ) -> Result<()> {
     if matches!(ext(&input), "mf4" | "mdf") {
-        return cmd_parse_mf4(input, output, signals, someip_signals_path, quiet, pdu_list);
+        return cmd_parse_mf4(
+            input,
+            output,
+            signals,
+            someip_signals_path,
+            channels_path,
+            quiet,
+            pdu_list,
+        );
     }
+    let channel_db: Option<ChannelDb> = channels_path
+        .as_ref()
+        .map(|p| ChannelDb::from_csv(BufReader::new(File::open(p)?)))
+        .transpose()?;
 
     let is_csv = output.as_ref().map(|p| ext(p) == "csv").unwrap_or(false);
     let output_is_mf4 = output
@@ -604,6 +639,7 @@ fn cmd_parse(
             output.as_ref().unwrap(),
             signals,
             someip_signals_path,
+            channel_db.as_ref(),
         );
     }
 
@@ -648,6 +684,7 @@ fn cmd_parse(
                 signals.as_deref(),
                 someip_signals_path.as_deref(),
                 start_ns,
+                channel_db.as_ref(),
             )?;
             println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
         } else if output_is_mf4 {
@@ -699,9 +736,14 @@ fn cmd_parse(
                 can_db.as_ref(),
                 someip_db.as_ref(),
                 start_ns,
+                channel_db.as_ref(),
             );
         } else {
-            print_table(chunk_results.iter().flatten(), start_ns);
+            print_table(
+                chunk_results.iter().flatten(),
+                start_ns,
+                channel_db.as_ref(),
+            );
         }
     }
     Ok(())
@@ -713,12 +755,17 @@ fn cmd_parse_mf4(
     output: Option<PathBuf>,
     signals: Option<PathBuf>,
     someip_signals_path: Option<PathBuf>,
+    channels_path: Option<PathBuf>,
     quiet: bool,
     pdu_list: bool,
 ) -> Result<()> {
     let t = time::Instant::now();
     let reader = mf4::Reader::new(BufReader::new(File::open(&input)?))?;
     let start_time_ns = reader.start_time_ns;
+    let channel_db: Option<ChannelDb> = channels_path
+        .as_ref()
+        .map(|p| ChannelDb::from_csv(BufReader::new(File::open(p)?)))
+        .transpose()?;
 
     if !quiet {
         let objects: Vec<BaseObject> = reader.filter_map(|r| r.ok()).collect();
@@ -752,9 +799,10 @@ fn cmd_parse_mf4(
                 can_db.as_ref(),
                 someip_db.as_ref(),
                 start_time_ns,
+                channel_db.as_ref(),
             );
         } else {
-            print_table(objects.iter(), start_time_ns);
+            print_table(objects.iter(), start_time_ns, channel_db.as_ref());
         }
         if let Some(ref out) = output {
             let t2 = time::Instant::now();
@@ -767,6 +815,7 @@ fn cmd_parse_mf4(
                     signals.as_deref(),
                     someip_signals_path.as_deref(),
                     start_time_ns,
+                    channel_db.as_ref(),
                 )?;
                 println!("wrote {} rows in {:.3}s", count, t2.elapsed().as_secs_f32());
             } else if matches!(output_ext, "mf4" | "mdf") {
@@ -811,6 +860,7 @@ fn cmd_parse_mf4(
             signals.as_deref(),
             someip_signals_path.as_deref(),
             start_time_ns,
+            channel_db.as_ref(),
         )?;
         println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
     } else if matches!(ext(out), "mf4" | "mdf") {
@@ -862,6 +912,7 @@ fn cmd_parse_csv_stream(
     output: &Path,
     signals: Option<PathBuf>,
     someip_signals_path: Option<PathBuf>,
+    channel_db: Option<&ChannelDb>,
 ) -> Result<()> {
     let t = time::Instant::now();
     let mut w = BufWriter::new(File::create(output)?);
@@ -873,6 +924,7 @@ fn cmd_parse_csv_stream(
         signals.as_deref(),
         someip_signals_path.as_deref(),
         start_ns,
+        channel_db,
     )?;
     println!("wrote {} rows in {:.3}s", count, t.elapsed().as_secs_f32());
     Ok(())
@@ -940,6 +992,7 @@ fn main() -> Result<()> {
             repeat,
             threads,
             someip_signals,
+            channels,
             quiet,
             pdu_list,
         } => cmd_parse(
@@ -949,6 +1002,7 @@ fn main() -> Result<()> {
             repeat,
             threads,
             someip_signals,
+            channels,
             quiet,
             pdu_list,
         ),

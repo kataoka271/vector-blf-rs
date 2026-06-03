@@ -31,8 +31,8 @@ pub use message::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Mf4Si
 pub use object::FileHeader;
 pub use objtype::ObjType;
 pub use signal::{
-    check_can_csv, check_someip_csv, demux_container, ByteOrder, CanSignalDb, ContainerHeader,
-    Signal, SignalDef, SomeIpSignalDb, SomeIpSignalDef,
+    check_can_csv, check_someip_csv, demux_container, ByteOrder, CanSignalDb, ChannelDb,
+    ChannelType, ContainerHeader, Signal, SignalDef, SomeIpSignalDb, SomeIpSignalDef,
 };
 
 #[derive(Debug)]

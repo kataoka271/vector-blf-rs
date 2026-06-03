@@ -1160,6 +1160,49 @@ fn convert_base_object(py: Python<'_>, obj: blf::BaseObject) -> BaseObject {
     }
 }
 
+/// Maps (type, channel_number) to a channel name.
+///
+/// CSV format (header required)::
+///
+///     type,channel,name
+///     CAN,1,CAN_HS
+///     Ethernet,1,ETH_BACKBONE
+///
+/// ``type`` is case-insensitive: ``CAN`` or ``Ethernet``.
+#[pyclass]
+pub struct ChannelDb {
+    inner: blf::ChannelDb,
+}
+
+#[pymethods]
+impl ChannelDb {
+    #[new]
+    fn new(path: &str) -> PyResult<Self> {
+        let f =
+            File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let db = blf::ChannelDb::from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner: db })
+    }
+
+    /// Look up the channel name for ``(type_str, channel)``.
+    ///
+    /// ``type_str`` is ``"CAN"`` or ``"Ethernet"`` (case-insensitive).
+    /// Returns ``None`` when no mapping exists for the given pair.
+    fn name(&self, type_str: &str, channel: u32) -> PyResult<Option<String>> {
+        let ty = match type_str.to_lowercase().as_str() {
+            "can" => blf::ChannelType::Can,
+            "ethernet" => blf::ChannelType::Ethernet,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "invalid type: {:?}, expected CAN or Ethernet",
+                    type_str
+                )))
+            }
+        };
+        Ok(self.inner.name(ty, channel).map(String::from))
+    }
+}
+
 // ── module ───────────────────────────────────────────────────────────────────
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1173,6 +1216,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Mf4Signal>()?;
     m.add_class::<CanSignalDb>()?;
     m.add_class::<SomeIpSignalDb>()?;
+    m.add_class::<ChannelDb>()?;
     m.add_class::<IsoTpReassembler>()?;
     m.add_function(wrap_pyfunction!(parse_someip_udp, m)?)?;
     m.add_function(wrap_pyfunction!(parse_doip_diag, m)?)?;

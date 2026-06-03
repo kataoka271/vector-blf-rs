@@ -2,7 +2,7 @@ use super::diag::someip::SomeIp;
 use super::eth::ip::Ip;
 use super::eth::transport::Transport;
 use super::message::Message;
-use super::signal::{CanSignalDb, ContainerHeader, SomeIpSignalDb};
+use super::signal::{CanSignalDb, ChannelDb, ChannelType, ContainerHeader, SomeIpSignalDb};
 use super::BaseObject;
 use super::Timestamp;
 use chrono::{TimeZone, Utc};
@@ -24,6 +24,12 @@ fn abs_ts_str(start_ns: u64, relative_ns: u64) -> String {
         .single()
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string())
         .unwrap_or_default()
+}
+
+fn channel_str(db: Option<&ChannelDb>, ty: ChannelType, ch: u32) -> String {
+    db.and_then(|d| d.name(ty, ch))
+        .map(String::from)
+        .unwrap_or_else(|| ch.to_string())
 }
 
 type SomeIpDecoded<'a> = Option<(u16, u16, Vec<(&'a str, f64)>)>;
@@ -54,6 +60,7 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
     w: &mut W,
     objects: impl IntoIterator<Item = T>,
     start_ns: u64,
+    channel_db: Option<&ChannelDb>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     writeln!(
         w,
@@ -72,10 +79,11 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
         let abs = abs_ts_str(start_ns, ns);
         match &obj.message {
             Message::Can(m) => {
+                let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
                 write!(
                     w,
                     "{},{},CAN,{},{:?},,,,0x{:X},{},{},",
-                    ns, abs, m.channel, m.dir, m.id, m.is_ext_id, m.dlc
+                    ns, abs, ch, m.dir, m.id, m.is_ext_id, m.dlc
                 )?;
                 for b in &m.data {
                     write!(w, "{:02X}", b)?;
@@ -84,10 +92,11 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
                 count += 1;
             }
             Message::CanFd(m) => {
+                let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
                 write!(
                     w,
                     "{},{},CAN-FD,{},{:?},,,,0x{:X},{},{},",
-                    ns, abs, m.channel, m.dir, m.id, m.is_ext_id, m.dlc
+                    ns, abs, ch, m.dir, m.id, m.is_ext_id, m.dlc
                 )?;
                 for b in &m.data {
                     write!(w, "{:02X}", b)?;
@@ -96,10 +105,11 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
                 count += 1;
             }
             Message::CanFd64(m) => {
+                let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
                 write!(
                     w,
                     "{},{},CAN-FD64,{},{:?},,,,0x{:X},{},{},",
-                    ns, abs, m.channel, m.dir, m.id, m.is_ext_id, m.dlc
+                    ns, abs, ch, m.dir, m.id, m.is_ext_id, m.dlc
                 )?;
                 for b in &m.data {
                     write!(w, "{:02X}", b)?;
@@ -108,6 +118,7 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
                 count += 1;
             }
             Message::Ethernet(m) => {
+                let ch = channel_str(channel_db, ChannelType::Ethernet, m.channel as u32);
                 let a = &m.src_addr;
                 let b = &m.dst_addr;
                 let vlan_vid = m
@@ -116,7 +127,7 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
                     .map(|v| v.vid.to_string())
                     .unwrap_or_default();
                 write!(w, "{},{},Ethernet,{},{:?},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},0x{:04X},{},,,,",
-                    ns, abs, m.channel, m.dir,
+                    ns, abs, ch, m.dir,
                     a[0], a[1], a[2], a[3], a[4], a[5],
                     b[0], b[1], b[2], b[3], b[4], b[5],
                     m.ether_type, vlan_vid)?;
@@ -127,6 +138,7 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
                 count += 1;
             }
             Message::EthernetEx(m) => {
+                let ch = channel_str(channel_db, ChannelType::Ethernet, m.channel as u32);
                 let a = &m.src_addr;
                 let b = &m.dst_addr;
                 let vlan_vid = m
@@ -135,7 +147,7 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
                     .map(|v| v.vid.to_string())
                     .unwrap_or_default();
                 write!(w, "{},{},EthernetEx,{},{:?},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X},0x{:04X},{},,,,",
-                    ns, abs, m.channel, m.dir,
+                    ns, abs, ch, m.dir,
                     a[0], a[1], a[2], a[3], a[4], a[5],
                     b[0], b[1], b[2], b[3], b[4], b[5],
                     m.ether_type, vlan_vid)?;
@@ -169,6 +181,7 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
     db: &CanSignalDb,
     someip_db: Option<&SomeIpSignalDb>,
     start_ns: u64,
+    channel_db: Option<&ChannelDb>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     writeln!(
         w,
@@ -188,34 +201,25 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
         match &obj.message {
             Message::Can(m) => {
                 let vals = can_extract(db, m.id, &m.data);
+                let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
                 for (name, value) in vals {
-                    writeln!(
-                        w,
-                        "{},{},{},0x{:X},{},{}",
-                        ns, abs, m.channel, m.id, name, value
-                    )?;
+                    writeln!(w, "{},{},{},0x{:X},{},{}", ns, abs, ch, m.id, name, value)?;
                     count += 1;
                 }
             }
             Message::CanFd(m) => {
                 let vals = can_extract(db, m.id, &m.data);
+                let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
                 for (name, value) in vals {
-                    writeln!(
-                        w,
-                        "{},{},{},0x{:X},{},{}",
-                        ns, abs, m.channel, m.id, name, value
-                    )?;
+                    writeln!(w, "{},{},{},0x{:X},{},{}", ns, abs, ch, m.id, name, value)?;
                     count += 1;
                 }
             }
             Message::CanFd64(m) => {
                 let vals = can_extract(db, m.id, &m.data);
+                let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
                 for (name, value) in vals {
-                    writeln!(
-                        w,
-                        "{},{},{},0x{:X},{},{}",
-                        ns, abs, m.channel as u32, m.id, name, value
-                    )?;
+                    writeln!(w, "{},{},{},0x{:X},{},{}", ns, abs, ch, m.id, name, value)?;
                     count += 1;
                 }
             }
@@ -223,11 +227,12 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
                 if let Some(sdb) = someip_db {
                     if let Some((svc, mth, vals)) = try_someip_signals(m.ether_type, &m.data, sdb) {
                         let msg_id = ((svc as u32) << 16) | (mth as u32);
+                        let ch = channel_str(channel_db, ChannelType::Ethernet, m.channel as u32);
                         for (name, value) in vals {
                             writeln!(
                                 w,
                                 "{},{},{},0x{:08X},{},{}",
-                                ns, abs, m.channel, msg_id, name, value
+                                ns, abs, ch, msg_id, name, value
                             )?;
                             count += 1;
                         }
@@ -238,11 +243,12 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
                 if let Some(sdb) = someip_db {
                     if let Some((svc, mth, vals)) = try_someip_signals(m.ether_type, &m.data, sdb) {
                         let msg_id = ((svc as u32) << 16) | (mth as u32);
+                        let ch = channel_str(channel_db, ChannelType::Ethernet, m.channel as u32);
                         for (name, value) in vals {
                             writeln!(
                                 w,
                                 "{},{},{},0x{:08X},{},{}",
-                                ns, abs, m.channel, msg_id, name, value
+                                ns, abs, ch, msg_id, name, value
                             )?;
                             count += 1;
                         }

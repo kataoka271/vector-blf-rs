@@ -899,6 +899,78 @@ pub fn check_someip_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
     errors
 }
 
+/// Protocol family used as the key dimension in `ChannelDb`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChannelType {
+    Can,
+    Ethernet,
+}
+
+/// Maps `(ChannelType, channel_number)` to a human-readable channel name.
+///
+/// CSV format (header required):
+/// ```text
+/// type,channel,name
+/// CAN,1,CAN_HS
+/// CAN,2,CAN_LS
+/// Ethernet,1,ETH_BACKBONE
+/// ```
+/// `type` is case-insensitive: `CAN` or `Ethernet`.
+/// `channel` is a decimal integer.
+/// Duplicate `(type, channel)` pairs are an error.
+#[derive(Debug, Default)]
+pub struct ChannelDb {
+    names: HashMap<(ChannelType, u32), String>,
+}
+
+impl ChannelDb {
+    pub fn from_csv<R: std::io::Read>(reader: R) -> ParseResult<Self> {
+        let mut db = Self::default();
+        for (i, line) in std::io::BufReader::new(reader).lines().enumerate() {
+            let lineno = i + 1;
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with("type") {
+                continue;
+            }
+            let p: Vec<&str> = line.split(',').map(str::trim).collect();
+            if p.len() < 3 {
+                return Err(ParseError::Csv {
+                    line: lineno,
+                    message: format!("expected at least 3 columns, got {}", p.len()),
+                });
+            }
+            let ty = match p[0].to_lowercase().as_str() {
+                "can" => ChannelType::Can,
+                "ethernet" => ChannelType::Ethernet,
+                _ => {
+                    return Err(ParseError::Csv {
+                        line: lineno,
+                        message: format!("invalid type: {:?}, expected CAN or Ethernet", p[0]),
+                    })
+                }
+            };
+            let channel = p[1].parse::<u32>().map_err(|_| ParseError::Csv {
+                line: lineno,
+                message: format!("invalid channel: {:?}", p[1]),
+            })?;
+            let name = p[2].to_string();
+            if db.names.contains_key(&(ty, channel)) {
+                return Err(ParseError::Csv {
+                    line: lineno,
+                    message: format!("duplicate entry for ({:?}, {})", ty, channel),
+                });
+            }
+            db.names.insert((ty, channel), name);
+        }
+        Ok(db)
+    }
+
+    pub fn name(&self, ty: ChannelType, channel: u32) -> Option<&str> {
+        self.names.get(&(ty, channel)).map(String::as_str)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

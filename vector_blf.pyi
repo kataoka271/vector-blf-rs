@@ -191,6 +191,28 @@ class SomeIpSignalDb:
         """
         ...
 
+class ChannelDb:
+    """Maps (type, channel_number) to a human-readable channel name.
+
+    CSV format (header required)::
+
+        type,channel,name
+        CAN,1,CAN_HS
+        CAN,2,CAN_LS
+        Ethernet,1,ETH_BACKBONE
+
+    ``type`` is case-insensitive: ``CAN`` or ``Ethernet``.
+    """
+
+    def __init__(self, path: str) -> None: ...
+    def name(self, type: str, channel: int) -> Optional[str]:
+        """Look up the channel name for (type, channel).
+
+        type is "CAN" or "Ethernet" (case-insensitive).
+        Returns None when no mapping exists for the given pair.
+        """
+        ...
+
 class IsoTpReassembler:
     """Stateful ISO-TP (ISO 15765-2) reassembler for a single sender/receiver conversation.
 

@@ -328,8 +328,15 @@ message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scal
 fn csv_signals_header_only() {
     let db = engine_signal_db();
     let mut out = Vec::<u8>::new();
-    let count =
-        write_csv_signals(&mut out, std::iter::empty::<BaseObject>(), &db, None, 0, None).unwrap();
+    let count = write_csv_signals(
+        &mut out,
+        std::iter::empty::<BaseObject>(),
+        &db,
+        None,
+        0,
+        None,
+    )
+    .unwrap();
     assert_eq!(count, 0);
     let rows = csv_rows(&out);
     assert_eq!(rows.len(), 1);

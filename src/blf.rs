@@ -86,12 +86,17 @@ fn decompress_container<R: Read>(
 // Parses as many complete BaseObjects as possible from `buf`, appending
 // them to `out`. Advances a cursor rather than draining on every object to
 // avoid the O(n²) byte-shifting cost; drains once at the end.
+//
+// Always drains the parsed portion before returning, even on error, so that
+// `buf` contains only the unparsed suffix (a partial header or partial object
+// starting at its header). The caller can append more data and retry.
 fn parse_objects_from_buf(
     buf: &mut Vec<u8>,
     tmp: &mut Vec<u8>,
     out: &mut Vec<BaseObject>,
 ) -> ParseResult<()> {
     let mut cursor = 0usize;
+    let mut truncated = false;
     loop {
         let mut r = &buf[cursor..];
         let before = r.len();
@@ -103,13 +108,19 @@ fn parse_objects_from_buf(
         if tmp.len() < data_size {
             tmp.resize(data_size, 0);
         }
-        r.read_exact(&mut tmp[..data_size])?;
+        if r.read_exact(&mut tmp[..data_size]).is_err() {
+            truncated = true;
+            break; // cursor not advanced — partial object (including its header) stays in buf
+        }
         let padding_size = base_header.obj_size as usize % 4;
         if padding_size > 0 && base_header.obj_type.is_padding_needed() {
             let mut padding = [0u8; 4];
-            r.read_exact(&mut padding[..padding_size])?;
+            if r.read_exact(&mut padding[..padding_size]).is_err() {
+                truncated = true;
+                break;
+            }
         }
-        cursor += before - r.len();
+        cursor += before - r.len(); // advance only after both reads succeed
         if !r.is_empty() {
             log::info!("log container data remaining: {} bytes", r.len());
         }
@@ -126,8 +137,14 @@ fn parse_objects_from_buf(
         }
         out.push(BaseObject { timestamp, message });
     }
-    buf.drain(0..cursor);
-    Ok(())
+    buf.drain(0..cursor); // always drain parsed bytes; partial object bytes remain at buf[0..]
+    if truncated {
+        Err(ParseError::Io(std::io::Error::from(
+            std::io::ErrorKind::UnexpectedEof,
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 /// Returns the file header and the byte offset of every LogContainer in the file.
@@ -162,15 +179,44 @@ pub fn scan_containers<R: Read + Seek>(r: &mut R) -> ParseResult<(FileHeader, Op
 
 /// Seeks to each offset in `offsets`, decompresses the LogContainer there,
 /// and parses every BaseObject from it. Returns all objects in file order.
+///
+/// If an object's bytes span two adjacent containers, the leftover bytes
+/// from the first container are prepended to the next container's decompressed
+/// data and parsing continues. A truncated object in the last container (no
+/// further data available) returns `Err(UnexpectedEof)`.
 pub fn parse_at<R: Read + Seek>(r: &mut R, offsets: &[u64]) -> ParseResult<Vec<BaseObject>> {
     let mut buf = Vec::new();
     let mut tmp = Vec::new();
     let mut out = Vec::new();
-    for &offset in offsets {
+    let n = offsets.len();
+    for (i, &offset) in offsets.iter().enumerate() {
+        let is_last = i + 1 == n;
         r.seek(std::io::SeekFrom::Start(offset))?;
-        buf.clear();
+        // decompress_container appends to buf, so leftover bytes from the
+        // previous container are naturally prepended to this container's data.
         decompress_container(&mut *r, &mut buf, &mut tmp)?;
-        parse_objects_from_buf(&mut buf, &mut tmp, &mut out)?;
+        match parse_objects_from_buf(&mut buf, &mut tmp, &mut out) {
+            Ok(()) => {
+                if !buf.is_empty() && is_last {
+                    // Partial header bytes remain with no further containers.
+                    return Err(ParseError::Io(std::io::Error::from(
+                        std::io::ErrorKind::UnexpectedEof,
+                    )));
+                }
+                // buf holds leftover partial-header bytes that will be prepended
+                // to the next container's decompressed data.
+            }
+            Err(ParseError::Io(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                if is_last {
+                    return Err(ParseError::Io(std::io::Error::from(
+                        std::io::ErrorKind::UnexpectedEof,
+                    )));
+                }
+                // buf holds the partial object (header + whatever data arrived);
+                // the next container's data will complete it.
+            }
+            Err(e) => return Err(e),
+        }
     }
     Ok(out)
 }

@@ -326,6 +326,116 @@ fn reader_errors_on_truncated_object() {
     );
 }
 
+// ── cross-container object stitching ─────────────────────────────────────────
+
+/// Constructs a BLF file in memory where two CAN objects are stored across
+/// two uncompressed LogContainers, with the split falling mid-object.
+/// Verifies that parse_at stitches the pieces and returns both objects.
+#[test]
+fn parse_at_stitches_object_spanning_containers() {
+    use std::io::Cursor;
+
+    // Serialize a single CAN BaseObject to 48 bytes:
+    //   BaseObjectHeader (16) + ObjectHeaderV1 (16) + CAN message (16)
+    let make_can_bytes = |ts_ns: u64, id: u32| -> [u8; 48] {
+        let mut b = [0u8; 48];
+        // BaseObjectHeader
+        b[0..4].copy_from_slice(b"LOBJ");
+        b[4..6].copy_from_slice(&16u16.to_le_bytes()); // header_size
+        b[6..8].copy_from_slice(&1u16.to_le_bytes()); // version
+        b[8..12].copy_from_slice(&48u32.to_le_bytes()); // obj_size
+        b[12..16].copy_from_slice(&1u32.to_le_bytes()); // obj_type = CanMessage
+                                                        // ObjectHeaderV1 (flags=0 → Nanosecond)
+        b[16..20].copy_from_slice(&0u32.to_le_bytes()); // flags
+        b[20..22].copy_from_slice(&0u16.to_le_bytes()); // client
+        b[22..24].copy_from_slice(&0u16.to_le_bytes()); // obj_version
+        b[24..32].copy_from_slice(&ts_ns.to_le_bytes()); // timestamp
+                                                         // CAN message: channel=1, flags=1 (Dir::Rx), dlc=3, id, data[8]
+        b[32..34].copy_from_slice(&1u16.to_le_bytes()); // channel
+        b[34] = 1; // flags = Dir::Rx
+        b[35] = 3; // dlc
+        b[36..40].copy_from_slice(&id.to_le_bytes()); // can_id
+                                                      // data[8] left as zeros
+        b
+    };
+
+    let can1 = make_can_bytes(1_000_000, 0x123);
+    let can2 = make_can_bytes(2_000_000, 0x456);
+
+    // Split can2 at byte 20: 16 bytes of BaseObjectHeader + 4 bytes into ObjectHeaderV1.
+    let split = 20usize;
+
+    // Container 1 payload: complete can1 + first `split` bytes of can2 = 68 bytes
+    let mut payload1: Vec<u8> = Vec::new();
+    payload1.extend_from_slice(&can1);
+    payload1.extend_from_slice(&can2[..split]);
+
+    // Container 2 payload: remaining bytes of can2 = 28 bytes
+    let payload2 = &can2[split..];
+
+    let make_lc = |payload: &[u8]| -> Vec<u8> {
+        let data_len = payload.len() as u32;
+        let obj_size = 32u32 + data_len;
+        let mut lc: Vec<u8> = Vec::new();
+        lc.extend_from_slice(b"LOBJ");
+        lc.extend_from_slice(&16u16.to_le_bytes()); // header_size
+        lc.extend_from_slice(&1u16.to_le_bytes()); // version
+        lc.extend_from_slice(&obj_size.to_le_bytes());
+        lc.extend_from_slice(&10u32.to_le_bytes()); // obj_type = LogContainer
+                                                    // LogContainerHeader
+        lc.extend_from_slice(&0u16.to_le_bytes()); // compression_method = 0 (none)
+        lc.extend_from_slice(&[0u8; 6]); // padding
+        lc.extend_from_slice(&data_len.to_le_bytes()); // uncompressed_size
+        lc.extend_from_slice(&[0u8; 4]); // padding
+        lc.extend_from_slice(payload);
+        let pad = obj_size as usize % 4;
+        if pad > 0 {
+            lc.extend_from_slice(&[0u8; 4][..pad]);
+        }
+        lc
+    };
+
+    let lc1 = make_lc(&payload1);
+    let lc2 = make_lc(payload2);
+
+    // Assemble the full BLF: FileHeader (144 bytes) + LC1 + LC2
+    let mut blf: Vec<u8> = Vec::new();
+    blf.extend_from_slice(b"LOGG");
+    blf.extend_from_slice(&144u32.to_le_bytes()); // header_size
+    blf.extend_from_slice(&[0u8; 8]); // version bytes
+    blf.extend_from_slice(&0u64.to_le_bytes()); // file_size
+    blf.extend_from_slice(&0u64.to_le_bytes()); // uncompressed_size
+    blf.extend_from_slice(&2u32.to_le_bytes()); // object_count
+    blf.extend_from_slice(&0u32.to_le_bytes()); // count_read
+    blf.extend_from_slice(&[0u8; 16]); // start_timestamp (zeros → Nanosecond(0))
+    blf.extend_from_slice(&[0u8; 16]); // stop_timestamp
+    blf.extend_from_slice(&[0u8; 72]); // padding to 144 bytes
+    blf.extend_from_slice(&lc1);
+    blf.extend_from_slice(&lc2);
+
+    let mut cursor = Cursor::new(blf);
+    let (_header, offsets) = scan_containers(&mut cursor).unwrap();
+    let offsets = offsets.expect("expected LogContainer-based BLF");
+    assert_eq!(offsets.len(), 2, "expected 2 LogContainers");
+
+    let result = parse_at(&mut cursor, &offsets);
+    assert!(
+        result.is_ok(),
+        "expected Ok for spanning object, got {result:?}"
+    );
+    let objects = result.unwrap();
+    assert_eq!(objects.len(), 2, "expected 2 parsed objects");
+
+    match &objects[0].message {
+        Message::Can(can) => assert_eq!(can.id, 0x123),
+        _ => panic!("expected Can at index 0"),
+    }
+    match &objects[1].message {
+        Message::Can(can) => assert_eq!(can.id, 0x456),
+        _ => panic!("expected Can at index 1"),
+    }
+}
+
 // ── FileHeader metadata ───────────────────────────────────────────────────────
 
 #[test]

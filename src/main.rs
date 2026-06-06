@@ -598,7 +598,6 @@ fn ext(p: &Path) -> &str {
     p.extension().and_then(|e| e.to_str()).unwrap_or("")
 }
 
-#[allow(clippy::too_many_arguments)]
 fn cmd_parse(
     input: PathBuf,
     output: Option<PathBuf>,

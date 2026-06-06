@@ -247,10 +247,10 @@ uv run python scripts/bench_python.py data/bench_large.blf
 ## Development
 
 ```bash
-cargo build                          # debug build
-cargo test                           # run all tests
-cargo clippy && cargo fmt            # lint + format
+cargo build                                # debug build
+cargo test                                 # run all tests
+cargo clippy --all-targets && cargo fmt    # lint + format
 
 uv run maturin develop --features python   # rebuild Python extension
-uv run python bench_python.py             # run benchmark
+uv run python bench_python.py              # run benchmark
 ```

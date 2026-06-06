@@ -334,7 +334,6 @@ impl Reader {
     /// ``is_ext_id``, ``dir``, ``rtr``, ``dlc``, ``data``, ``fdf``,
     /// ``brs``, ``esi``, ``src_addr``, ``dst_addr``, ``ether_type``,
     /// ``mf4_group``, ``mf4_name``, ``mf4_value``, ``mf4_unit``.
-    #[allow(clippy::useless_conversion)]
     #[pyo3(signature = (n = 50_000))]
     fn read_batch<'py>(
         &mut self,
@@ -728,7 +727,6 @@ impl IsoTpReassembler {
 /// ``someip_client_id``, ``someip_session_id``, ``someip_protocol_version``,
 /// ``someip_interface_version``, ``someip_msg_type``, ``someip_return_code``,
 /// ``payload``.
-#[allow(clippy::useless_conversion)]
 #[pyfunction]
 fn parse_someip_udp<'py>(
     py: Python<'py>,
@@ -809,7 +807,6 @@ fn parse_someip_udp<'py>(
 ///
 /// Returns an empty list if the frame is not TCP/13400 or contains no
 /// DiagMessages.
-#[allow(clippy::useless_conversion)]
 #[pyfunction]
 fn parse_doip_diag<'py>(
     py: Python<'py>,
@@ -933,7 +930,6 @@ fn uds_to_tuple(uds: blf::Uds) -> (String, i32, String, Option<i32>, Option<Stri
 ///   ``ip.protocol``, ``ip.ttl`` / ``ip.hop_limit``, ``ip.total_len`` (IPv4 only),
 ///   ``ip.src``, ``ip.dst``, ``tcp.src_port``, ``tcp.dst_port``, ``tcp.flags``,
 ///   ``udp.src_port``, ``udp.dst_port``, ``udp.payload_bytes``.
-#[allow(clippy::useless_conversion)]
 #[pyfunction]
 fn parse_eth_payload_signals<'py>(
     py: Python<'py>,

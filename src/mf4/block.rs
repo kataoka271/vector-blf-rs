@@ -504,7 +504,6 @@ impl CnBlock {
     }
 
     /// Write a CN block and return its file offset.
-    #[allow(clippy::too_many_arguments)]
     pub fn write<W: Write + Seek>(
         w: &mut W,
         next_cn: u64,

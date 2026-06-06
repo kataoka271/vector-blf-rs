@@ -10,13 +10,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Prefer Rust 2018 module style: use `foo.rs` alongside a `foo/` directory for submodules, not `foo/mod.rs`.
 - Update `vector_blf.pyi` after editing `src/python.rs`.
+- Do not use `#[allow(...)]` directives.
 
 ### After editing Rust files
 
 ```bash
-cargo fmt       # formatter
-cargo clippy    # linter
-cargo check     # type-check
+cargo fmt                     # formatter
+cargo clippy --all-targets    # linter
+cargo check                   # type-check
 ```
 
 ### After editing Python files
@@ -37,7 +38,7 @@ cargo check                          # fast type-check without linking
 cargo test                           # run all tests
 cargo test isotp::                   # run tests in a specific module
 cargo fmt                            # format code
-cargo clippy                         # lint
+cargo clippy --all-targets           # lint
 cargo run -- parse <input.blf> [options]   # run the CLI
 ```
 

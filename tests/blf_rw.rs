@@ -93,6 +93,76 @@ fn canfd64_obj(id: u32, data: &[u8]) -> BaseObject {
     }
 }
 
+/// Builds 48 bytes of a serialized CAN BaseObject:
+///   BaseObjectHeader (16) + ObjectHeaderV1 (16) + CAN payload (16).
+fn raw_can_bytes(ts_ns: u64, id: u32) -> [u8; 48] {
+    let mut b = [0u8; 48];
+    b[0..4].copy_from_slice(b"LOBJ");
+    b[4..6].copy_from_slice(&16u16.to_le_bytes()); // header_size
+    b[6..8].copy_from_slice(&1u16.to_le_bytes()); // version
+    b[8..12].copy_from_slice(&48u32.to_le_bytes()); // obj_size
+    b[12..16].copy_from_slice(&1u32.to_le_bytes()); // obj_type = CanMessage
+    b[16..20].copy_from_slice(&0u32.to_le_bytes()); // flags (Nanosecond)
+    b[20..22].copy_from_slice(&0u16.to_le_bytes()); // client
+    b[22..24].copy_from_slice(&0u16.to_le_bytes()); // obj_version
+    b[24..32].copy_from_slice(&ts_ns.to_le_bytes()); // timestamp
+    b[32..34].copy_from_slice(&1u16.to_le_bytes()); // channel
+    b[34] = 1; // dir = Rx
+    b[35] = 3; // dlc
+    b[36..40].copy_from_slice(&id.to_le_bytes()); // can_id
+    b
+}
+
+/// Wraps `payload` in an uncompressed LogContainer (compression_method = 0).
+fn uncompressed_lc(payload: &[u8]) -> Vec<u8> {
+    let data_len = payload.len() as u32;
+    let obj_size = 32u32 + data_len;
+    let mut lc = Vec::new();
+    lc.extend_from_slice(b"LOBJ");
+    lc.extend_from_slice(&16u16.to_le_bytes()); // header_size
+    lc.extend_from_slice(&1u16.to_le_bytes()); // version
+    lc.extend_from_slice(&obj_size.to_le_bytes());
+    lc.extend_from_slice(&10u32.to_le_bytes()); // obj_type = LogContainer
+    lc.extend_from_slice(&0u16.to_le_bytes()); // compression_method = 0 (none)
+    lc.extend_from_slice(&[0u8; 6]); // reserved
+    lc.extend_from_slice(&data_len.to_le_bytes()); // uncompressed_size
+    lc.extend_from_slice(&[0u8; 4]); // reserved
+    lc.extend_from_slice(payload);
+    let pad = obj_size as usize % 4;
+    if pad > 0 {
+        lc.extend_from_slice(&[0u8; 4][..pad]);
+    }
+    lc
+}
+
+/// Builds a complete in-memory BLF: 144-byte file header followed by the given containers.
+fn blf_with_containers(containers: &[Vec<u8>]) -> Vec<u8> {
+    let mut blf = Vec::new();
+    blf.extend_from_slice(b"LOGG");
+    blf.extend_from_slice(&144u32.to_le_bytes()); // header_size
+    blf.extend_from_slice(&[0u8; 8]); // version bytes
+    blf.extend_from_slice(&0u64.to_le_bytes()); // file_size
+    blf.extend_from_slice(&0u64.to_le_bytes()); // uncompressed_size
+    blf.extend_from_slice(&0u32.to_le_bytes()); // object_count
+    blf.extend_from_slice(&0u32.to_le_bytes()); // count_read
+    blf.extend_from_slice(&[0u8; 16]); // start_timestamp
+    blf.extend_from_slice(&[0u8; 16]); // stop_timestamp
+    blf.extend_from_slice(&[0u8; 72]); // padding to 144 bytes
+    for c in containers {
+        blf.extend_from_slice(c);
+    }
+    blf
+}
+
+/// Opens `path` with Reader::new, wrapping a construction error as `vec![Err(e)]`.
+fn reader_collect(path: &str) -> Vec<Result<BaseObject, ParseError>> {
+    let f = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    match Reader::new(f) {
+        Err(e) => vec![Err(e)],
+        Ok(r) => r.collect(),
+    }
+}
+
 fn write_then_read(objects: Vec<BaseObject>) -> Vec<BaseObject> {
     let sc = SharedCursor::new();
     let sc_reader = sc.clone();
@@ -326,6 +396,51 @@ fn reader_errors_on_truncated_object() {
     );
 }
 
+// ── truncated LogContainer (container data cut short in the file) ─────────────
+
+#[test]
+fn parse_at_errors_on_truncated_uncompressed_container() {
+    let path = "data/technica/errors/FileWithTruncatedUncompressedLogContainer.blf";
+    let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    let (_header, offsets) = scan_containers(&mut f).unwrap();
+    let offsets = offsets.unwrap();
+    let result = parse_at(&mut std::fs::File::open(path).unwrap(), &offsets);
+    assert!(
+        matches!(result, Err(ParseError::Io(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof),
+        "expected UnexpectedEof, got {result:?}"
+    );
+}
+
+#[test]
+fn reader_errors_on_truncated_uncompressed_container() {
+    let path = "data/technica/errors/FileWithTruncatedUncompressedLogContainer.blf";
+    let results = reader_collect(path);
+    assert!(
+        results.iter().any(|r| r.is_err()),
+        "expected an error in results, got {results:?}"
+    );
+}
+
+#[test]
+fn parse_at_errors_on_truncated_compressed_container() {
+    let path = "data/technica/errors/FileWithTruncatedCompressedLogContainer.blf";
+    let mut f = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    let (_header, offsets) = scan_containers(&mut f).unwrap();
+    let offsets = offsets.unwrap();
+    let result = parse_at(&mut std::fs::File::open(path).unwrap(), &offsets);
+    assert!(result.is_err(), "expected an error, got {result:?}");
+}
+
+#[test]
+fn reader_errors_on_truncated_compressed_container() {
+    let path = "data/technica/errors/FileWithTruncatedCompressedLogContainer.blf";
+    let results = reader_collect(path);
+    assert!(
+        results.iter().any(|r| r.is_err()),
+        "expected an error in results, got {results:?}"
+    );
+}
+
 // ── cross-container object stitching ─────────────────────────────────────────
 
 /// Constructs a BLF file in memory where two CAN objects are stored across
@@ -434,6 +549,64 @@ fn parse_at_stitches_object_spanning_containers() {
         Message::Can(can) => assert_eq!(can.id, 0x456),
         _ => panic!("expected Can at index 1"),
     }
+}
+
+// ── truncated object within a container (in-memory) ──────────────────────────
+
+/// Verifies that Reader yields all complete objects before emitting an error for
+/// a truncated object at the end of the last container.
+#[test]
+fn reader_yields_complete_objects_before_truncated_object() {
+    use std::io::Cursor;
+
+    let can1 = raw_can_bytes(1_000_000, 0x111);
+    let can2 = raw_can_bytes(2_000_000, 0x222);
+    // Provide can2's BaseObjectHeader (16) + 4 bytes into ObjectHeaderV1 — not enough to parse.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&can1);
+    payload.extend_from_slice(&can2[..20]);
+
+    let blf = blf_with_containers(&[uncompressed_lc(&payload)]);
+    let f = std::io::BufReader::new(Cursor::new(blf));
+    let results: Vec<_> = match Reader::new(f) {
+        Err(e) => vec![Err(e)],
+        Ok(r) => r.collect(),
+    };
+
+    assert_eq!(results.len(), 2, "expected 1 object then 1 error");
+    match results[0].as_ref().unwrap().message {
+        Message::Can(ref can) => assert_eq!(can.id, 0x111),
+        ref other => panic!("expected Can, got {other:?}"),
+    }
+    assert!(
+        matches!(&results[1], Err(ParseError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof),
+        "expected UnexpectedEof for truncated object, got {:?}",
+        results[1]
+    );
+}
+
+/// Verifies that parse_at returns Err(UnexpectedEof) when the last container
+/// contains a truncated object (only the BaseObjectHeader, no body bytes).
+#[test]
+fn parse_at_errors_when_last_container_has_truncated_object() {
+    use std::io::Cursor;
+
+    let can1 = raw_can_bytes(1_000_000, 0x333);
+    let can2 = raw_can_bytes(2_000_000, 0x444);
+    // Include only can2's 16-byte BaseObjectHeader with no body.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&can1);
+    payload.extend_from_slice(&can2[..16]);
+
+    let blf = blf_with_containers(&[uncompressed_lc(&payload)]);
+    let mut cursor = Cursor::new(blf);
+    let (_header, offsets) = scan_containers(&mut cursor).unwrap();
+    let offsets = offsets.unwrap();
+    let result = parse_at(&mut cursor, &offsets);
+    assert!(
+        matches!(result, Err(ParseError::Io(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof),
+        "expected UnexpectedEof, got {result:?}"
+    );
 }
 
 // ── FileHeader metadata ───────────────────────────────────────────────────────

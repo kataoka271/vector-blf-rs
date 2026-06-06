@@ -64,51 +64,17 @@ fn make_canfd64(ts_ns: u64, channel: u8, id: u32, data: &[u8]) -> BaseObject {
     }
 }
 
-fn make_ethernet(
-    ts_ns: u64,
-    channel: u16,
-    dir: Dir,
-    src: [u8; 6],
-    dst: [u8; 6],
-    ether_type: u16,
-    vlan: Option<Vlan>,
-    data: &[u8],
-) -> BaseObject {
+fn make_ethernet(ts_ns: u64, eth: Ethernet) -> BaseObject {
     BaseObject {
         timestamp: Timestamp::Nanosecond(ts_ns),
-        message: Message::Ethernet(Ethernet {
-            channel,
-            dir,
-            src_addr: src,
-            dst_addr: dst,
-            vlan,
-            ether_type,
-            data: data.to_vec(),
-        }),
+        message: Message::Ethernet(eth),
     }
 }
 
-fn make_ethernet_ex(
-    ts_ns: u64,
-    channel: u16,
-    dir: Dir,
-    src: [u8; 6],
-    dst: [u8; 6],
-    ether_type: u16,
-    vlan: Option<Vlan>,
-    data: &[u8],
-) -> BaseObject {
+fn make_ethernet_ex(ts_ns: u64, eth: EthernetEx) -> BaseObject {
     BaseObject {
         timestamp: Timestamp::Nanosecond(ts_ns),
-        message: Message::EthernetEx(EthernetEx {
-            channel,
-            dir,
-            src_addr: src,
-            dst_addr: dst,
-            vlan,
-            ether_type,
-            data: data.to_vec(),
-        }),
+        message: Message::EthernetEx(eth),
     }
 }
 
@@ -191,7 +157,18 @@ fn csv_raw_canfd64_frame() {
 fn csv_raw_ethernet_no_vlan() {
     let src = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66];
     let dst = [0xAAu8, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
-    let obj = make_ethernet(5_000_000, 1, Dir::Tx, src, dst, 0x0800, None, &[0xDE, 0xAD]);
+    let obj = make_ethernet(
+        5_000_000,
+        Ethernet {
+            channel: 1,
+            dir: Dir::Tx,
+            src_addr: src,
+            dst_addr: dst,
+            ether_type: 0x0800,
+            vlan: None,
+            data: vec![0xDE, 0xAD],
+        },
+    );
     let mut out = Vec::<u8>::new();
     let count = write_csv_raw(&mut out, [obj], 0, None).unwrap();
     assert_eq!(count, 1);
@@ -214,13 +191,15 @@ fn csv_raw_ethernet_with_vlan() {
     };
     let obj = make_ethernet(
         6_000_000,
-        2,
-        Dir::Rx,
-        src,
-        dst,
-        0x0800,
-        Some(vlan),
-        &[0xBE, 0xEF],
+        Ethernet {
+            channel: 2,
+            dir: Dir::Rx,
+            src_addr: src,
+            dst_addr: dst,
+            ether_type: 0x0800,
+            vlan: Some(vlan),
+            data: vec![0xBE, 0xEF],
+        },
     );
     let mut out = Vec::<u8>::new();
     write_csv_raw(&mut out, [obj], 0, None).unwrap();
@@ -235,7 +214,18 @@ fn csv_raw_ethernet_with_vlan() {
 fn csv_raw_ethernet_ex() {
     let src = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66];
     let dst = [0xAAu8, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
-    let obj = make_ethernet_ex(7_000_000, 3, Dir::Rx, src, dst, 0x86DD, None, &[0x60]);
+    let obj = make_ethernet_ex(
+        7_000_000,
+        EthernetEx {
+            channel: 3,
+            dir: Dir::Rx,
+            src_addr: src,
+            dst_addr: dst,
+            ether_type: 0x86DD,
+            vlan: None,
+            data: vec![0x60],
+        },
+    );
     let mut out = Vec::<u8>::new();
     let count = write_csv_raw(&mut out, [obj], 0, None).unwrap();
     assert_eq!(count, 1);

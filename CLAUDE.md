@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Prefer Rust 2018 module style: use `foo.rs` alongside a `foo/` directory for submodules, not `foo/mod.rs`.
 - Update `vector_blf.pyi` after editing `src/python.rs`.
-- Do not use `#[allow(...)]` directives.
+- Do not use `#[allow(...)]` directives without any permissions.
 
 ### After editing Rust files
 

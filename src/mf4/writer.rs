@@ -29,9 +29,9 @@
 ///  22: dst_addr (6 bytes)
 ///  28: data (MAX_ETH_DATA bytes, zero-padded)
 use super::block::{
-    self, CcBlock, CgBlock, CnBlock, DgBlock, HdBlock, IdBlock, SiBlock, BUS_TYPE_CAN,
-    BUS_TYPE_ETHERNET, CN_SYNC_NONE, CN_SYNC_TIME, CN_TYPE_DATA, CN_TYPE_MASTER, DT_BYTE_ARRAY,
-    DT_FLOAT_LE, DT_UINT_LE,
+    self, CcBlock, CgBlock, CnBlock, CnChannelSpec, DgBlock, HdBlock, IdBlock, SiBlock,
+    BUS_TYPE_CAN, BUS_TYPE_ETHERNET, CN_SYNC_NONE, CN_SYNC_TIME, CN_TYPE_DATA, CN_TYPE_MASTER,
+    DT_BYTE_ARRAY, DT_FLOAT_LE, DT_UINT_LE,
 };
 use crate::blf::message::Message;
 use crate::blf::BaseObject;
@@ -271,11 +271,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_bytes,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_BYTE_ARRAY,
-            CAN_DATA_OFFSET,
-            64 * 8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_BYTE_ARRAY,
+                byte_offset: CAN_DATA_OFFSET,
+                bit_count: 64 * 8,
+            },
         )?;
         let cn_dlen = CnBlock::write(
             &mut self.w,
@@ -284,11 +286,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_DATA_LEN_OFFSET,
-            8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_DATA_LEN_OFFSET,
+                bit_count: 8,
+            },
         )?;
         let cn_esi = CnBlock::write(
             &mut self.w,
@@ -297,11 +301,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_ESI_OFFSET,
-            8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_ESI_OFFSET,
+                bit_count: 8,
+            },
         )?;
         let cn_brs = CnBlock::write(
             &mut self.w,
@@ -310,11 +316,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_BRS_OFFSET,
-            8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_BRS_OFFSET,
+                bit_count: 8,
+            },
         )?;
         let cn_edl = CnBlock::write(
             &mut self.w,
@@ -323,11 +331,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_IS_FD_OFFSET,
-            8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_IS_FD_OFFSET,
+                bit_count: 8,
+            },
         )?;
         let cn_ch = CnBlock::write(
             &mut self.w,
@@ -336,11 +346,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_CHANNEL_OFFSET,
-            16,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_CHANNEL_OFFSET,
+                bit_count: 16,
+            },
         )?;
         let cn_dir = CnBlock::write(
             &mut self.w,
@@ -349,11 +361,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_DIR_OFFSET,
-            8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_DIR_OFFSET,
+                bit_count: 8,
+            },
         )?;
         let cn_dlc = CnBlock::write(
             &mut self.w,
@@ -362,11 +376,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_DLC_OFFSET,
-            8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_DLC_OFFSET,
+                bit_count: 8,
+            },
         )?;
         let cn_id = CnBlock::write(
             &mut self.w,
@@ -375,11 +391,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            CAN_ID_OFFSET,
-            32,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: CAN_ID_OFFSET,
+                bit_count: 32,
+            },
         )?;
         let cn_time = CnBlock::write(
             &mut self.w,
@@ -388,11 +406,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_s,
             cc,
             si,
-            CN_TYPE_MASTER,
-            CN_SYNC_TIME,
-            DT_FLOAT_LE,
-            CAN_TIME_OFFSET,
-            64,
+            CnChannelSpec {
+                channel_type: CN_TYPE_MASTER,
+                sync_type: CN_SYNC_TIME,
+                data_type: DT_FLOAT_LE,
+                byte_offset: CAN_TIME_OFFSET,
+                bit_count: 64,
+            },
         )?;
 
         let dt = block::write_dt(&mut self.w, data)?;
@@ -435,11 +455,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_bytes,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_BYTE_ARRAY,
-            ETH_DATA_OFFSET,
-            MAX_ETH_DATA * 8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_BYTE_ARRAY,
+                byte_offset: ETH_DATA_OFFSET,
+                bit_count: MAX_ETH_DATA * 8,
+            },
         )?;
         let cn_dst = CnBlock::write(
             &mut self.w,
@@ -448,11 +470,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_bytes,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_BYTE_ARRAY,
-            ETH_DST_OFFSET,
-            6 * 8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_BYTE_ARRAY,
+                byte_offset: ETH_DST_OFFSET,
+                bit_count: 6 * 8,
+            },
         )?;
         let cn_src = CnBlock::write(
             &mut self.w,
@@ -461,11 +485,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_bytes,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_BYTE_ARRAY,
-            ETH_SRC_OFFSET,
-            6 * 8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_BYTE_ARRAY,
+                byte_offset: ETH_SRC_OFFSET,
+                bit_count: 6 * 8,
+            },
         )?;
         let cn_dlen = CnBlock::write(
             &mut self.w,
@@ -474,11 +500,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            ETH_DATA_LEN_OFFSET,
-            16,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: ETH_DATA_LEN_OFFSET,
+                bit_count: 16,
+            },
         )?;
         let cn_et = CnBlock::write(
             &mut self.w,
@@ -487,11 +515,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            ETH_ETHER_TYPE_OFFSET,
-            16,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: ETH_ETHER_TYPE_OFFSET,
+                bit_count: 16,
+            },
         )?;
         let cn_dir = CnBlock::write(
             &mut self.w,
@@ -500,11 +530,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            ETH_DIR_OFFSET,
-            8,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: ETH_DIR_OFFSET,
+                bit_count: 8,
+            },
         )?;
         let cn_ch = CnBlock::write(
             &mut self.w,
@@ -513,11 +545,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_raw,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_UINT_LE,
-            ETH_CHANNEL_OFFSET,
-            16,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_UINT_LE,
+                byte_offset: ETH_CHANNEL_OFFSET,
+                bit_count: 16,
+            },
         )?;
         let cn_time = CnBlock::write(
             &mut self.w,
@@ -526,11 +560,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_s,
             cc,
             si,
-            CN_TYPE_MASTER,
-            CN_SYNC_TIME,
-            DT_FLOAT_LE,
-            ETH_TIME_OFFSET,
-            64,
+            CnChannelSpec {
+                channel_type: CN_TYPE_MASTER,
+                sync_type: CN_SYNC_TIME,
+                data_type: DT_FLOAT_LE,
+                byte_offset: ETH_TIME_OFFSET,
+                bit_count: 64,
+            },
         )?;
 
         let dt = block::write_dt(&mut self.w, data)?;
@@ -569,11 +605,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_unit,
             cc,
             0,
-            CN_TYPE_DATA,
-            CN_SYNC_NONE,
-            DT_FLOAT_LE,
-            SCALAR_VALUE_OFFSET,
-            64,
+            CnChannelSpec {
+                channel_type: CN_TYPE_DATA,
+                sync_type: CN_SYNC_NONE,
+                data_type: DT_FLOAT_LE,
+                byte_offset: SCALAR_VALUE_OFFSET,
+                bit_count: 64,
+            },
         )?;
         let cn_time = CnBlock::write(
             &mut self.w,
@@ -582,11 +620,13 @@ impl<W: Write + Seek> Writer<W> {
             tx_s,
             cc,
             0,
-            CN_TYPE_MASTER,
-            CN_SYNC_TIME,
-            DT_FLOAT_LE,
-            SCALAR_TIME_OFFSET,
-            64,
+            CnChannelSpec {
+                channel_type: CN_TYPE_MASTER,
+                sync_type: CN_SYNC_TIME,
+                data_type: DT_FLOAT_LE,
+                byte_offset: SCALAR_TIME_OFFSET,
+                bit_count: 64,
+            },
         )?;
 
         let dt = block::write_dt(&mut self.w, records)?;

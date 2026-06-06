@@ -598,29 +598,26 @@ fn ext(p: &Path) -> &str {
     p.extension().and_then(|e| e.to_str()).unwrap_or("")
 }
 
-fn cmd_parse(
-    input: PathBuf,
-    output: Option<PathBuf>,
+struct ParseOptions {
     signals: Option<PathBuf>,
-    repeat: u32,
-    n_threads: usize,
     someip_signals_path: Option<PathBuf>,
     channels_path: Option<PathBuf>,
     quiet: bool,
     pdu_list: bool,
+}
+
+fn cmd_parse(
+    input: PathBuf,
+    output: Option<PathBuf>,
+    repeat: u32,
+    n_threads: usize,
+    opts: ParseOptions,
 ) -> Result<()> {
     if matches!(ext(&input), "mf4" | "mdf") {
-        return cmd_parse_mf4(
-            input,
-            output,
-            signals,
-            someip_signals_path,
-            channels_path,
-            quiet,
-            pdu_list,
-        );
+        return cmd_parse_mf4(input, output, opts);
     }
-    let channel_db: Option<ChannelDb> = channels_path
+    let channel_db: Option<ChannelDb> = opts
+        .channels_path
         .as_ref()
         .map(|p| ChannelDb::from_csv(BufReader::new(File::open(p)?)))
         .transpose()?;
@@ -632,12 +629,12 @@ fn cmd_parse(
         .unwrap_or(false);
 
     // Single-threaded CSV from BLF: stream one object at a time — O(1-container) peak memory.
-    if n_threads == 1 && is_csv && quiet {
+    if n_threads == 1 && is_csv && opts.quiet {
         return cmd_parse_csv_stream(
             &input,
             output.as_ref().unwrap(),
-            signals,
-            someip_signals_path,
+            opts.signals,
+            opts.someip_signals_path,
             channel_db.as_ref(),
         );
     }
@@ -680,8 +677,8 @@ fn cmd_parse(
             let count = write_csv_with_signals(
                 &mut w,
                 chunk_results.iter().flatten(),
-                signals.as_deref(),
-                someip_signals_path.as_deref(),
+                opts.signals.as_deref(),
+                opts.someip_signals_path.as_deref(),
                 start_ns,
                 channel_db.as_ref(),
             )?;
@@ -709,16 +706,18 @@ fn cmd_parse(
             );
         }
     }
-    if !quiet {
-        let can_db = signals
+    if !opts.quiet {
+        let can_db = opts
+            .signals
             .as_ref()
             .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
             .transpose()?;
-        let someip_db = someip_signals_path
+        let someip_db = opts
+            .someip_signals_path
             .as_ref()
             .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
             .transpose()?;
-        if pdu_list {
+        if opts.pdu_list {
             match can_db.as_ref() {
                 Some(db) => {
                     let counts = collect_pdu_counts(chunk_results.iter().flatten(), db);
@@ -749,39 +748,34 @@ fn cmd_parse(
 }
 
 /// Parse an MF4 input file; output to CSV, BLF, or another MF4.
-fn cmd_parse_mf4(
-    input: PathBuf,
-    output: Option<PathBuf>,
-    signals: Option<PathBuf>,
-    someip_signals_path: Option<PathBuf>,
-    channels_path: Option<PathBuf>,
-    quiet: bool,
-    pdu_list: bool,
-) -> Result<()> {
+fn cmd_parse_mf4(input: PathBuf, output: Option<PathBuf>, opts: ParseOptions) -> Result<()> {
     let t = time::Instant::now();
     let reader = mf4::Reader::new(BufReader::new(File::open(&input)?))?;
     let start_time_ns = reader.start_time_ns;
-    let channel_db: Option<ChannelDb> = channels_path
+    let channel_db: Option<ChannelDb> = opts
+        .channels_path
         .as_ref()
         .map(|p| ChannelDb::from_csv(BufReader::new(File::open(p)?)))
         .transpose()?;
 
-    if !quiet {
+    if !opts.quiet {
         let objects: Vec<BaseObject> = reader.filter_map(|r| r.ok()).collect();
         println!(
             "parsed {} objects in {:.3}s",
             objects.len(),
             t.elapsed().as_secs_f32()
         );
-        let can_db = signals
+        let can_db = opts
+            .signals
             .as_ref()
             .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
             .transpose()?;
-        let someip_db = someip_signals_path
+        let someip_db = opts
+            .someip_signals_path
             .as_ref()
             .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
             .transpose()?;
-        if pdu_list {
+        if opts.pdu_list {
             match can_db.as_ref() {
                 Some(db) => {
                     let counts = collect_pdu_counts(objects.iter(), db);
@@ -811,8 +805,8 @@ fn cmd_parse_mf4(
                 let count = write_csv_with_signals(
                     &mut w,
                     objects.iter(),
-                    signals.as_deref(),
-                    someip_signals_path.as_deref(),
+                    opts.signals.as_deref(),
+                    opts.someip_signals_path.as_deref(),
                     start_time_ns,
                     channel_db.as_ref(),
                 )?;
@@ -856,8 +850,8 @@ fn cmd_parse_mf4(
         let count = write_csv_with_signals(
             &mut w,
             reader.filter_map(|r| r.ok()),
-            signals.as_deref(),
-            someip_signals_path.as_deref(),
+            opts.signals.as_deref(),
+            opts.someip_signals_path.as_deref(),
             start_time_ns,
             channel_db.as_ref(),
         )?;
@@ -997,13 +991,15 @@ fn main() -> Result<()> {
         } => cmd_parse(
             input,
             output,
-            signals,
             repeat,
             threads,
-            someip_signals,
-            channels,
-            quiet,
-            pdu_list,
+            ParseOptions {
+                signals,
+                someip_signals_path: someip_signals,
+                channels_path: channels,
+                quiet,
+                pdu_list,
+            },
         ),
     }
 }

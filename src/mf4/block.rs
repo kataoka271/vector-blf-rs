@@ -436,6 +436,14 @@ pub const DT_FLOAT_LE: u8 = 4;
 pub const DT_FLOAT_BE: u8 = 5;
 pub const DT_BYTE_ARRAY: u8 = 14;
 
+pub struct CnChannelSpec {
+    pub channel_type: u8,
+    pub sync_type: u8,
+    pub data_type: u8,
+    pub byte_offset: u32,
+    pub bit_count: u32,
+}
+
 pub struct CnBlock {
     pub next_cn: u64,
     pub name_offset: u64,
@@ -511,11 +519,7 @@ impl CnBlock {
         unit_tx: u64,
         cc_offset: u64,
         si_offset: u64,
-        channel_type: u8,
-        sync_type: u8,
-        data_type: u8,
-        byte_offset: u32,
-        bit_count: u32,
+        spec: CnChannelSpec,
     ) -> ParseResult<u64> {
         let pos = w.stream_position()?;
         BlockHeader::write(w, b"##CN", CN_BLOCK_LENGTH, CN_LINK_COUNT)?;
@@ -528,12 +532,12 @@ impl CnBlock {
         write_link(w, 0)?; // cn_md_comment
         write_link(w, unit_tx)?; // cn_unit (TX block)
                                  // Data
-        write_u8(w, channel_type)?;
-        write_u8(w, sync_type)?;
-        write_u8(w, data_type)?;
+        write_u8(w, spec.channel_type)?;
+        write_u8(w, spec.sync_type)?;
+        write_u8(w, spec.data_type)?;
         write_u8(w, 0)?; // bit_offset
-        write_u32_le(w, byte_offset)?;
-        write_u32_le(w, bit_count)?;
+        write_u32_le(w, spec.byte_offset)?;
+        write_u32_le(w, spec.bit_count)?;
         write_u32_le(w, 0)?; // flags
         write_u32_le(w, 0)?; // inval_bit_pos
         write_u8(w, 0)?; // precision

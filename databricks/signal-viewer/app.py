@@ -1,100 +1,75 @@
-"""BLF Signal Viewer — Plotly Dash visualization app for Databricks Apps."""
+"""Signal Viewer — Plotly Dash visualization app for Databricks Apps."""
 
 import os
 
 import dash
+import dash_bootstrap_components as dbc
+import flask
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback, dcc, html
+from databricks.sdk.core import Config
 from plotly.subplots import make_subplots
 
-# ── config ────────────────────────────────────────────────────────────────────
+from databricks import sql
 
-WAREHOUSE_ID = os.environ["DATABRICKS_WAREHOUSE_ID"]
+# Ensure environment variable is set correctly
+assert os.getenv("DATABRICKS_WAREHOUSE_ID"), "DATABRICKS_WAREHOUSE_ID must be set in app.yaml."
+
+# Config
+USE_USER_TOKEN = True  # Set to False to use Service Principal credentials instead of user token
 CATALOG = os.environ.get("BLF_CATALOG", "main")
 SCHEMA = os.environ.get("BLF_SCHEMA", "blf")
-PORT = int(os.environ.get("DATABRICKS_APP_PORT", 8000))
-_GOLD = f"`{CATALOG}`.`{SCHEMA}`.`blf_gold_signals`"
-
-# ── database (SDK statement execution — no sql connector needed) ──────────────
-
-_w = None
+_GOLD_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_gold_signals`"
 
 
-def _workspace():
-    global _w
-    if _w is None:
-        from databricks.sdk import WorkspaceClient
+# Databricks config
+cfg = Config()
 
-        _w = WorkspaceClient()
-    return _w
+
+# Query the SQL warehouse with Service Principal credentials
+def sql_query_with_service_principal(query: str, params: list | dict | None) -> pd.DataFrame:
+    """Execute a SQL query and return the result as a pandas DataFrame."""
+    with sql.connect(
+        server_hostname=cfg.host,
+        http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
+        credentials_provider=lambda: cfg.authenticate,  # Uses SP credentials from the environment variables
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall_arrow().to_pandas()
+
+
+# Query the SQL warehouse with the user credentials
+def sql_query_with_user_token(query: str, params: list | dict | None, user_token: str) -> pd.DataFrame:
+    """Execute a SQL query and return the result as a pandas DataFrame."""
+    with sql.connect(
+        server_hostname=cfg.host,
+        http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
+        access_token=user_token,  # Pass the user token into the SQL connect to query on behalf of user
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall_arrow().to_pandas()
 
 
 def _query(stmt: str, params=None) -> pd.DataFrame:
-    """Run a SQL statement via the SDK Statement Execution API.
-
-    %s placeholders in stmt are replaced with named :p0, :p1, ...
-    parameters so that the warehouse handles quoting safely.
-    """
-    from databricks.sdk.service.sql import StatementParameterListItem, StatementState
-
-    sdk_params = None
-    if params:
-        sdk_params = []
-        for i, p in enumerate(params):
-            stmt = stmt.replace("%s", f":p{i}", 1)
-            sdk_params.append(StatementParameterListItem(name=f"p{i}", value=str(p), type="STRING"))
-
-    w = _workspace()
-    result = w.statement_execution.execute_statement(
-        statement=stmt,
-        warehouse_id=WAREHOUSE_ID,
-        parameters=sdk_params,
-        wait_timeout="50s",
-    )
-
-    from databricks.sdk.service.sql import StatementState
-
-    if result.status.state != StatementState.SUCCEEDED:
-        err = result.status.error
-        msg = f"{err.error_code}: {err.message}" if err else "Query failed"
-        raise Exception(msg)
-
-    if not result.manifest or not result.result:
-        return pd.DataFrame()
-
-    cols = [c.name for c in result.manifest.schema.columns]
-    rows = result.result.data_array or []
-
-    # Fetch additional chunks if the result was paginated.
-    chunk_index = result.result.next_chunk_index
-    while chunk_index is not None:
-        chunk = w.statement_execution.get_statement_result_chunk_n(result.statement_id, chunk_index)
-        if chunk.data_array:
-            rows = rows + chunk.data_array
-        chunk_index = chunk.next_chunk_index
-
-    return pd.DataFrame([[v for v in row] for row in rows], columns=cols)
+    """Run a parameterised SQL query."""
+    user_token = flask.request.headers.get("X-Forwarded-Access-Token")
+    if not user_token:
+        raise RuntimeError("Missing X-Forwarded-Access-Token header.")
+    if USE_USER_TOKEN:
+        return sql_query_with_user_token(stmt, params, user_token=user_token)
+    return sql_query_with_service_principal(stmt, params)
 
 
-# ── layout helpers ────────────────────────────────────────────────────────────
+# Layout helpers
 
 _BG = "#13111a"
 _PANEL = "#1c1a27"
 _BORDER = "#2a2838"
 _ACCENT = "#7ecfec"
 _TEXT = "#ccc"
-
-
-def _label(text):
-    return html.Div(
-        text,
-        style={"fontSize": "12px", "fontWeight": "600", "color": "#aaa", "marginBottom": "4px"},
-    )
-
-
-def _field(label, component):
-    return html.Div([_label(label), component])
 
 
 def _empty_fig(msg=""):
@@ -123,132 +98,122 @@ def _empty_fig(msg=""):
     )
 
 
-# ── app ───────────────────────────────────────────────────────────────────────
+# App
 
-app = dash.Dash(__name__, title="BLF Signal Viewer")
-server = app.server
+app = dash.Dash(__name__, title="Signal Viewer", external_stylesheets=[dbc.themes.DARKLY])
 
-app.layout = html.Div(
-    style={
-        "display": "flex",
-        "height": "100vh",
-        "backgroundColor": _BG,
-        "fontFamily": "Inter, system-ui, sans-serif",
-    },
+app.layout = dbc.Container(
+    fluid=True,
+    className="p-0",
+    style={"height": "100vh", "backgroundColor": _BG, "fontFamily": "Inter, system-ui, sans-serif"},
     children=[
-        # ── Sidebar ───────────────────────────────────────────────────────────
-        html.Div(
-            style={
-                "width": "290px",
-                "flexShrink": "0",
-                "backgroundColor": _PANEL,
-                "padding": "20px 16px",
-                "display": "flex",
-                "flexDirection": "column",
-                "gap": "16px",
-                "overflowY": "auto",
-                "color": _TEXT,
-                "borderRight": f"1px solid {_BORDER}",
-            },
+        dbc.Row(
+            className="h-100 flex-nowrap g-0",
             children=[
-                html.Div(
-                    [
-                        html.H3(
-                            "BLF Signal Viewer",
-                            style={"margin": "0 0 3px", "color": _ACCENT, "fontSize": "16px"},
+                # Sidebar
+                dbc.Col(
+                    width="auto",
+                    className="d-flex flex-column overflow-auto",
+                    style={
+                        "width": "290px",
+                        "backgroundColor": _PANEL,
+                        "padding": "20px 16px",
+                        "gap": "16px",
+                        "color": _TEXT,
+                        "borderRight": f"1px solid {_BORDER}",
+                    },
+                    children=[
+                        html.Div(
+                            [
+                                html.H3(
+                                    "Signal Viewer", style={"margin": "0 0 3px", "color": _ACCENT, "fontSize": "16px"}
+                                ),
+                                html.Div(
+                                    f"{CATALOG}.{SCHEMA}.blf_gold_signals", style={"fontSize": "11px", "color": "#888"}
+                                ),
+                            ]
+                        ),
+                        html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
+                        html.Div(
+                            [
+                                dbc.Label("Source", size="sm", className="fw-semibold text-secondary mb-1"),
+                                dbc.Checklist(
+                                    id="source-filter",
+                                    options=[
+                                        {"label": " CAN", "value": "CAN"},
+                                        {"label": " ETH", "value": "ETH"},
+                                        {"label": " SOMEIP", "value": "SOMEIP"},
+                                    ],
+                                    value=["CAN", "SOMEIP"],
+                                ),
+                            ]
                         ),
                         html.Div(
-                            f"{CATALOG}.{SCHEMA}.blf_gold_signals",
-                            style={"fontSize": "11px", "color": "#888"},
+                            [
+                                dbc.Label("Signals", size="sm", className="fw-semibold text-secondary mb-1"),
+                                dcc.Dropdown(
+                                    id="signal-select",
+                                    multi=True,
+                                    placeholder="Select signals...",
+                                    style={"fontSize": "13px"},
+                                ),
+                            ]
                         ),
-                    ]
+                        html.Div(
+                            [
+                                dbc.Label("Layout", size="sm", className="fw-semibold text-secondary mb-1"),
+                                dbc.RadioItems(
+                                    id="layout-mode",
+                                    options=[
+                                        {"label": " Overlay", "value": "overlay"},
+                                        {"label": " Stacked", "value": "stacked"},
+                                    ],
+                                    value="stacked",
+                                    inline=True,
+                                ),
+                            ]
+                        ),
+                        html.Div(
+                            [
+                                dbc.Label(
+                                    "Max points / signal", size="sm", className="fw-semibold text-secondary mb-1"
+                                ),
+                                dcc.Slider(
+                                    id="max-pts",
+                                    min=1_000,
+                                    max=50_000,
+                                    step=1_000,
+                                    value=10_000,
+                                    marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
+                                    tooltip={"placement": "bottom", "always_visible": False},
+                                ),
+                            ]
+                        ),
+                        dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
+                        html.Div(id="avail-msg", style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"}),
+                        html.Div(
+                            id="plot-msg",
+                            style={"fontSize": "12px", "color": "#ccc", "wordBreak": "break-word", "minHeight": "16px"},
+                        ),
+                    ],
                 ),
-                html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
-                _field(
-                    "Source",
-                    dcc.Checklist(
-                        id="source-filter",
-                        options=[
-                            {"label": " CAN", "value": "CAN"},
-                            {"label": " ETH", "value": "ETH"},
-                            {"label": " SOMEIP", "value": "SOMEIP"},
-                        ],
-                        value=["CAN", "SOMEIP"],
-                        inputStyle={"marginRight": "6px"},
-                        labelStyle={"display": "block", "marginBottom": "4px"},
-                    ),
-                ),
-                _field(
-                    "Signals",
-                    dcc.Dropdown(
-                        id="signal-select",
-                        multi=True,
-                        placeholder="Select signals...",
-                        style={"fontSize": "13px"},
-                    ),
-                ),
-                _field(
-                    "Layout",
-                    dcc.RadioItems(
-                        id="layout-mode",
-                        options=[
-                            {"label": " Overlay", "value": "overlay"},
-                            {"label": " Stacked", "value": "stacked"},
-                        ],
-                        value="stacked",
-                        inputStyle={"marginRight": "6px"},
-                        labelStyle={"display": "inline-block", "marginRight": "14px"},
-                    ),
-                ),
-                _field(
-                    "Max points / signal",
-                    dcc.Slider(
-                        id="max-pts",
-                        min=1_000,
-                        max=50_000,
-                        step=1_000,
-                        value=10_000,
-                        marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
-                        tooltip={"placement": "bottom", "always_visible": False},
-                    ),
-                ),
-                html.Button(
-                    "Plot",
-                    id="plot-btn",
-                    n_clicks=0,
-                    style={
-                        "padding": "10px 0",
-                        "width": "100%",
-                        "background": _ACCENT,
-                        "color": "#000",
-                        "border": "none",
-                        "borderRadius": "6px",
-                        "cursor": "pointer",
-                        "fontWeight": "700",
-                        "fontSize": "14px",
-                    },
-                ),
-                # Status messages — white text so they're always readable.
-                html.Div(id="avail-msg", style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"}),
-                html.Div(
-                    id="plot-msg",
-                    style={"fontSize": "12px", "color": "#ccc", "wordBreak": "break-word", "minHeight": "16px"},
-                ),
-            ],
-        ),
-        # ── Chart area ────────────────────────────────────────────────────────
-        html.Div(
-            style={"flex": "1", "minWidth": "0", "overflow": "hidden"},
-            children=[
-                dcc.Loading(
-                    type="circle",
-                    color=_ACCENT,
-                    children=dcc.Graph(
-                        id="chart",
-                        style={"height": "100%"},
-                        config={"displayModeBar": True, "scrollZoom": True},
-                        figure=_empty_fig("Select signals and click Plot"),
-                    ),
+                # Chart area
+                dbc.Col(
+                    className="overflow-hidden",
+                    style={"height": "100vh"},
+                    children=[
+                        dcc.Loading(
+                            type="circle",
+                            color=_ACCENT,
+                            style={"height": "100%"},
+                            children=dcc.Graph(
+                                id="chart",
+                                style={"height": "100%"},
+                                config={"displayModeBar": True, "scrollZoom": True},
+                                figure=_empty_fig("Select signals and click Plot"),
+                            ),
+                        ),
+                    ],
                 ),
             ],
         ),
@@ -256,7 +221,7 @@ app.layout = html.Div(
 )
 
 
-# ── callbacks ─────────────────────────────────────────────────────────────────
+# Callbacks
 
 
 @callback(
@@ -269,10 +234,10 @@ def refresh_signals(sources):
     if not sources:
         return [], "No source selected."
     try:
-        ph = ",".join(["%s"] * len(sources))
+        ph = ",".join(["?"] * len(sources))
         df = _query(
             f"SELECT DISTINCT signal_name, signal_source "
-            f"FROM {_GOLD} "
+            f"FROM {_GOLD_TABLE} "
             f"WHERE signal_source IN ({ph}) "
             f"ORDER BY signal_source, signal_name",
             list(sources),
@@ -315,8 +280,8 @@ def render_chart(_, selected, layout, max_pts):
         try:
             df = _query(
                 f"SELECT event_time, timestamp_s, signal_value "
-                f"FROM {_GOLD} "
-                f"WHERE signal_source = %s AND signal_name = %s "
+                f"FROM {_GOLD_TABLE} "
+                f"WHERE signal_source = ? AND signal_name = ? "
                 f"ORDER BY timestamp_ns "
                 f"LIMIT {int(max_pts)}",
                 [src, name],
@@ -379,4 +344,4 @@ def render_chart(_, selected, layout, max_pts):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    app.run(debug=True)

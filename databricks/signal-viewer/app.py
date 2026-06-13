@@ -226,6 +226,12 @@ def _map_fig(lat: pd.Series, lon: pd.Series) -> go.Figure:
 # App
 
 
+def _fmt_s(seconds: float) -> str:
+    """Format elapsed seconds as HH:MM:SS."""
+    s = int(abs(seconds))
+    return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+
 def _section(label: str, *children) -> html.Div:
     return html.Div([dbc.Label(label, size="sm", className="fw-semibold text-secondary mb-1"), *children])
 
@@ -313,6 +319,7 @@ app.layout = dbc.Container(
                             color=_ACCENT,
                             children=[
                                 dcc.Store(id="all-signals-cache"),
+                                dcc.Store(id="time-range-store"),
                                 dbc.Checklist(
                                     id="signal-select",
                                     options=[],
@@ -362,6 +369,23 @@ app.layout = dbc.Container(
                                 value=10_000,
                                 marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
                                 tooltip={"placement": "bottom", "always_visible": False},
+                            ),
+                        ),
+                        _section(
+                            "Time range",
+                            dcc.RangeSlider(
+                                id="time-range-slider",
+                                min=0,
+                                max=1,
+                                step=1,
+                                value=[0, 1],
+                                marks={},
+                                tooltip={"placement": "bottom", "always_visible": False},
+                                disabled=True,
+                            ),
+                            html.Div(
+                                id="time-range-label",
+                                style={"fontSize": "11px", "color": "#888", "textAlign": "center", "marginTop": "4px"},
                             ),
                         ),
                         _section(
@@ -552,6 +576,7 @@ def toggle_all(select_clicks, clear_clicks, options):
     Output("grid", "columnDefs"),
     Output("map-chart", "figure"),
     Output("map-section", "style"),
+    Output("time-range-store", "data"),
     Input("plot-btn", "n_clicks"),
     Input("layout-mode", "value"),
     Input("chart-height", "value"),
@@ -559,37 +584,64 @@ def toggle_all(select_clicks, clear_clicks, options):
     State("max-pts", "value"),
     State("lat-signal", "value"),
     State("lon-signal", "value"),
+    State("time-range-slider", "value"),
+    State("time-range-store", "data"),
     prevent_initial_call=True,
 )
-def render_chart(_, layout, chart_height, selected, max_pts, lat_key, lon_key):
+def render_chart(_, layout, chart_height, selected, max_pts, lat_key, lon_key, time_range, time_range_store):
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
 
     if not selected and not (lat_key and lon_key):
-        return dash.no_update, "Select at least one signal.", dash.no_update, dash.no_update, map_empty, map_hidden
+        return dash.no_update, "Select at least one signal.", dash.no_update, dash.no_update, map_empty, map_hidden, dash.no_update
 
     chart_fig = dash.no_update
     chart_msg = ""
     row_data: list[dict] | dash.NoUpdate = dash.no_update
     col_defs: list[dict] | dash.NoUpdate = dash.no_update
+    new_time_range = dash.no_update
 
     if selected:
         where_clauses = " OR ".join(["(signal_source = ? AND signal_name = ?)"] * len(selected))
         flat_params = [val for key in selected for val in key.split("::", 1)]
+
+        # Apply time filter when slider has been initialised (store is populated).
+        time_filter = ""
+        time_params: list = []
+        if time_range_store is not None and time_range is not None:
+            t_lo, t_hi = float(time_range[0]), float(time_range[1])
+            time_filter = " AND timestamp_s BETWEEN ? AND ?"
+            time_params = [t_lo, t_hi]
+
+        # Fetch full time extent for selected signals to keep slider bounds accurate.
+        range_stmt = (
+            f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max"
+            f" FROM {_GOLD_TABLE} WHERE {where_clauses}"
+        )
+        try:
+            range_df = _query(range_stmt, flat_params)
+            new_time_range = {
+                "min": float(range_df["t_min"].iloc[0]),
+                "max": float(range_df["t_max"].iloc[0]),
+            }
+        except Exception as exc:
+            print(f"[render_chart] time-range query error: {exc}", flush=True)
+
         stmt = (
             f"WITH ranked AS ("
             f"SELECT signal_source, signal_name, event_time, timestamp_s, signal_value,"
             f" ROW_NUMBER() OVER (PARTITION BY signal_source, signal_name ORDER BY timestamp_ns) AS rn"
-            f" FROM {_GOLD_TABLE} WHERE {where_clauses}"
+            f" FROM {_GOLD_TABLE} WHERE {where_clauses}{time_filter}"
             f") SELECT signal_source, signal_name, event_time, timestamp_s, signal_value"
             f" FROM ranked WHERE rn <= {int(max_pts)}"
         )
+        flat_params = flat_params + time_params
         try:
             df_all = _query(stmt, flat_params)
         except Exception as exc:
             chart_msg = f"Query error: {exc}"
             print(f"[render_chart] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
-            return _empty_fig(chart_msg), chart_msg, [], dash.no_update, map_empty, map_hidden
+            return _empty_fig(chart_msg), chart_msg, [], dash.no_update, map_empty, map_hidden, new_time_range
 
         traces: _Traces = []
         for key in selected:
@@ -650,7 +702,44 @@ def render_chart(_, layout, chart_height, selected, max_pts, lat_key, lon_key):
         map_fig = map_empty
         map_style = map_hidden
 
-    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style
+    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style, new_time_range
+
+
+@callback(
+    Output("time-range-slider", "min"),
+    Output("time-range-slider", "max"),
+    Output("time-range-slider", "step"),
+    Output("time-range-slider", "marks"),
+    Output("time-range-slider", "value"),
+    Output("time-range-slider", "disabled"),
+    Output("time-range-label", "children"),
+    Input("time-range-store", "data"),
+    State("time-range-slider", "value"),
+    State("time-range-slider", "disabled"),
+)
+def update_time_slider(store, current_value, is_disabled):
+    if store is None:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, ""
+    t_min, t_max = store["min"], store["max"]
+    duration = max(t_max - t_min, 1.0)
+    step = max(0.1, duration / 1000)
+
+    marks = {}
+    for i in range(6):
+        t = t_min + i * duration / 5
+        marks[round(t, 3)] = _fmt_s(i * duration / 5)
+
+    # Preserve user selection when within bounds; reset to full range otherwise.
+    if not is_disabled and current_value is not None:
+        low = max(t_min, float(current_value[0]))
+        high = min(t_max, float(current_value[1]))
+        if low >= high:
+            low, high = t_min, t_max
+    else:
+        low, high = t_min, t_max
+
+    label = f"{_fmt_s(low - t_min)} – {_fmt_s(high - t_min)}  (total {_fmt_s(duration)})"
+    return t_min, t_max, step, marks, [low, high], False, label
 
 
 if __name__ == "__main__":

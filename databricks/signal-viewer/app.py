@@ -11,7 +11,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback, dcc, html
 from databricks.sdk.core import Config
-from plotly.subplots import make_subplots
 
 from databricks import sql
 
@@ -94,7 +93,7 @@ def _empty_fig(msg="") -> go.Figure:
 _Traces = list[tuple[str, str, pd.Series, pd.Series]]
 
 
-def _overlay_fig(traces: _Traces) -> go.Figure:
+def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
     fig = go.Figure()
     for src, name, x, y in traces:
         fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=f"[{src}] {name}"))
@@ -102,42 +101,86 @@ def _overlay_fig(traces: _Traces) -> go.Figure:
         template="plotly_dark",
         paper_bgcolor=_BG,
         plot_bgcolor=_BG,
-        height=600,
+        height=height,
+        hovermode="x unified",
         xaxis_title="Time",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
         margin={"l": 60, "r": 20, "t": 50, "b": 60},
     )
-    fig.update_xaxes(**_AXIS_BOX)
+    fig.update_xaxes(
+        **_AXIS_BOX,
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikedash="dot",
+        spikecolor="#888",
+        spikethickness=1,
+    )
     fig.update_yaxes(**_AXIS_BOX)
     return fig
 
 
-def _stacked_fig(traces: _Traces) -> go.Figure:
+# Intentionally avoids make_subplots: hoversubplots="axis" does not propagate
+# the cursor across subplots created by make_subplots (Plotly bug, see
+# https://community.plotly.com/t/hoversubplots-axis-not-working-with-make-subplots/84239).
+# Instead, each trace gets its own y-axis with a computed domain sharing one x-axis.
+def _stacked_fig(traces: _Traces, height: int = 600) -> go.Figure:
     n = len(traces)
-    fig = make_subplots(
-        rows=n,
-        cols=1,
-        shared_xaxes=True,
-        subplot_titles=[f"[{s}] {nm}" for s, nm, _, _ in traces],
-        vertical_spacing=max(0.02, 0.10 / max(n, 1)),
-    )
-    for i, (src, name, x, y) in enumerate(traces, 1):
-        fig.add_trace(
-            go.Scatter(x=x, y=y, mode="lines", name=f"[{src}] {name}", showlegend=False),
-            row=i,
-            col=1,
+    spacing = max(0.07, 0.20 / n)
+    h = (1.0 - spacing * max(n - 1, 0)) / n
+
+    fig = go.Figure()
+    axes_kw: dict = {}
+    annotations = []
+
+    for i, (src, name, x, y) in enumerate(traces):
+        bottom = max(0.0, 1.0 - (i + 1) * h - i * spacing)
+        top = min(1.0, 1.0 - i * (h + spacing))
+        yref = "y" if i == 0 else f"y{i + 1}"
+        ykey = "yaxis" if i == 0 else f"yaxis{i + 1}"
+
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=f"[{src}] {name}", yaxis=yref, showlegend=False))
+        axes_kw[ykey] = {"domain": [bottom, top], **_AXIS_BOX}
+        annotations.append(
+            {
+                "text": f"[{src}] {name}",
+                "xref": "paper",
+                "yref": "paper",
+                "x": 0,
+                "y": top,
+                "xanchor": "left",
+                "yanchor": "bottom",
+                "showarrow": False,
+                "font": {"size": 14, "color": _TEXT},
+                "bgcolor": _PANEL,
+                "borderpad": 4,
+            }
         )
+
+    last_y_ref = "y" if n == 1 else f"y{n}"
+
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor=_BG,
         plot_bgcolor=_BG,
-        height=max(600, 300 * n),
+        height=max(height, 300 * n),
+        hovermode="x unified",
+        hoversubplots="axis",
+        annotations=annotations,
         margin={"l": 60, "r": 20, "t": 30, "b": 60},
+        xaxis={
+            **_AXIS_BOX,
+            "anchor": last_y_ref,
+            "title": "Time",
+            "showspikes": True,
+            "spikemode": "across",
+            "spikesnap": "cursor",
+            "spikedash": "dot",
+            "spikecolor": "#888",
+            "spikethickness": 1,
+        },
+        **axes_kw,
     )
-    fig.update_xaxes(title_text="Time", row=n, col=1)
-    fig.update_xaxes(**_AXIS_BOX)
-    fig.update_yaxes(**_AXIS_BOX)
-    fig.update_annotations(xanchor="left", x=0, align="left", bgcolor=_PANEL, borderpad=4)
     return fig
 
 
@@ -169,7 +212,6 @@ app.layout = dbc.Container(
     className="p-0",
     style={"height": "100vh", "backgroundColor": _BG, "fontFamily": "Inter, system-ui, sans-serif"},
     children=[
-        dcc.Store(id="all-signals-cache"),
         dcc.Location(id="url", refresh=False),
         dbc.Row(
             className="h-100 flex-nowrap g-0",
@@ -244,19 +286,22 @@ app.layout = dbc.Container(
                         dcc.Loading(
                             type="dot",
                             color=_ACCENT,
-                            children=dbc.Checklist(
-                                id="signal-select",
-                                options=[],
-                                value=[],
-                                style={
-                                    "fontSize": "13px",
-                                    "maxHeight": "260px",
-                                    "overflowY": "auto",
-                                    "border": f"1px solid {_BORDER}",
-                                    "borderRadius": "4px",
-                                    "padding": "6px 8px",
-                                },
-                            ),
+                            children=[
+                                dcc.Store(id="all-signals-cache"),
+                                dbc.Checklist(
+                                    id="signal-select",
+                                    options=[],
+                                    value=[],
+                                    style={
+                                        "fontSize": "13px",
+                                        "maxHeight": "260px",
+                                        "overflowY": "auto",
+                                        "border": f"1px solid {_BORDER}",
+                                        "borderRadius": "4px",
+                                        "padding": "6px 8px",
+                                    },
+                                ),
+                            ],
                         ),
                         _section(
                             "Layout",
@@ -268,6 +313,18 @@ app.layout = dbc.Container(
                                 ],
                                 value="stacked",
                                 inline=True,
+                            ),
+                        ),
+                        _section(
+                            "Chart height (px)",
+                            dcc.Slider(
+                                id="chart-height",
+                                min=300,
+                                max=2000,
+                                step=100,
+                                value=600,
+                                marks={300: "300", 600: "600", 1200: "1.2k", 2000: "2k"},
+                                tooltip={"placement": "bottom", "always_visible": False},
                             ),
                         ),
                         _section(
@@ -292,16 +349,14 @@ app.layout = dbc.Container(
                 ),
                 # Chart + table area
                 dbc.Col(
-                    className="d-flex flex-column overflow-hidden",
-                    style={"height": "100vh"},
+                    className="d-flex flex-column",
+                    style={"height": "100vh", "overflowY": "auto"},
                     children=[
                         dcc.Loading(
                             type="circle",
                             color=_ACCENT,
-                            style={"flex": "1", "minHeight": "0", "overflow": "hidden"},
                             children=dcc.Graph(
                                 id="chart",
-                                style={"height": "100%"},
                                 config={"displayModeBar": True, "scrollZoom": True},
                                 figure=_empty_fig("Select signals and click Plot"),
                             ),
@@ -353,9 +408,7 @@ app.layout = dbc.Container(
 def _fetch_all_signals() -> list[dict] | None:
     try:
         df = _query(
-            f"SELECT DISTINCT signal_name, signal_source "
-            f"FROM {_GOLD_TABLE} "
-            f"ORDER BY signal_source, signal_name"
+            f"SELECT DISTINCT signal_name, signal_source FROM {_GOLD_TABLE} ORDER BY signal_source, signal_name"
         )
         print(f"[_fetch_all_signals] fetched {len(df)} signal(s)", flush=True)
         return df.to_dict("records")
@@ -427,11 +480,12 @@ def toggle_all(select_clicks, clear_clicks, options):
     Output("grid", "columnDefs"),
     Input("plot-btn", "n_clicks"),
     Input("layout-mode", "value"),
+    Input("chart-height", "value"),
     State("signal-select", "value"),
     State("max-pts", "value"),
     prevent_initial_call=True,
 )
-def render_chart(_, layout, selected, max_pts):
+def render_chart(_, layout, chart_height, selected, max_pts):
     if not selected:
         return dash.no_update, "Select at least one signal.", dash.no_update, dash.no_update
 
@@ -466,7 +520,8 @@ def render_chart(_, layout, selected, max_pts):
         msg = "No data returned."
         return _empty_fig(msg), msg, [], dash.no_update
 
-    fig = _overlay_fig(traces) if layout == "overlay" else _stacked_fig(traces)
+    h = int(chart_height or 600)
+    fig = _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h)
     row_data, col_defs = _pivot_table(traces)
 
     total = sum(len(x) for _, _, x, _ in traces)

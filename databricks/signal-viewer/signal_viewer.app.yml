@@ -1,0 +1,25 @@
+resources:
+  apps:
+    signal_viewer:
+      name: signal-viewer
+      # source_code_path is relative to this file; "." resolves to databricks/signal-viewer/
+      source_code_path: .
+      description: Interactive signal visualization dashboard for BLF/MF4 data.
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+      # NOTE: DABs grants SQL warehouse CAN_USE automatically, but Unity Catalog
+      # table access must be granted separately to the app service principal.
+      # After first deploy, find the SP's application_id via:
+      #   databricks apps get signal-viewer
+      # Then run:
+      #   databricks experimental aitools tools query \
+      #     "GRANT USE CATALOG ON CATALOG main TO \`<sp_application_id>\`"
+      #   databricks experimental aitools tools query \
+      #     "GRANT USE SCHEMA ON SCHEMA main.<schema> TO \`<sp_application_id>\`"
+      #   databricks experimental aitools tools query \
+      #     "GRANT SELECT ON SCHEMA main.<schema> TO \`<sp_application_id>\`"
+      #
+      # Granted (2026-06-10): main.blf_dev -- 12bf96f4-642b-46e7-a09b-1fd2082e907e

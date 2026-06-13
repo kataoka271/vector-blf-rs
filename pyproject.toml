@@ -17,6 +17,16 @@ features = ["python"]
 module-name = "vector_blf"
 
 [dependency-groups]
+databricks = [
+    "dash>=4.2.0",
+    "dash-ag-grid>=35.2.0",
+    "dash-bootstrap-components>=1.6.0",
+    "databricks-sdk>=0.102.0",
+    "databricks-sql-connector>=4.2.6",
+    "pandas>=2.0.3",
+    "plotly>=6.8.0",
+    "python-dotenv>=1.0.1",
+]
 dev = [
     "autosar-data>=0.10.1",
     "maturin>=1.13.3",

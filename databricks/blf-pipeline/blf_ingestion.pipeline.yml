@@ -1,0 +1,35 @@
+resources:
+  pipelines:
+    blf_ingestion:
+      name: vector-blf-ingestion-${bundle.target}
+
+      # Unity Catalog output location
+      catalog: ${var.target_catalog}
+      target: ${var.target_schema}
+
+      # Pipeline parameters -- consumed by spark.conf.get() in the Python file
+      configuration:
+        blf.source_path:         ${var.blf_source_path}
+        blf.target_catalog:      ${var.target_catalog}
+        blf.target_schema:       ${var.target_schema}
+        blf.signals_path:        ${var.signals_path}
+        blf.someip_signals_path: ${var.someip_signals_path}
+
+      libraries:
+        # DLT pipeline definition (path relative to this file)
+        - file:
+            path: ./dlt_blf_pipeline.py
+
+      environment:
+        dependencies:
+          # Path relative to this file: two levels up to repo root, then dist/
+          - ../../dist/*.whl
+
+      serverless: true
+
+      channel: CURRENT    # use the latest DLT runtime
+      edition: ADVANCED   # required for Auto Loader + expectations
+
+      # Overridden per target in databricks.yml
+      continuous:   false
+      development:  true

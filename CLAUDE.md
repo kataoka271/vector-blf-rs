@@ -146,8 +146,8 @@ PyO3 bindings exposed as the `vector_blf` Python extension module:
 | File | Purpose |
 |------|---------|
 | `databricks.yml` | Databricks Asset Bundle (DAB) config — defines the `vector_blf` wheel artifact, pipeline variables, and `dev`/`prod` targets |
-| `databricks/dlt_blf_pipeline.py` | Delta Live Tables pipeline: `blf_bronze` (all messages) → `blf_silver_can`, `blf_silver_eth`, `blf_silver_can_signals` (streaming tables via Auto Loader) |
-| `databricks/build_wheel.sh` | Builds a manylinux `aarch64` wheel inside Docker using `maturin` + `cargo-zigbuild`; output goes to `dist/` |
+| `databricks/blf-pipeline/dlt_blf_pipeline.py` | Delta Live Tables pipeline: `blf_bronze` (all messages) → `blf_silver_can`, `blf_silver_eth`, `blf_silver_can_signals` (streaming tables via Auto Loader) |
+| `databricks/blf-pipeline/build_wheel.sh` | Builds a manylinux `aarch64` wheel inside Docker using `maturin` + `cargo-zigbuild`; output goes to `dist/` |
 | `assets/can_signals.csv` | Demo signal definitions CSV; upload to the `signals` volume before running the pipeline |
 
 **DAB workflow:**

@@ -137,6 +137,7 @@ def _stacked_fig(traces: _Traces) -> go.Figure:
     fig.update_xaxes(title_text="Time", row=n, col=1)
     fig.update_xaxes(**_AXIS_BOX)
     fig.update_yaxes(**_AXIS_BOX)
+    fig.update_annotations(xanchor="left", x=0, align="left", bgcolor=_PANEL, borderpad=4)
     return fig
 
 
@@ -155,6 +156,11 @@ def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
 
 
 # App
+
+
+def _section(label: str, *children) -> html.Div:
+    return html.Div([dbc.Label(label, size="sm", className="fw-semibold text-secondary mb-1"), *children])
+
 
 app = dash.Dash(__name__, title="Signal Viewer", external_stylesheets=[dbc.themes.DARKLY])
 
@@ -179,71 +185,90 @@ app.layout = dbc.Container(
                         "borderRight": f"1px solid {_BORDER}",
                     },
                     children=[
-                        html.Div(
-                            [
-                                html.H3(
-                                    "Signal Viewer", style={"margin": "0 0 3px", "color": _ACCENT, "fontSize": "16px"}
-                                ),
-                                html.Div(
-                                    f"{CATALOG}.{SCHEMA}.blf_gold_signals", style={"fontSize": "11px", "color": "#888"}
-                                ),
-                            ]
-                        ),
+                        html.H3("Signal Viewer", style={"margin": "0 0 3px", "color": _ACCENT, "fontSize": "16px"}),
+                        html.Div(f"{CATALOG}.{SCHEMA}.blf_gold_signals", style={"fontSize": "11px", "color": "#888"}),
                         html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
+                        _section(
+                            "Source",
+                            dbc.Checklist(
+                                id="source-filter",
+                                options=[
+                                    {"label": " CAN", "value": "CAN"},
+                                    {"label": " ETH", "value": "ETH"},
+                                    {"label": " SOMEIP", "value": "SOMEIP"},
+                                ],
+                                value=["CAN", "SOMEIP"],
+                            ),
+                        ),
                         html.Div(
                             [
-                                dbc.Label("Source", size="sm", className="fw-semibold text-secondary mb-1"),
-                                dbc.Checklist(
-                                    id="source-filter",
-                                    options=[
-                                        {"label": " CAN", "value": "CAN"},
-                                        {"label": " ETH", "value": "ETH"},
-                                        {"label": " SOMEIP", "value": "SOMEIP"},
+                                dbc.Label("Signals", size="sm", className="fw-semibold text-secondary mb-0 me-2"),
+                                dbc.ButtonGroup(
+                                    [
+                                        dbc.Button(
+                                            "All",
+                                            id="select-all-btn",
+                                            size="sm",
+                                            color="secondary",
+                                            outline=True,
+                                            className="py-0",
+                                            style={"fontSize": "11px"},
+                                        ),
+                                        dbc.Button(
+                                            "None",
+                                            id="clear-all-btn",
+                                            size="sm",
+                                            color="secondary",
+                                            outline=True,
+                                            className="py-0",
+                                            style={"fontSize": "11px"},
+                                        ),
                                     ],
-                                    value=["CAN", "SOMEIP"],
+                                    size="sm",
                                 ),
-                            ]
+                            ],
+                            className="d-flex align-items-center mb-1",
                         ),
-                        html.Div(
-                            [
-                                dbc.Label("Signals", size="sm", className="fw-semibold text-secondary mb-1"),
-                                dcc.Dropdown(
-                                    id="signal-select",
-                                    multi=True,
-                                    placeholder="Select signals...",
-                                    style={"fontSize": "13px"},
-                                ),
-                            ]
+                        dcc.Loading(
+                            type="dot",
+                            color=_ACCENT,
+                            children=dbc.Checklist(
+                                id="signal-select",
+                                options=[],
+                                value=[],
+                                style={
+                                    "fontSize": "13px",
+                                    "maxHeight": "260px",
+                                    "overflowY": "auto",
+                                    "border": f"1px solid {_BORDER}",
+                                    "borderRadius": "4px",
+                                    "padding": "6px 8px",
+                                },
+                            ),
                         ),
-                        html.Div(
-                            [
-                                dbc.Label("Layout", size="sm", className="fw-semibold text-secondary mb-1"),
-                                dbc.RadioItems(
-                                    id="layout-mode",
-                                    options=[
-                                        {"label": " Overlay", "value": "overlay"},
-                                        {"label": " Stacked", "value": "stacked"},
-                                    ],
-                                    value="stacked",
-                                    inline=True,
-                                ),
-                            ]
+                        _section(
+                            "Layout",
+                            dbc.RadioItems(
+                                id="layout-mode",
+                                options=[
+                                    {"label": " Overlay", "value": "overlay"},
+                                    {"label": " Stacked", "value": "stacked"},
+                                ],
+                                value="stacked",
+                                inline=True,
+                            ),
                         ),
-                        html.Div(
-                            [
-                                dbc.Label(
-                                    "Max points / signal", size="sm", className="fw-semibold text-secondary mb-1"
-                                ),
-                                dcc.Slider(
-                                    id="max-pts",
-                                    min=1_000,
-                                    max=50_000,
-                                    step=1_000,
-                                    value=10_000,
-                                    marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
-                                    tooltip={"placement": "bottom", "always_visible": False},
-                                ),
-                            ]
+                        _section(
+                            "Max points / signal",
+                            dcc.Slider(
+                                id="max-pts",
+                                min=1_000,
+                                max=50_000,
+                                step=1_000,
+                                value=10_000,
+                                marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
+                                tooltip={"placement": "bottom", "always_visible": False},
+                            ),
                         ),
                         dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
                         html.Div(id="avail-msg", style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"}),
@@ -270,8 +295,7 @@ app.layout = dbc.Container(
                             ),
                         ),
                         html.Div(
-                            style={"padding": "0 16px", "flexShrink": "0"},
-                            children=dag.AgGrid(
+                            dag.AgGrid(
                                 id="grid",
                                 className="ag-theme-alpine-dark",
                                 style={
@@ -301,6 +325,7 @@ app.layout = dbc.Container(
                                     "paginationPageSizeSelector": [50, 100, 500],
                                 },
                             ),
+                            style={"padding": "0 16px", "flexShrink": "0"},
                         ),
                     ],
                 ),
@@ -315,13 +340,14 @@ app.layout = dbc.Container(
 
 @callback(
     Output("signal-select", "options"),
+    Output("signal-select", "value"),
     Output("avail-msg", "children"),
     Input("source-filter", "value"),
 )
 def refresh_signals(sources):
     print(f"[refresh_signals] sources={sources}", flush=True)
     if not sources:
-        return [], "No source selected."
+        return [], [], "No source selected."
     try:
         ph = ",".join(["?"] * len(sources))
         df = _query(
@@ -333,7 +359,7 @@ def refresh_signals(sources):
         )
         print(f"[refresh_signals] df.shape={df.shape} cols={list(df.columns)}", flush=True)
         if df.empty:
-            return [], "No signals found. Has the pipeline run?"
+            return [], [], "No signals found. Has the pipeline run?"
         opts = [
             {
                 "label": f"[{r['signal_source']}] {r['signal_name']}",
@@ -342,10 +368,24 @@ def refresh_signals(sources):
             for _, r in df.iterrows()
         ]
         print(f"[refresh_signals] returning {len(opts)} opts", flush=True)
-        return opts, f"{len(opts)} signal(s) available."
+        return opts, [], f"{len(opts)} signal(s) available."
     except Exception as exc:
         print(f"[refresh_signals] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
-        return [], f"Error: {exc}"
+        return [], [], f"Error: {exc}"
+
+
+@callback(
+    Output("signal-select", "value", allow_duplicate=True),
+    Input("select-all-btn", "n_clicks"),
+    Input("clear-all-btn", "n_clicks"),
+    State("signal-select", "options"),
+    prevent_initial_call=True,
+)
+def toggle_all(select_clicks, clear_clicks, options):
+    triggered = dash.ctx.triggered_id
+    if triggered == "select-all-btn":
+        return [o["value"] for o in options]
+    return []
 
 
 @callback(

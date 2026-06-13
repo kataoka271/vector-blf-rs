@@ -1,0 +1,12 @@
+version: 1
+name: "Signal Viewer"
+description: "Interactive signal visualization dashboard for BLF/MF4 data stored in Unity Catalog."
+
+resource_specs:
+  - name: "sql-warehouse"
+    description: "The SQL warehouse the app uses to query signal data."
+    sql_warehouse_spec:
+      permission: "CAN_USE"
+
+user_api_scopes:
+  - "sql"

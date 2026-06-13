@@ -5,6 +5,8 @@ resources:
       # source_code_path is relative to this file; "." resolves to databricks/signal-viewer/
       source_code_path: .
       description: Interactive signal visualization dashboard for BLF/MF4 data.
+      user_api_scopes:
+        - sql
       resources:
         - name: sql-warehouse
           sql_warehouse:

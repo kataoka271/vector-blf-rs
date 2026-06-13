@@ -169,6 +169,8 @@ app.layout = dbc.Container(
     className="p-0",
     style={"height": "100vh", "backgroundColor": _BG, "fontFamily": "Inter, system-ui, sans-serif"},
     children=[
+        dcc.Store(id="all-signals-cache"),
+        dcc.Location(id="url", refresh=False),
         dbc.Row(
             className="h-100 flex-nowrap g-0",
             children=[
@@ -225,6 +227,16 @@ app.layout = dbc.Container(
                                         ),
                                     ],
                                     size="sm",
+                                ),
+                                dbc.Button(
+                                    "↻",
+                                    id="refresh-signals-btn",
+                                    size="sm",
+                                    color="secondary",
+                                    outline=True,
+                                    className="py-0 ms-1",
+                                    style={"fontSize": "11px"},
+                                    title="Refresh signal list from warehouse",
                                 ),
                             ],
                             className="d-flex align-items-center mb-1",
@@ -338,40 +350,60 @@ app.layout = dbc.Container(
 # Callbacks
 
 
+def _fetch_all_signals() -> list[dict] | None:
+    try:
+        df = _query(
+            f"SELECT DISTINCT signal_name, signal_source "
+            f"FROM {_GOLD_TABLE} "
+            f"ORDER BY signal_source, signal_name"
+        )
+        print(f"[_fetch_all_signals] fetched {len(df)} signal(s)", flush=True)
+        return df.to_dict("records")
+    except Exception as exc:
+        print(f"[_fetch_all_signals] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None
+
+
+@callback(Output("all-signals-cache", "data"), Input("url", "pathname"))
+def prefetch_signals(_):
+    return _fetch_all_signals()
+
+
+@callback(
+    Output("all-signals-cache", "data", allow_duplicate=True),
+    Input("refresh-signals-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def refresh_signal_cache(_):
+    return _fetch_all_signals()
+
+
 @callback(
     Output("signal-select", "options"),
     Output("signal-select", "value"),
     Output("avail-msg", "children"),
     Input("source-filter", "value"),
+    Input("all-signals-cache", "data"),
 )
-def refresh_signals(sources):
-    print(f"[refresh_signals] sources={sources}", flush=True)
+def refresh_signals(sources, cache):
+    print(f"[refresh_signals] sources={sources} cache={'hit' if cache is not None else 'miss'}", flush=True)
+    if cache is None:
+        return dash.no_update, dash.no_update, "Loading signals..."
     if not sources:
         return [], [], "No source selected."
-    try:
-        ph = ",".join(["?"] * len(sources))
-        df = _query(
-            f"SELECT DISTINCT signal_name, signal_source "
-            f"FROM {_GOLD_TABLE} "
-            f"WHERE signal_source IN ({ph}) "
-            f"ORDER BY signal_source, signal_name",
-            list(sources),
-        )
-        print(f"[refresh_signals] df.shape={df.shape} cols={list(df.columns)}", flush=True)
-        if df.empty:
-            return [], [], "No signals found. Has the pipeline run?"
-        opts = [
-            {
-                "label": f"[{r['signal_source']}] {r['signal_name']}",
-                "value": f"{r['signal_source']}::{r['signal_name']}",
-            }
-            for _, r in df.iterrows()
-        ]
-        print(f"[refresh_signals] returning {len(opts)} opts", flush=True)
-        return opts, [], f"{len(opts)} signal(s) available."
-    except Exception as exc:
-        print(f"[refresh_signals] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
-        return [], [], f"Error: {exc}"
+    source_set = set(sources)
+    filtered = [r for r in cache if r["signal_source"] in source_set]
+    if not filtered:
+        return [], [], "No signals found. Has the pipeline run?"
+    opts = [
+        {
+            "label": f"[{r['signal_source']}] {r['signal_name']}",
+            "value": f"{r['signal_source']}::{r['signal_name']}",
+        }
+        for r in filtered
+    ]
+    print(f"[refresh_signals] returning {len(opts)} opts (from cache)", flush=True)
+    return opts, [], f"{len(opts)} signal(s) available."
 
 
 @callback(
@@ -394,40 +426,44 @@ def toggle_all(select_clicks, clear_clicks, options):
     Output("grid", "rowData"),
     Output("grid", "columnDefs"),
     Input("plot-btn", "n_clicks"),
+    Input("layout-mode", "value"),
     State("signal-select", "value"),
-    State("layout-mode", "value"),
     State("max-pts", "value"),
     prevent_initial_call=True,
 )
-def render_chart(_, selected, layout, max_pts):
+def render_chart(_, layout, selected, max_pts):
     if not selected:
         return dash.no_update, "Select at least one signal.", dash.no_update, dash.no_update
 
+    where_clauses = " OR ".join(["(signal_source = ? AND signal_name = ?)"] * len(selected))
+    flat_params = [val for key in selected for val in key.split("::", 1)]
+    stmt = (
+        f"WITH ranked AS ("
+        f"SELECT signal_source, signal_name, event_time, timestamp_s, signal_value,"
+        f" ROW_NUMBER() OVER (PARTITION BY signal_source, signal_name ORDER BY timestamp_ns) AS rn"
+        f" FROM {_GOLD_TABLE} WHERE {where_clauses}"
+        f") SELECT signal_source, signal_name, event_time, timestamp_s, signal_value"
+        f" FROM ranked WHERE rn <= {int(max_pts)}"
+    )
+    try:
+        df_all = _query(stmt, flat_params)
+    except Exception as exc:
+        msg = f"Query error: {exc}"
+        print(f"[render_chart] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return _empty_fig(msg), msg, [], dash.no_update
+
     traces: _Traces = []
-    errors: list[str] = []
     for key in selected:
         src, name = key.split("::", 1)
-        try:
-            df = _query(
-                f"SELECT event_time, timestamp_s, signal_value "
-                f"FROM {_GOLD_TABLE} "
-                f"WHERE signal_source = ? AND signal_name = ? "
-                f"ORDER BY timestamp_ns "
-                f"LIMIT {int(max_pts)}",
-                [src, name],
-            )
-            if df.empty:
-                continue
-            # Prefer absolute event_time; fall back to relative timestamp_s.
-            x = df["event_time"] if df["event_time"].notna().any() else df["timestamp_s"]
-            traces.append((src, name, x, df["signal_value"]))
-        except Exception as exc:
-            errors.append(f"[{src}] {name}: {exc}")
+        sub = df_all[(df_all["signal_source"] == src) & (df_all["signal_name"] == name)]
+        if sub.empty:
+            continue
+        # Prefer absolute event_time; fall back to relative timestamp_s.
+        x = sub["event_time"] if sub["event_time"].notna().any() else sub["timestamp_s"]
+        traces.append((src, name, x, sub["signal_value"]))
 
     if not traces:
         msg = "No data returned."
-        if errors:
-            msg += " " + "; ".join(errors)
         return _empty_fig(msg), msg, [], dash.no_update
 
     fig = _overlay_fig(traces) if layout == "overlay" else _stacked_fig(traces)
@@ -435,8 +471,6 @@ def render_chart(_, selected, layout, max_pts):
 
     total = sum(len(x) for _, _, x, _ in traces)
     msg = f"{total:,} pts across {len(traces)} signal(s)."
-    if errors:
-        msg += " Errors: " + "; ".join(errors)
     return fig, msg, row_data, col_defs
 
 

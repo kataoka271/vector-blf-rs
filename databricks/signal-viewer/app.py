@@ -198,6 +198,31 @@ def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
     return pivot.to_dict("records"), col_defs
 
 
+def _map_fig(lat: pd.Series, lon: pd.Series) -> go.Figure:
+    center_lat = float(lat.mean())
+    center_lon = float(lon.mean())
+    fig = go.Figure(
+        go.Scattermapbox(
+            lat=lat,
+            lon=lon,
+            mode="lines+markers",
+            marker={"size": 4, "color": _ACCENT},
+            line={"width": 1, "color": _ACCENT},
+        )
+    )
+    fig.update_layout(
+        paper_bgcolor=_BG,
+        mapbox={
+            "style": "open-street-map",
+            "center": {"lat": center_lat, "lon": center_lon},
+            "zoom": 10,
+        },
+        height=500,
+        margin={"l": 0, "r": 0, "t": 30, "b": 0},
+    )
+    return fig
+
+
 # App
 
 
@@ -339,6 +364,39 @@ app.layout = dbc.Container(
                                 tooltip={"placement": "bottom", "always_visible": False},
                             ),
                         ),
+                        _section(
+                            "Map",
+                            html.Div(
+                                [
+                                    dbc.Label(
+                                        "Lat", size="sm", className="text-secondary mb-0", style={"minWidth": "28px"}
+                                    ),
+                                    dcc.Dropdown(
+                                        id="lat-signal",
+                                        options=[],
+                                        placeholder="latitude signal...",
+                                        clearable=True,
+                                        style={"fontSize": "12px", "flex": "1"},
+                                    ),
+                                ],
+                                className="d-flex align-items-center gap-2 mb-1",
+                            ),
+                            html.Div(
+                                [
+                                    dbc.Label(
+                                        "Lon", size="sm", className="text-secondary mb-0", style={"minWidth": "28px"}
+                                    ),
+                                    dcc.Dropdown(
+                                        id="lon-signal",
+                                        options=[],
+                                        placeholder="longitude signal...",
+                                        clearable=True,
+                                        style={"fontSize": "12px", "flex": "1"},
+                                    ),
+                                ],
+                                className="d-flex align-items-center gap-2",
+                            ),
+                        ),
                         dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
                         html.Div(id="avail-msg", style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"}),
                         html.Div(
@@ -362,37 +420,49 @@ app.layout = dbc.Container(
                             ),
                         ),
                         html.Div(
-                            dag.AgGrid(
-                                id="grid",
-                                className="ag-theme-alpine-dark",
-                                style={
-                                    "height": "500px",
-                                    "--ag-background-color": _BG,
-                                    "--ag-odd-row-background-color": _PANEL,
-                                    "--ag-border-color": _BORDER,
-                                    "--ag-header-background-color": _PANEL,
-                                },
-                                columnDefs=[
-                                    {"field": "signal", "headerName": "Signal", "filter": True, "minWidth": 180},
-                                    {"field": "time", "headerName": "Time", "filter": True, "minWidth": 160},
-                                    {
-                                        "field": "value",
-                                        "headerName": "Value",
-                                        "filter": True,
-                                        "type": "numericColumn",
-                                        "minWidth": 100,
-                                    },
-                                ],
-                                rowData=[],
-                                defaultColDef={"resizable": True, "sortable": True, "flex": 1},
-                                dashGridOptions={
-                                    "animateRows": False,
-                                    "pagination": True,
-                                    "paginationPageSize": 100,
-                                    "paginationPageSizeSelector": [50, 100, 500],
-                                },
+                            id="map-section",
+                            style={"display": "none"},
+                            children=dcc.Loading(
+                                type="circle",
+                                color=_ACCENT,
+                                children=dcc.Graph(
+                                    id="map-chart",
+                                    config={"displayModeBar": True, "scrollZoom": True},
+                                    style={"padding": "0 16px 16px"},
+                                ),
                             ),
-                            style={"padding": "0 16px", "flexShrink": "0"},
+                        ),
+                        dag.AgGrid(
+                            id="grid",
+                            className="ag-theme-alpine-dark",
+                            style={
+                                "height": "500px",
+                                "padding": "0 16px",
+                                "flexShrink": "0",
+                                "--ag-background-color": _BG,
+                                "--ag-odd-row-background-color": _PANEL,
+                                "--ag-border-color": _BORDER,
+                                "--ag-header-background-color": _PANEL,
+                            },
+                            columnDefs=[
+                                {"field": "signal", "headerName": "Signal", "filter": True, "minWidth": 180},
+                                {"field": "time", "headerName": "Time", "filter": True, "minWidth": 160},
+                                {
+                                    "field": "value",
+                                    "headerName": "Value",
+                                    "filter": True,
+                                    "type": "numericColumn",
+                                    "minWidth": 100,
+                                },
+                            ],
+                            rowData=[],
+                            defaultColDef={"resizable": True, "sortable": True, "flex": 1},
+                            dashGridOptions={
+                                "animateRows": False,
+                                "pagination": True,
+                                "paginationPageSize": 100,
+                                "paginationPageSizeSelector": [50, 100, 500],
+                            },
                         ),
                     ],
                 ),
@@ -435,19 +505,21 @@ def refresh_signal_cache(_):
     Output("signal-select", "options"),
     Output("signal-select", "value"),
     Output("avail-msg", "children"),
+    Output("lat-signal", "options"),
+    Output("lon-signal", "options"),
     Input("source-filter", "value"),
     Input("all-signals-cache", "data"),
 )
 def refresh_signals(sources, cache):
     print(f"[refresh_signals] sources={sources} cache={'hit' if cache is not None else 'miss'}", flush=True)
     if cache is None:
-        return dash.no_update, dash.no_update, "Loading signals..."
+        return dash.no_update, dash.no_update, "Loading signals...", dash.no_update, dash.no_update
     if not sources:
-        return [], [], "No source selected."
+        return [], [], "No source selected.", [], []
     source_set = set(sources)
     filtered = [r for r in cache if r["signal_source"] in source_set]
     if not filtered:
-        return [], [], "No signals found. Has the pipeline run?"
+        return [], [], "No signals found. Has the pipeline run?", [], []
     opts = [
         {
             "label": f"[{r['signal_source']}] {r['signal_name']}",
@@ -456,7 +528,7 @@ def refresh_signals(sources, cache):
         for r in filtered
     ]
     print(f"[refresh_signals] returning {len(opts)} opts (from cache)", flush=True)
-    return opts, [], f"{len(opts)} signal(s) available."
+    return opts, [], f"{len(opts)} signal(s) available.", opts, opts
 
 
 @callback(
@@ -478,55 +550,107 @@ def toggle_all(select_clicks, clear_clicks, options):
     Output("plot-msg", "children"),
     Output("grid", "rowData"),
     Output("grid", "columnDefs"),
+    Output("map-chart", "figure"),
+    Output("map-section", "style"),
     Input("plot-btn", "n_clicks"),
     Input("layout-mode", "value"),
     Input("chart-height", "value"),
     State("signal-select", "value"),
     State("max-pts", "value"),
+    State("lat-signal", "value"),
+    State("lon-signal", "value"),
     prevent_initial_call=True,
 )
-def render_chart(_, layout, chart_height, selected, max_pts):
-    if not selected:
-        return dash.no_update, "Select at least one signal.", dash.no_update, dash.no_update
+def render_chart(_, layout, chart_height, selected, max_pts, lat_key, lon_key):
+    map_empty = go.Figure()
+    map_hidden = {"display": "none"}
 
-    where_clauses = " OR ".join(["(signal_source = ? AND signal_name = ?)"] * len(selected))
-    flat_params = [val for key in selected for val in key.split("::", 1)]
-    stmt = (
-        f"WITH ranked AS ("
-        f"SELECT signal_source, signal_name, event_time, timestamp_s, signal_value,"
-        f" ROW_NUMBER() OVER (PARTITION BY signal_source, signal_name ORDER BY timestamp_ns) AS rn"
-        f" FROM {_GOLD_TABLE} WHERE {where_clauses}"
-        f") SELECT signal_source, signal_name, event_time, timestamp_s, signal_value"
-        f" FROM ranked WHERE rn <= {int(max_pts)}"
-    )
-    try:
-        df_all = _query(stmt, flat_params)
-    except Exception as exc:
-        msg = f"Query error: {exc}"
-        print(f"[render_chart] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
-        return _empty_fig(msg), msg, [], dash.no_update
+    if not selected and not (lat_key and lon_key):
+        return dash.no_update, "Select at least one signal.", dash.no_update, dash.no_update, map_empty, map_hidden
 
-    traces: _Traces = []
-    for key in selected:
-        src, name = key.split("::", 1)
-        sub = df_all[(df_all["signal_source"] == src) & (df_all["signal_name"] == name)]
-        if sub.empty:
-            continue
-        # Prefer absolute event_time; fall back to relative timestamp_s.
-        x = sub["event_time"] if sub["event_time"].notna().any() else sub["timestamp_s"]
-        traces.append((src, name, x, sub["signal_value"]))
+    chart_fig = dash.no_update
+    chart_msg = ""
+    row_data: list[dict] | dash.NoUpdate = dash.no_update
+    col_defs: list[dict] | dash.NoUpdate = dash.no_update
 
-    if not traces:
-        msg = "No data returned."
-        return _empty_fig(msg), msg, [], dash.no_update
+    if selected:
+        where_clauses = " OR ".join(["(signal_source = ? AND signal_name = ?)"] * len(selected))
+        flat_params = [val for key in selected for val in key.split("::", 1)]
+        stmt = (
+            f"WITH ranked AS ("
+            f"SELECT signal_source, signal_name, event_time, timestamp_s, signal_value,"
+            f" ROW_NUMBER() OVER (PARTITION BY signal_source, signal_name ORDER BY timestamp_ns) AS rn"
+            f" FROM {_GOLD_TABLE} WHERE {where_clauses}"
+            f") SELECT signal_source, signal_name, event_time, timestamp_s, signal_value"
+            f" FROM ranked WHERE rn <= {int(max_pts)}"
+        )
+        try:
+            df_all = _query(stmt, flat_params)
+        except Exception as exc:
+            chart_msg = f"Query error: {exc}"
+            print(f"[render_chart] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+            return _empty_fig(chart_msg), chart_msg, [], dash.no_update, map_empty, map_hidden
 
-    h = int(chart_height or 600)
-    fig = _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h)
-    row_data, col_defs = _pivot_table(traces)
+        traces: _Traces = []
+        for key in selected:
+            src, name = key.split("::", 1)
+            sub = df_all[(df_all["signal_source"] == src) & (df_all["signal_name"] == name)]
+            if sub.empty:
+                continue
+            # Prefer absolute event_time; fall back to relative timestamp_s.
+            x = sub["event_time"] if sub["event_time"].notna().any() else sub["timestamp_s"]
+            traces.append((src, name, x, sub["signal_value"]))
 
-    total = sum(len(x) for _, _, x, _ in traces)
-    msg = f"{total:,} pts across {len(traces)} signal(s)."
-    return fig, msg, row_data, col_defs
+        if traces:
+            h = int(chart_height or 600)
+            chart_fig = _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h)
+            row_data, col_defs = _pivot_table(traces)
+            total = sum(len(x) for _, _, x, _ in traces)
+            chart_msg = f"{total:,} pts across {len(traces)} signal(s)."
+        else:
+            chart_msg = "No data returned."
+            chart_fig = _empty_fig(chart_msg)
+            row_data = []
+
+    if lat_key and lon_key:
+        gps_stmt = (
+            f"WITH ranked AS ("
+            f"SELECT timestamp_ns, signal_value,"
+            f" ROW_NUMBER() OVER (ORDER BY timestamp_ns) AS rn"
+            f" FROM {_GOLD_TABLE} WHERE signal_source = ? AND signal_name = ?"
+            f") SELECT timestamp_ns, signal_value FROM ranked WHERE rn <= {int(max_pts)}"
+        )
+        try:
+            lat_src, lat_name = lat_key.split("::", 1)
+            lon_src, lon_name = lon_key.split("::", 1)
+            lat_df = (
+                _query(gps_stmt, [lat_src, lat_name])
+                .rename(columns={"signal_value": "lat"})
+                .sort_values("timestamp_ns")
+            )
+            lon_df = (
+                _query(gps_stmt, [lon_src, lon_name])
+                .rename(columns={"signal_value": "lon"})
+                .sort_values("timestamp_ns")
+            )
+            merged = pd.merge_asof(lat_df, lon_df, on="timestamp_ns", direction="nearest").dropna(subset=["lat", "lon"])
+        except Exception as exc:
+            print(f"[render_chart] GPS fetch error: {exc}\n{traceback.format_exc()}", flush=True)
+            merged = pd.DataFrame()
+
+        if not merged.empty:
+            map_fig = _map_fig(merged["lat"], merged["lon"])
+            map_style: dict = {}
+            pts = len(merged)
+            chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
+        else:
+            map_fig = map_empty
+            map_style = map_hidden
+    else:
+        map_fig = map_empty
+        map_style = map_hidden
+
+    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style
 
 
 if __name__ == "__main__":

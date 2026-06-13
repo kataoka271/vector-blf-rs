@@ -1,5 +1,6 @@
 """Signal Viewer — Plotly Dash visualization app for Databricks Apps."""
 
+import math
 import os
 import traceback
 
@@ -14,8 +15,7 @@ from databricks.sdk.core import Config
 
 from databricks import sql
 
-# Ensure environment variable is set correctly
-assert os.getenv("DATABRICKS_WAREHOUSE_ID"), "DATABRICKS_WAREHOUSE_ID must be set in app.yaml."
+_LOCAL_DEV = not os.getenv("DATABRICKS_WAREHOUSE_ID")
 
 # Config
 USE_USER_TOKEN = True  # Set to False to use Service Principal credentials instead of user token
@@ -24,8 +24,64 @@ SCHEMA = os.environ.get("BLF_SCHEMA", "blf")
 _GOLD_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_gold_signals`"
 
 
-# Databricks config
-cfg = Config()
+# Databricks config (skipped in local dev mode)
+cfg = None if _LOCAL_DEV else Config()
+
+if _LOCAL_DEV:
+    print("[LOCAL DEV] No DATABRICKS_WAREHOUSE_ID -- serving dummy data.", flush=True)
+
+    _DUMMY_N = 500
+    _DUMMY_DURATION = 300.0
+    _DUMMY_T = [i * _DUMMY_DURATION / (_DUMMY_N - 1) for i in range(_DUMMY_N)]
+    _DUMMY_TS_NS = [int(t * 1e9) for t in _DUMMY_T]
+    _DUMMY_T0 = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
+
+    _DUMMY_CATALOG = [
+        ("CAN", "EngineSpeed_rpm"),
+        ("CAN", "VehicleSpeed_kph"),
+        ("CAN", "BatteryVoltage_V"),
+        ("CAN", "SteeringAngle_deg"),
+        ("SOMEIP", "TemperatureSensor_C"),
+        ("SOMEIP", "AmbientLight_lux"),
+        ("CAN", "GPS_Latitude"),
+        ("CAN", "GPS_Longitude"),
+    ]
+
+    def _dummy_values(src: str, name: str) -> list[float]:
+        if name == "GPS_Latitude":
+            return [35.6895 + 0.01 * math.sin(2 * math.pi * t / _DUMMY_DURATION) for t in _DUMMY_T]
+        if name == "GPS_Longitude":
+            return [139.6917 + 0.01 * math.cos(2 * math.pi * t / _DUMMY_DURATION) for t in _DUMMY_T]
+        seed = hash(f"{src}::{name}") & 0xFFFF
+        freq = 0.05 + (seed % 20) * 0.01
+        amp = 10 + (seed % 90)
+        offset = (seed % 100) - 50
+        return [offset + amp * math.sin(2 * math.pi * freq * t + seed * 0.001) for t in _DUMMY_T]
+
+    def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
+        if "DISTINCT" in stmt:
+            rows = [{"signal_name": n, "signal_source": s} for s, n in _DUMMY_CATALOG]
+            return pd.DataFrame(rows).sort_values(["signal_source", "signal_name"]).reset_index(drop=True)
+        if "t_min" in stmt:
+            return pd.DataFrame({"t_min": [0.0], "t_max": [_DUMMY_DURATION]})
+        if "PARTITION BY signal_source, signal_name" in stmt:
+            rows = []
+            for src, name in _DUMMY_CATALOG:
+                vals = _dummy_values(src, name)
+                for t, ts_ns, v in zip(_DUMMY_T, _DUMMY_TS_NS, vals):
+                    rows.append({
+                        "signal_source": src,
+                        "signal_name": name,
+                        "event_time": _DUMMY_T0 + pd.Timedelta(seconds=t),
+                        "timestamp_s": t,
+                        "signal_value": v,
+                    })
+            return pd.DataFrame(rows)
+        # Single-signal GPS query (ORDER BY timestamp_ns, no PARTITION BY)
+        src = (params or ["CAN", "GPS_Latitude"])[0]
+        name = (params or ["CAN", "GPS_Latitude"])[1]
+        vals = _dummy_values(src, name)
+        return pd.DataFrame({"timestamp_ns": _DUMMY_TS_NS, "signal_value": vals})
 
 
 def _run_query(stmt: str, params: list | dict | None, user_token: str | None = None) -> pd.DataFrame:
@@ -43,6 +99,8 @@ def _run_query(stmt: str, params: list | dict | None, user_token: str | None = N
 
 def _query(stmt: str, params=None) -> pd.DataFrame:
     """Run a parameterised SQL query using the request's user token or SP credentials."""
+    if _LOCAL_DEV:
+        return _dummy_query(stmt, params)
     user_token = flask.request.headers.get("X-Forwarded-Access-Token")
     if not user_token:
         raise RuntimeError("Missing X-Forwarded-Access-Token header.")

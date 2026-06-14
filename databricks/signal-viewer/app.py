@@ -697,17 +697,17 @@ def toggle_all(select_clicks, clear_clicks, options):
     Input("plot-btn", "n_clicks"),
     Input("layout-mode", "value"),
     Input("chart-height", "value"),
+    Input("xaxis-mode", "value"),
     State("signal-select", "value"),
     State("max-pts", "value"),
     State("lat-signal", "value"),
     State("lon-signal", "value"),
     State("time-range-slider", "value"),
     State("time-range-store", "data"),
-    State("xaxis-mode", "value"),
     prevent_initial_call=True,
 )
 def render_chart(
-    _, layout, chart_height, selected, max_pts, lat_key, lon_key, time_range, time_range_store, xaxis_mode: _XaxisMode
+    _, layout, chart_height, xaxis_mode: _XaxisMode, selected, max_pts, lat_key, lon_key, time_range, time_range_store
 ):
     map_empty = go.Figure()
     map_hidden = {"display": "none"}

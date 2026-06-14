@@ -3,6 +3,7 @@
 import math
 import os
 import traceback
+from typing import Literal
 
 import dash
 import dash_ag_grid as dag
@@ -69,13 +70,15 @@ if _LOCAL_DEV:
             for src, name in _DUMMY_CATALOG:
                 vals = _dummy_values(src, name)
                 for t, ts_ns, v in zip(_DUMMY_T, _DUMMY_TS_NS, vals):
-                    rows.append({
-                        "signal_source": src,
-                        "signal_name": name,
-                        "event_time": _DUMMY_T0 + pd.Timedelta(seconds=t),
-                        "timestamp_s": t,
-                        "signal_value": v,
-                    })
+                    rows.append(
+                        {
+                            "signal_source": src,
+                            "signal_name": name,
+                            "event_time": _DUMMY_T0 + pd.Timedelta(seconds=t),
+                            "timestamp_s": t,
+                            "signal_value": v,
+                        }
+                    )
             return pd.DataFrame(rows)
         # Single-signal GPS query (ORDER BY timestamp_ns, no PARTITION BY)
         src = (params or ["CAN", "GPS_Latitude"])[0]
@@ -86,7 +89,8 @@ if _LOCAL_DEV:
 
 def _run_query(stmt: str, params: list | dict | None, user_token: str | None = None) -> pd.DataFrame:
     """Execute a SQL query and return the result as a pandas DataFrame."""
-    connect_kwargs = {"access_token": user_token} if user_token else {"credentials_provider": lambda: cfg.authenticate}
+    assert cfg is not None, "Databricks config is not initialized."
+    connect_kwargs = {"access_token": user_token} if user_token else {"credentials_provider": cfg.authenticate}
     with sql.connect(
         server_hostname=cfg.host,
         http_path=f"/sql/1.0/warehouses/{cfg.warehouse_id}",
@@ -178,13 +182,16 @@ def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
     return fig
 
 
+_XaxisMode = Literal["shared", "synced", "free"]
+
+
 # Intentionally avoids make_subplots: hoversubplots="axis" does not propagate
 # the cursor across subplots created by make_subplots (Plotly bug, see
 # https://community.plotly.com/t/hoversubplots-axis-not-working-with-make-subplots/84239).
 # Instead, each trace gets its own y-axis with a computed domain sharing one x-axis.
-def _stacked_fig(traces: _Traces, height: int = 600) -> go.Figure:
+def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "shared") -> go.Figure:
     n = len(traces)
-    spacing = max(0.07, 0.20 / n)
+    spacing = max(0.03, 0.20 / n) if xaxis_mode in ("synced", "free") else max(0.02, 0.20 / n)
     h = (1.0 - spacing * max(n - 1, 0)) / n
 
     fig = go.Figure()
@@ -197,7 +204,27 @@ def _stacked_fig(traces: _Traces, height: int = 600) -> go.Figure:
         yref = "y" if i == 0 else f"y{i + 1}"
         ykey = "yaxis" if i == 0 else f"yaxis{i + 1}"
 
-        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=f"[{src}] {name}", yaxis=yref, showlegend=False))
+        if xaxis_mode in ("synced", "free"):
+            xref = "x" if i == 0 else f"x{i + 1}"
+            xkey = "xaxis" if i == 0 else f"xaxis{i + 1}"
+            axes_kw[xkey] = {
+                **_AXIS_BOX,
+                "anchor": yref,
+                "showspikes": True,
+                "spikemode": "across",
+                "spikesnap": "cursor",
+                "spikedash": "dot",
+                "spikecolor": "#888",
+                "spikethickness": 1,
+                **({"matches": "x"} if xaxis_mode == "synced" and i > 0 else {}),
+                **({"title": "Time"} if i == n - 1 else {}),
+            }
+        else:
+            xref = "x"
+
+        fig.add_trace(
+            go.Scatter(x=x, y=y, mode="lines", name=f"[{src}] {name}", xaxis=xref, yaxis=yref, showlegend=False)
+        )
         axes_kw[ykey] = {"domain": [bottom, top], **_AXIS_BOX}
         annotations.append(
             {
@@ -215,18 +242,9 @@ def _stacked_fig(traces: _Traces, height: int = 600) -> go.Figure:
             }
         )
 
-    last_y_ref = "y" if n == 1 else f"y{n}"
-
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor=_BG,
-        plot_bgcolor=_BG,
-        height=max(height, 300 * n),
-        hovermode="x unified",
-        hoversubplots="axis",
-        annotations=annotations,
-        margin={"l": 60, "r": 20, "t": 30, "b": 60},
-        xaxis={
+    if xaxis_mode == "shared":
+        last_y_ref = "y" if n == 1 else f"y{n}"
+        axes_kw["xaxis"] = {
             **_AXIS_BOX,
             "anchor": last_y_ref,
             "title": "Time",
@@ -236,7 +254,17 @@ def _stacked_fig(traces: _Traces, height: int = 600) -> go.Figure:
             "spikedash": "dot",
             "spikecolor": "#888",
             "spikethickness": 1,
-        },
+        }
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=_BG,
+        plot_bgcolor=_BG,
+        height=max(height, 300 * n),
+        hovermode="x unified",
+        hoversubplots="axis",
+        annotations=annotations,
+        margin={"l": 60, "r": 20, "t": 60, "b": 60},
         **axes_kw,
     )
     return fig
@@ -290,8 +318,10 @@ def _fmt_s(seconds: float) -> str:
     return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
-def _section(label: str, *children) -> html.Div:
-    return html.Div([dbc.Label(label, size="sm", className="fw-semibold text-secondary mb-1"), *children])
+def _section(label: str, *children, **kwargs) -> html.Div:
+    return html.Div(
+        [dbc.Label(label, size="sm", className="fw-semibold text-secondary mb-0 d-block"), *children], **kwargs
+    )
 
 
 app = dash.Dash(__name__, title="Signal Viewer", external_stylesheets=[dbc.themes.DARKLY])
@@ -310,10 +340,10 @@ app.layout = dbc.Container(
                     width="auto",
                     className="d-flex flex-column overflow-auto",
                     style={
-                        "width": "290px",
+                        "width": "270px",
                         "backgroundColor": _PANEL,
-                        "padding": "20px 16px",
-                        "gap": "16px",
+                        "padding": "12px 12px",
+                        "gap": "10px",
                         "color": _TEXT,
                         "borderRight": f"1px solid {_BORDER}",
                     },
@@ -398,12 +428,33 @@ app.layout = dbc.Container(
                             dbc.RadioItems(
                                 id="layout-mode",
                                 options=[
-                                    {"label": " Overlay", "value": "overlay"},
-                                    {"label": " Stacked", "value": "stacked"},
+                                    {"label": "Overlay", "value": "overlay"},
+                                    {"label": "Stacked", "value": "stacked"},
                                 ],
                                 value="stacked",
-                                inline=True,
+                                className="btn-group d-flex",
+                                inputClassName="btn-check",
+                                labelClassName="btn btn-outline-secondary btn-sm text-center flex-fill",
+                                labelCheckedClassName="active",
                             ),
+                            className="radio-group",
+                        ),
+                        _section(
+                            "X axis (stacked)",
+                            dbc.RadioItems(
+                                id="xaxis-mode",
+                                options=[
+                                    {"label": "Shared", "value": "shared"},
+                                    {"label": "Synced", "value": "synced"},
+                                    {"label": "Free", "value": "free"},
+                                ],
+                                value="shared",
+                                className="btn-group d-flex",
+                                inputClassName="btn-check",
+                                labelClassName="btn btn-outline-secondary btn-sm text-center flex-fill",
+                                labelCheckedClassName="active",
+                            ),
+                            className="radio-group",
                         ),
                         _section(
                             "Chart height (px)",
@@ -451,7 +502,10 @@ app.layout = dbc.Container(
                             html.Div(
                                 [
                                     dbc.Label(
-                                        "Lat", size="sm", className="text-secondary mb-0", style={"minWidth": "28px"}
+                                        "Lat",
+                                        size="sm",
+                                        className="text-secondary mb-0",
+                                        style={"minWidth": "28px", "flex": "0"},
                                     ),
                                     dcc.Dropdown(
                                         id="lat-signal",
@@ -466,7 +520,10 @@ app.layout = dbc.Container(
                             html.Div(
                                 [
                                     dbc.Label(
-                                        "Lon", size="sm", className="text-secondary mb-0", style={"minWidth": "28px"}
+                                        "Lon",
+                                        size="sm",
+                                        className="text-secondary mb-0",
+                                        style={"minWidth": "28px", "flex": "0"},
                                     ),
                                     dcc.Dropdown(
                                         id="lon-signal",
@@ -525,6 +582,8 @@ app.layout = dbc.Container(
                                 "--ag-odd-row-background-color": _PANEL,
                                 "--ag-border-color": _BORDER,
                                 "--ag-header-background-color": _PANEL,
+                                "--ag-foreground-color": _TEXT,
+                                "--ag-header-foreground-color": _TEXT,
                             },
                             columnDefs=[
                                 {"field": "signal", "headerName": "Signal", "filter": True, "minWidth": 180},
@@ -644,19 +703,30 @@ def toggle_all(select_clicks, clear_clicks, options):
     State("lon-signal", "value"),
     State("time-range-slider", "value"),
     State("time-range-store", "data"),
+    State("xaxis-mode", "value"),
     prevent_initial_call=True,
 )
-def render_chart(_, layout, chart_height, selected, max_pts, lat_key, lon_key, time_range, time_range_store):
+def render_chart(
+    _, layout, chart_height, selected, max_pts, lat_key, lon_key, time_range, time_range_store, xaxis_mode: _XaxisMode
+):
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
 
     if not selected and not (lat_key and lon_key):
-        return dash.no_update, "Select at least one signal.", dash.no_update, dash.no_update, map_empty, map_hidden, dash.no_update
+        return (
+            dash.no_update,
+            "Select at least one signal.",
+            dash.no_update,
+            dash.no_update,
+            map_empty,
+            map_hidden,
+            dash.no_update,
+        )
 
     chart_fig = dash.no_update
     chart_msg = ""
-    row_data: list[dict] | dash.NoUpdate = dash.no_update
-    col_defs: list[dict] | dash.NoUpdate = dash.no_update
+    row_data = dash.no_update
+    col_defs = dash.no_update
     new_time_range = dash.no_update
 
     if selected:
@@ -673,8 +743,7 @@ def render_chart(_, layout, chart_height, selected, max_pts, lat_key, lon_key, t
 
         # Fetch full time extent for selected signals to keep slider bounds accurate.
         range_stmt = (
-            f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max"
-            f" FROM {_GOLD_TABLE} WHERE {where_clauses}"
+            f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max FROM {_GOLD_TABLE} WHERE {where_clauses}"
         )
         try:
             range_df = _query(range_stmt, flat_params)
@@ -713,7 +782,9 @@ def render_chart(_, layout, chart_height, selected, max_pts, lat_key, lon_key, t
 
         if traces:
             h = int(chart_height or 600)
-            chart_fig = _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h)
+            chart_fig = (
+                _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h, xaxis_mode or "shared")
+            )
             row_data, col_defs = _pivot_table(traces)
             total = sum(len(x) for _, _, x, _ in traces)
             chart_msg = f"{total:,} pts across {len(traces)} signal(s)."

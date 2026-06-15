@@ -9,11 +9,15 @@ Also ships **Python bindings** via PyO3 + maturin as the `vector_blf` package.
 ## Features
 
 - Parse BLF files: CAN, CAN-FD, CAN-FD64, Ethernet, EthernetEx
+- Support for BLF files without LogContainer wrappers (direct mode)
 - Parallel decompression of log containers (`--threads N`)
 - BLF → BLF copy with optional repetition
-- BLF/MF4 → CSV export (raw messages or with signal decoding)
+- BLF/MF4 → CSV export (raw messages or with signal decoding; includes `absolute_timestamp` column)
 - BLF/MF4 → MF4 export for CAN, CAN-FD, Ethernet, and scalar signals
-- CAN signal decoding via a DBC-like CSV signal database
+- CAN signal decoding via a DBC-like CSV signal database (`--can-signals`)
+- I-PDU container frame demultiplexing (CAN-FD IPduM)
+- Channel number → name mapping via a CSV (`--channels`)
+- Per-PDU occurrence summary (`--pdu-list`)
 - ISO-TP reassembly, UDS, DoIP, SOME/IP parsing
 - Python bindings exposing a simple iterator API
 
@@ -22,7 +26,7 @@ Also ships **Python bindings** via PyO3 + maturin as the `vector_blf` package.
 ## CLI
 
 ```
-vector-blf-rs parse <input.blf|.mf4|.mdf> [output.blf|.csv|.mf4|.mdf] [--can-signals FILE] [--someip-signals FILE] [--repeat N] [--threads N]
+vector-blf-rs parse <input.blf|.mf4|.mdf> [output.blf|.csv|.mf4|.mdf] [--can-signals FILE] [--someip-signals FILE] [--channels FILE] [--repeat N] [--threads N] [--pdu-list] [-q]
 vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay FILE]
 vector-blf-rs check <signals.csv>
 ```
@@ -43,11 +47,17 @@ vector-blf-rs parse data/test_logfile.blf out.mf4
 # Export to CSV with CAN signal decoding
 vector-blf-rs parse data/test_logfile.blf out.csv --can-signals assets/can_signals.csv
 
+# Export to CSV with channel name mapping
+vector-blf-rs parse data/test_logfile.blf out.csv --channels assets/channels.csv
+
 # Export to CSV with CAN + SOME/IP signal decoding (multi-threaded)
 vector-blf-rs parse data/test_logfile.blf out.csv \
   --can-signals assets/can_signals.csv \
   --someip-signals assets/someip_signals.csv \
   --threads 4
+
+# Print per-PDU occurrence summary (requires --can-signals)
+vector-blf-rs parse data/test_logfile.blf --can-signals assets/can_signals.csv --pdu-list
 
 # Convert a DBC file to signal CSV
 vector-blf-rs convert network.dbc signals.csv
@@ -58,6 +68,19 @@ vector-blf-rs convert network.arxml signals.csv --overlay overlay.csv
 # Validate a signal CSV
 vector-blf-rs check assets/can_signals.csv
 ```
+
+### Channel name mapping CSV
+
+Map channel numbers to human-readable names in CSV output (header required):
+
+```
+type,channel,name
+CAN,1,CAN_HS
+CAN,2,CAN_LS
+Ethernet,1,ETH_BACKBONE
+```
+
+`type` is case-insensitive: `CAN` or `Ethernet`. `channel` is a decimal integer.
 
 ---
 
@@ -117,23 +140,39 @@ for obj in vector_blf.Reader("path/to/file.blf"):
 
 ## Databricks DLT pipeline
 
-`databricks/dlt_blf_pipeline.py` is a Delta Live Tables pipeline that streams
-`*.blf` files from a Unity Catalog Volume into structured Delta tables.
+`databricks/blf-pipeline/dlt_blf_pipeline.py` is a Delta Live Tables pipeline
+that streams `*.blf` files from a Unity Catalog Volume into structured Delta
+tables.
 
 ```
-Auto Loader (*.blf → file paths)
-         ↓  vector_blf Rust UDF
-blf_bronze              — all message types, one row per log object
-         ↓ filter
-blf_silver_can          — CAN / CAN-FD / CAN-FD64 (+ data_hex, timestamp_s, dir string)
-blf_silver_eth          — Ethernet / EthernetEx   (+ formatted MACs, ether_type_hex)
-blf_silver_can_signals  — decoded physical signal values (long format, one row per signal)
+Auto Loader (*.blf -> file paths)
+         |  vector_blf Rust UDF
+         v
+blf_bronze                  -- all message types, one row per log object
+         |
+         +---> blf_silver_can              -- CAN / CAN-FD / CAN-FD64
+         |          |
+         |          +---> blf_silver_can_container_pdus  -- I-PDU payloads (IPduM)
+         |          +---> blf_silver_can_signals         -- decoded signal values (long)
+         |
+         +---> blf_silver_eth              -- Ethernet / EthernetEx (+ VLAN tags)
+         |          |
+         |          +---> blf_silver_eth_signals         -- IP/TCP/UDP header fields (long)
+         |          +---> blf_silver_someip              -- SOME/IP messages (UDP)
+         |                     |
+         |                     +---> blf_silver_someip_signals  -- SOME/IP signals (long)
+         |
+         +---> blf_silver_mf4_signals      -- MF4 scalar signals (long)
+         +---> blf_silver_diag             -- UDS messages (CAN ISO-TP + DoIP merged)
+         |
+         v
+blf_gold_signals            -- CAN + ETH + SOME/IP signals unified schema
 ```
 
 Auto Loader tracks which files have been processed, so only new BLF files are
 ingested on each run (exactly-once, incremental).
 
-Signal definitions are loaded from a CSV at `blf.signals_path` (see Pipeline parameters). `assets/can_signals.csv` in this repo contains a demo set covering engine, vehicle dynamics, battery, and ambient signals.
+Signal definitions are loaded from CSVs (see Pipeline parameters). `assets/can_signals.csv` and `assets/someip_signals.csv` in this repo contain demo signal sets.
 
 ### Deploy with Databricks Asset Bundles
 
@@ -175,19 +214,85 @@ Then update the `artifacts.vector_blf.build` line in `databricks.yml` to match.
 | `blf.source_path` | — | Volume path containing `*.blf` files (required) |
 | `blf.target_catalog` | `main` | Unity Catalog output catalog |
 | `blf.target_schema` | `blf` | Unity Catalog output schema |
-| `blf.signals_path` | `""` | Volume path to signal definitions CSV; if empty, `blf_silver_can_signals` is empty |
+| `blf.signals_path` | `""` | Volume path to CAN signal CSV; if empty, `blf_silver_can_signals` and `blf_silver_can_container_pdus` are empty |
+| `blf.someip_signals_path` | `""` | Volume path to SOME/IP signal CSV; if empty, `blf_silver_someip_signals` is empty |
+| `blf.container_long_header` | `false` | Set to `true` for IPduM container frames with a long (32-bit) PDU header |
 
-Signal CSV format (header required):
+CAN signal CSV format (header required):
 
 ```
-message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-0x64,ambient_temp,0,8,Intel,true,1.0,-40.0
+message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset[,pdu_id]
+0x100,EngineSpeed_rpm,0,0,16,Intel,false,0.125,0.0
+0x200,AmbientTemp,0,0,8,Intel,true,1.0,-40.0
 ```
 
-`message_id` accepts hex (`0x…`) or decimal. `byte_order` is `Intel` or `Motorola`. Upload to the `signals` volume before running:
+`message_id` accepts hex (`0x...`) or decimal. `byte_order` is `Intel` or `Motorola` (case-insensitive). `start_byte` and `start_bit` locate the signal within the payload; `pdu_id` is optional (for I-PDU container demuxing).
+
+SOME/IP signal CSV format (header required):
+
+```
+service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x0064,0x0001,MotorSpeed_rpm,0,0,16,Intel,false,1.0,0.0
+0x0064,0x0001,MotorTorque_Nm,2,0,16,Intel,true,0.1,0.0
+```
+
+`service_id` and `method_id` accept hex or decimal. Bit extraction uses the same Intel/Motorola logic as CAN signals, applied to the SOME/IP application payload. SOME/IP-SD (`service_id=0xFFFF`) is skipped automatically.
+
+Upload to the `signals` volume before running:
 
 ```bash
 databricks fs cp assets/can_signals.csv dbfs:/Volumes/main/blf_dev/signals/can_signals.csv --overwrite
+databricks fs cp assets/someip_signals.csv dbfs:/Volumes/main/blf_dev/signals/someip_signals.csv --overwrite
+```
+
+---
+
+## Signal Viewer (Databricks App)
+
+`databricks/signal-viewer/` is a [Plotly Dash](https://dash.plotly.com/) web application deployable as a Databricks App. It reads from the `blf_gold_signals` Delta table produced by the DLT pipeline and provides interactive signal visualization.
+
+**Features:**
+
+- Signal checklist with keyword filter and All/None buttons
+- Time-range slider to pre-filter data before plotting
+- Multi-signal overlay chart with configurable height and x-axis mode (time / timestamp ns)
+- GPS map view — automatically shown when signals named `GPS_Latitude` / `GPS_Longitude` are selected
+- AgGrid pivot data table for tabular inspection
+- Local dev mode with dummy data when `DATABRICKS_WAREHOUSE_ID` is unset
+
+**Deploy:**
+
+```bash
+# Deploy as a Databricks App (DAB)
+databricks bundle deploy        # deploys pipeline + signal-viewer app
+
+# Run locally (no Databricks warehouse needed)
+cd databricks/signal-viewer
+uv run python app.py
+```
+
+The app reads `BLF_CATALOG` and `BLF_SCHEMA` environment variables (defaults: `main`, `blf_dev`). SQL queries are forwarded with the logged-in user's token via `manifest.yaml` `user_api_scopes`.
+
+---
+
+## Scripts
+
+| Script | Description |
+|---|---|
+| `scripts/excel_to_signals.py` | Convert an Excel workbook sheet to a CAN or SOME/IP signal CSV |
+| `scripts/arxml_to_can_signals.py` | Convert ARXML to signal CSV (alternative to `vector-blf-rs convert`) |
+| `scripts/bench_python.py` | Python benchmark comparing `vector_blf` against `python-can` |
+| `scripts/create_ipdum_blf.py` | Generate test BLF files with IPduM container frames |
+| `scripts/bench_eth_signals.py` | Benchmark Ethernet signal extraction throughput |
+
+```bash
+# Convert an Excel signal sheet to CAN signal CSV
+uv run python scripts/excel_to_signals.py signals.xlsx out.csv \
+  --message-id 0 --signal-name 1 --start-byte 2 --start-bit 3 --bit-length 4
+
+# Convert to SOME/IP signal CSV
+uv run python scripts/excel_to_signals.py signals.xlsx out.csv --mode someip \
+  --service-id 0 --method-id 1 --signal-name 2
 ```
 
 ---

@@ -61,6 +61,7 @@ if _LOCAL_DEV:
         return [offset + amp * math.sin(2 * math.pi * freq * t + seed * 0.001) for t in _DUMMY_T]
 
     def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
+        print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
         if "DISTINCT" in stmt:
             rows = [{"signal_name": n, "signal_source": s} for s, n in _DUMMY_CATALOG]
             return pd.DataFrame(rows).sort_values(["signal_source", "signal_name"]).reset_index(drop=True)
@@ -92,6 +93,7 @@ if _LOCAL_DEV:
 def _run_query(stmt: str, params: list | dict | None, user_token: str | None = None) -> pd.DataFrame:
     """Execute a SQL query and return the result as a pandas DataFrame."""
     assert cfg is not None, "Databricks config is not initialized."
+    print(f"[_run_query] stmt={stmt!r} params={params!r}", flush=True)
     connect_kwargs = {"access_token": user_token} if user_token else {"credentials_provider": cfg.authenticate}
     with sql.connect(
         server_hostname=cfg.host,
@@ -100,7 +102,9 @@ def _run_query(stmt: str, params: list | dict | None, user_token: str | None = N
     ) as conn:
         with conn.cursor() as cur:
             cur.execute(stmt, params)
-            return cur.fetchall_arrow().to_pandas()
+            df = cur.fetchall_arrow().to_pandas()
+            print(f"[_run_query] -> {len(df)} row(s)", flush=True)
+            return df
 
 
 def _query(stmt: str, params=None) -> pd.DataFrame:

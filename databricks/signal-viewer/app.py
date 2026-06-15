@@ -1,5 +1,6 @@
 """Signal Viewer — Plotly Dash visualization app for Databricks Apps."""
 
+import io
 import math
 import os
 import traceback
@@ -76,6 +77,7 @@ if _LOCAL_DEV:
                             "signal_name": name,
                             "event_time": _DUMMY_T0 + pd.Timedelta(seconds=t),
                             "timestamp_s": t,
+                            "timestamp_ns": ts_ns,
                             "signal_value": v,
                         }
                     )
@@ -408,6 +410,7 @@ app.layout = dbc.Container(
                             children=[
                                 dcc.Store(id="all-signals-cache"),
                                 dcc.Store(id="time-range-store"),
+                                dcc.Store(id="signal-data-cache"),
                                 dbc.Checklist(
                                     id="signal-select",
                                     options=[],
@@ -687,97 +690,107 @@ def toggle_all(select_clicks, clear_clicks, options):
 
 
 @callback(
-    Output("chart", "figure"),
-    Output("plot-msg", "children"),
-    Output("grid", "rowData"),
-    Output("grid", "columnDefs"),
-    Output("map-chart", "figure"),
-    Output("map-section", "style"),
+    Output("signal-data-cache", "data"),
     Output("time-range-store", "data"),
+    Output("plot-msg", "children"),
     Input("plot-btn", "n_clicks"),
-    Input("layout-mode", "value"),
-    Input("chart-height", "value"),
-    Input("xaxis-mode", "value"),
-    State("signal-select", "value"),
+    State("source-filter", "value"),
     State("max-pts", "value"),
-    State("lat-signal", "value"),
-    State("lon-signal", "value"),
     State("time-range-slider", "value"),
     State("time-range-store", "data"),
     prevent_initial_call=True,
 )
-def render_chart(
-    _, layout, chart_height, xaxis_mode: _XaxisMode, selected, max_pts, lat_key, lon_key, time_range, time_range_store
-):
+def fetch_data(_, sources, max_pts, time_range, time_range_store):
+    if not sources:
+        return None, dash.no_update, "No source selected."
+
+    source_placeholders = ", ".join(["?"] * len(sources))
+    time_filter = ""
+    time_params: list = []
+    if time_range_store is not None and time_range is not None:
+        t_lo, t_hi = float(time_range[0]), float(time_range[1])
+        time_filter = " AND timestamp_s BETWEEN ? AND ?"
+        time_params = [t_lo, t_hi]
+
+    new_time_range: dict | object = dash.no_update
+    range_stmt = f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders})"
+    try:
+        range_df = _query(range_stmt, list(sources))
+        new_time_range = {
+            "min": float(range_df["t_min"].iloc[0]),
+            "max": float(range_df["t_max"].iloc[0]),
+        }
+    except Exception as exc:
+        print(f"[fetch_data] time-range query error: {exc}", flush=True)
+
+    stmt = (
+        f"WITH ranked AS ("
+        f"SELECT signal_source, signal_name, event_time, timestamp_s, timestamp_ns, signal_value,"
+        f" ROW_NUMBER() OVER (PARTITION BY signal_source, signal_name ORDER BY timestamp_ns) AS rn"
+        f" FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders}){time_filter}"
+        f") SELECT signal_source, signal_name, event_time, timestamp_s, timestamp_ns, signal_value"
+        f" FROM ranked WHERE rn <= {int(max_pts)}"
+    )
+    try:
+        df = _query(stmt, list(sources) + time_params)
+    except Exception as exc:
+        msg = f"Query error: {exc}"
+        print(f"[fetch_data] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None, new_time_range, msg
+
+    signal_count = df["signal_name"].nunique() if not df.empty else 0
+    print(f"[fetch_data] {len(df):,} rows, {signal_count} signal(s)", flush=True)
+    return (
+        df.to_json(orient="records", date_format="iso"),
+        new_time_range,
+        f"Fetched {len(df):,} pts, {signal_count} signal(s).",
+    )
+
+
+@callback(
+    Output("chart", "figure"),
+    Output("plot-msg", "children", allow_duplicate=True),
+    Output("grid", "rowData"),
+    Output("grid", "columnDefs"),
+    Output("map-chart", "figure"),
+    Output("map-section", "style"),
+    Input("signal-data-cache", "data"),
+    Input("signal-select", "value"),
+    Input("layout-mode", "value"),
+    Input("chart-height", "value"),
+    Input("xaxis-mode", "value"),
+    State("lat-signal", "value"),
+    State("lon-signal", "value"),
+    prevent_initial_call=True,
+)
+def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisMode, lat_key, lon_key):
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
 
-    if not selected and not (lat_key and lon_key):
-        return (
-            dash.no_update,
-            "Select at least one signal.",
-            dash.no_update,
-            dash.no_update,
-            map_empty,
-            map_hidden,
-            dash.no_update,
-        )
+    if cache_data is None:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, map_empty, map_hidden
 
-    chart_fig = dash.no_update
+    df_all = pd.read_json(io.StringIO(cache_data), orient="records")
+    if "event_time" in df_all.columns:
+        df_all["event_time"] = pd.to_datetime(df_all["event_time"], utc=True, errors="coerce")
+
+    chart_fig: object = dash.no_update
     chart_msg = ""
-    row_data = dash.no_update
-    col_defs = dash.no_update
-    new_time_range = dash.no_update
+    row_data: object = dash.no_update
+    col_defs: object = dash.no_update
 
     if selected:
-        where_clauses = " OR ".join(["(signal_source = ? AND signal_name = ?)"] * len(selected))
-        flat_params = [val for key in selected for val in key.split("::", 1)]
-
-        # Apply time filter when slider has been initialised (store is populated).
-        time_filter = ""
-        time_params: list = []
-        if time_range_store is not None and time_range is not None:
-            t_lo, t_hi = float(time_range[0]), float(time_range[1])
-            time_filter = " AND timestamp_s BETWEEN ? AND ?"
-            time_params = [t_lo, t_hi]
-
-        # Fetch full time extent for selected signals to keep slider bounds accurate.
-        range_stmt = (
-            f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max FROM {_GOLD_TABLE} WHERE {where_clauses}"
-        )
-        try:
-            range_df = _query(range_stmt, flat_params)
-            new_time_range = {
-                "min": float(range_df["t_min"].iloc[0]),
-                "max": float(range_df["t_max"].iloc[0]),
-            }
-        except Exception as exc:
-            print(f"[render_chart] time-range query error: {exc}", flush=True)
-
-        stmt = (
-            f"WITH ranked AS ("
-            f"SELECT signal_source, signal_name, event_time, timestamp_s, signal_value,"
-            f" ROW_NUMBER() OVER (PARTITION BY signal_source, signal_name ORDER BY timestamp_ns) AS rn"
-            f" FROM {_GOLD_TABLE} WHERE {where_clauses}{time_filter}"
-            f") SELECT signal_source, signal_name, event_time, timestamp_s, signal_value"
-            f" FROM ranked WHERE rn <= {int(max_pts)}"
-        )
-        flat_params = flat_params + time_params
-        try:
-            df_all = _query(stmt, flat_params)
-        except Exception as exc:
-            chart_msg = f"Query error: {exc}"
-            print(f"[render_chart] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
-            return _empty_fig(chart_msg), chart_msg, [], dash.no_update, map_empty, map_hidden, new_time_range
-
         traces: _Traces = []
         for key in selected:
             src, name = key.split("::", 1)
             sub = df_all[(df_all["signal_source"] == src) & (df_all["signal_name"] == name)]
             if sub.empty:
                 continue
-            # Prefer absolute event_time; fall back to relative timestamp_s.
-            x = sub["event_time"] if sub["event_time"].notna().any() else sub["timestamp_s"]
+            x = (
+                sub["event_time"]
+                if "event_time" in df_all.columns and sub["event_time"].notna().any()
+                else sub["timestamp_s"]
+            )
             traces.append((src, name, x, sub["signal_value"]))
 
         if traces:
@@ -789,49 +802,38 @@ def render_chart(
             total = sum(len(x) for _, _, x, _ in traces)
             chart_msg = f"{total:,} pts across {len(traces)} signal(s)."
         else:
-            chart_msg = "No data returned."
+            chart_msg = "No data for selected signals."
             chart_fig = _empty_fig(chart_msg)
             row_data = []
 
-    if lat_key and lon_key:
-        gps_stmt = (
-            f"WITH ranked AS ("
-            f"SELECT timestamp_ns, signal_value,"
-            f" ROW_NUMBER() OVER (ORDER BY timestamp_ns) AS rn"
-            f" FROM {_GOLD_TABLE} WHERE signal_source = ? AND signal_name = ?"
-            f") SELECT timestamp_ns, signal_value FROM ranked WHERE rn <= {int(max_pts)}"
+    map_fig = map_empty
+    map_style = map_hidden
+    if lat_key and lon_key and "timestamp_ns" in df_all.columns:
+        lat_src, lat_name = lat_key.split("::", 1)
+        lon_src, lon_name = lon_key.split("::", 1)
+        lat_df = (
+            df_all[(df_all["signal_source"] == lat_src) & (df_all["signal_name"] == lat_name)][
+                ["timestamp_ns", "signal_value"]
+            ]
+            .rename(columns={"signal_value": "lat"})
+            .sort_values("timestamp_ns")
         )
-        try:
-            lat_src, lat_name = lat_key.split("::", 1)
-            lon_src, lon_name = lon_key.split("::", 1)
-            lat_df = (
-                _query(gps_stmt, [lat_src, lat_name])
-                .rename(columns={"signal_value": "lat"})
-                .sort_values("timestamp_ns")
-            )
-            lon_df = (
-                _query(gps_stmt, [lon_src, lon_name])
-                .rename(columns={"signal_value": "lon"})
-                .sort_values("timestamp_ns")
-            )
+        lon_df = (
+            df_all[(df_all["signal_source"] == lon_src) & (df_all["signal_name"] == lon_name)][
+                ["timestamp_ns", "signal_value"]
+            ]
+            .rename(columns={"signal_value": "lon"})
+            .sort_values("timestamp_ns")
+        )
+        if not lat_df.empty and not lon_df.empty:
             merged = pd.merge_asof(lat_df, lon_df, on="timestamp_ns", direction="nearest").dropna(subset=["lat", "lon"])
-        except Exception as exc:
-            print(f"[render_chart] GPS fetch error: {exc}\n{traceback.format_exc()}", flush=True)
-            merged = pd.DataFrame()
+            if not merged.empty:
+                map_fig = _map_fig(merged["lat"], merged["lon"])
+                map_style = {}
+                pts = len(merged)
+                chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
 
-        if not merged.empty:
-            map_fig = _map_fig(merged["lat"], merged["lon"])
-            map_style: dict = {}
-            pts = len(merged)
-            chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
-        else:
-            map_fig = map_empty
-            map_style = map_hidden
-    else:
-        map_fig = map_empty
-        map_style = map_hidden
-
-    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style, new_time_range
+    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style
 
 
 @callback(

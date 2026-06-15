@@ -88,7 +88,7 @@ A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format
 | `encoder.rs` | `Encoder`/`Decoder` traits over `Read`/`Write`; `Timestamp` (Nanosecond or Microsecond) |
 | `error.rs` | `ParseError` enum (Io, Eof, UnexpectedObjType, ZlibError, InvalidData); `ParseResult<T>` |
 | `message.rs` | `Message` enum: `Can`, `CanFd`, `CanFd64`, `Ethernet`, `EthernetEx`, etc. |
-| `signal.rs` | CAN signal decoding: `Signal` (start_bit, bit_length, scale, offset), `CanSignalDb`, Intel/Motorola byte order |
+| `signal.rs` | CAN signal decoding: `Signal` (start_bit, bit_length, scale, offset), `CanSignalDb` (CSV: start_byte, start_bit, pdu_id), `SomeIpSignalDb`, `ChannelDb`, Intel/Motorola byte order |
 | `ip.rs` | IPv4/IPv6 packet parsing |
 | `transport.rs` | TCP/UDP parsing |
 | `diag/uds.rs` | UDS (ISO 14229) service parsing — 22 services, NRC codes |
@@ -114,12 +114,12 @@ A Rust library and CLI for reading/writing Vector's BLF (Binary Log File) format
 ### CLI (`src/main.rs`)
 
 ```
-vector-blf-rs parse <input.blf|.mf4> [output.blf|.csv] [--can-signals FILE] [--someip-signals FILE] [--repeat N] [--threads N]
+vector-blf-rs parse <input.blf|.mf4|.mdf> [output.blf|.csv|.mf4|.mdf] [--can-signals FILE] [--someip-signals FILE] [--channels FILE] [--repeat N] [--threads N] [--pdu-list] [-q]
 vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay <overlay.csv>]
 vector-blf-rs check <signals.csv>
 ```
 
-- `parse`: BLF→BLF (copy, `--repeat N` to duplicate), BLF→CSV (raw or signal-decoded)
+- `parse`: BLF/MF4/MDF input; BLF/MF4/MDF/CSV output; `--channels` maps channel numbers to names; `--pdu-list` prints per-PDU occurrence summary; `-q` suppresses table output
 - `convert`: DBC/ARXML → signal CSV, with optional overlay merge
 - `check`: validate a CAN or SOME/IP signal CSV
 
@@ -146,7 +146,8 @@ PyO3 bindings exposed as the `vector_blf` Python extension module:
 | File | Purpose |
 |------|---------|
 | `databricks.yml` | Databricks Asset Bundle (DAB) config — defines the `vector_blf` wheel artifact, pipeline variables, and `dev`/`prod` targets |
-| `databricks/blf-pipeline/dlt_blf_pipeline.py` | Delta Live Tables pipeline: `blf_bronze` (all messages) → `blf_silver_can`, `blf_silver_eth`, `blf_silver_can_signals` (streaming tables via Auto Loader) |
+| `databricks/blf-pipeline/dlt_blf_pipeline.py` | Delta Live Tables pipeline: `blf_bronze` → `blf_silver_can` / `blf_silver_eth` / `blf_silver_mf4_signals` / `blf_silver_diag` → signal tables (`blf_silver_can_signals`, `blf_silver_can_container_pdus`, `blf_silver_eth_signals`, `blf_silver_someip`, `blf_silver_someip_signals`) → `blf_gold_signals` |
+| `databricks/signal-viewer/app.py` | Plotly Dash visualization app (Databricks App); reads from `blf_gold_signals`; features signal checklist, time-range slider, GPS map, AgGrid data table |
 | `databricks/blf-pipeline/build_wheel.sh` | Builds a manylinux `aarch64` wheel inside Docker using `maturin` + `cargo-zigbuild`; output goes to `dist/` |
 | `assets/can_signals.csv` | Demo signal definitions CSV; upload to the `signals` volume before running the pipeline |
 

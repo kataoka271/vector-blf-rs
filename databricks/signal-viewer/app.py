@@ -3,6 +3,7 @@
 import io
 import math
 import os
+import struct
 import traceback
 from typing import Literal
 
@@ -115,6 +116,119 @@ def _query(stmt: str, params=None) -> pd.DataFrame:
     if not user_token:
         raise RuntimeError("Missing X-Forwarded-Access-Token header.")
     return _run_query(stmt, params, user_token=user_token if USE_USER_TOKEN else None)
+
+
+# ---------------------------------------------------------------------------
+# Perfetto native trace encoding (hand-written protobuf wire format)
+# ---------------------------------------------------------------------------
+
+
+def _pf_varint(v: int) -> bytes:
+    out = []
+    while True:
+        if v < 0x80:
+            out.append(v)
+            break
+        out.append((v & 0x7F) | 0x80)
+        v >>= 7
+    return bytes(out)
+
+
+def _pf_field(field: int, wt: int) -> bytes:
+    return _pf_varint((field << 3) | wt)
+
+
+def _pf_u64(field: int, v: int) -> bytes:
+    return _pf_field(field, 0) + _pf_varint(v)
+
+
+def _pf_f64(field: int, v: float) -> bytes:
+    return _pf_field(field, 1) + struct.pack("<d", v)
+
+
+def _pf_bytes(field: int, b: bytes) -> bytes:
+    return _pf_field(field, 2) + _pf_varint(len(b)) + b
+
+
+def _pf_str(field: int, s: str) -> bytes:
+    return _pf_bytes(field, s.encode())
+
+
+def _pf_packet(inner: bytes) -> bytes:
+    return _pf_bytes(1, inner)  # Trace.packet = field 1
+
+
+# Perfetto proto field numbers
+_PF_PKT_CLOCK_SNAPSHOT = 6
+_PF_PKT_TRACK_EVENT = 11
+_PF_PKT_TIMESTAMP = 8
+_PF_PKT_TIMESTAMP_CLOCK_ID = 58
+_PF_PKT_TRUSTED_SEQ_ID = 10
+_PF_PKT_TRACK_DESCRIPTOR = 60
+_PF_CLK_ID, _PF_CLK_TIMESTAMP, _PF_SNAP_CLOCKS = 1, 2, 1
+_PF_TD_UUID, _PF_TD_NAME, _PF_TD_COUNTER = 1, 2, 8
+_PF_TE_TYPE, _PF_TE_TRACK_UUID, _PF_TE_DOUBLE = 9, 11, 44
+_PF_CLOCK_REALTIME, _PF_CLOCK_BOOTTIME = 1, 6
+_PF_TYPE_COUNTER, _PF_SEQ_ID = 4, 1
+
+
+def build_perfetto_trace(df: pd.DataFrame, selected: list[str]) -> bytes:
+    """Convert a signal DataFrame to a Perfetto native trace (.perfetto-trace) binary."""
+    selected_set = set(selected)
+    key_col = df["signal_source"] + "::" + df["signal_name"]
+    sub = df[key_col.isin(selected_set)].sort_values("timestamp_ns")
+    if sub.empty:
+        return b""
+
+    t_min_ns = int(sub["timestamp_ns"].min())
+
+    # Anchor BOOTTIME=0 to wall clock
+    realtime_ns = t_min_ns
+    if "event_time" in sub.columns:
+        first_ts = sub.loc[sub["timestamp_ns"].idxmin(), "event_time"]
+        try:
+            ts = pd.Timestamp(first_ts, tz="UTC")
+            if not pd.isna(ts):
+                realtime_ns = int(ts.timestamp() * 1e9)
+        except Exception:
+            pass
+
+    buf = bytearray()
+
+    boot_clk = _pf_u64(_PF_CLK_ID, _PF_CLOCK_BOOTTIME) + _pf_u64(_PF_CLK_TIMESTAMP, 0)
+    real_clk = _pf_u64(_PF_CLK_ID, _PF_CLOCK_REALTIME) + _pf_u64(_PF_CLK_TIMESTAMP, realtime_ns)
+    snap = _pf_bytes(_PF_SNAP_CLOCKS, boot_clk) + _pf_bytes(_PF_SNAP_CLOCKS, real_clk)
+    pkt = _pf_bytes(_PF_PKT_CLOCK_SNAPSHOT, snap) + _pf_u64(_PF_PKT_TRUSTED_SEQ_ID, _PF_SEQ_ID)
+    buf += _pf_packet(pkt)
+
+    track_uuid: dict[str, int] = {}
+    for i, key in enumerate(selected, start=1):
+        src, name = key.split("::", 1)
+        td = _pf_u64(_PF_TD_UUID, i) + _pf_str(_PF_TD_NAME, f"[{src}] {name}") + _pf_bytes(_PF_TD_COUNTER, b"")
+        pkt = _pf_bytes(_PF_PKT_TRACK_DESCRIPTOR, td) + _pf_u64(_PF_PKT_TRUSTED_SEQ_ID, _PF_SEQ_ID)
+        buf += _pf_packet(pkt)
+        track_uuid[key] = i
+
+    for row in sub.itertuples(index=False):
+        key = f"{row.signal_source}::{row.signal_name}"
+        uuid = track_uuid.get(key)
+        if uuid is None:
+            continue
+        boot_ns = max(0, int(row.timestamp_ns) - t_min_ns)
+        event = (
+            _pf_u64(_PF_TE_TYPE, _PF_TYPE_COUNTER)
+            + _pf_u64(_PF_TE_TRACK_UUID, uuid)
+            + _pf_f64(_PF_TE_DOUBLE, float(row.signal_value))
+        )
+        pkt = (
+            _pf_u64(_PF_PKT_TIMESTAMP, boot_ns)
+            + _pf_u64(_PF_PKT_TIMESTAMP_CLOCK_ID, _PF_CLOCK_BOOTTIME)
+            + _pf_bytes(_PF_PKT_TRACK_EVENT, event)
+            + _pf_u64(_PF_PKT_TRUSTED_SEQ_ID, _PF_SEQ_ID)
+        )
+        buf += _pf_packet(pkt)
+
+    return bytes(buf)
 
 
 # Layout helpers
@@ -423,6 +537,7 @@ app.layout = dbc.Container(
                                 dcc.Store(id="all-signals-cache"),
                                 dcc.Store(id="time-range-store"),
                                 dcc.Store(id="signal-data-cache"),
+                                dcc.Download(id="dl-perfetto"),
                                 dbc.Checklist(
                                     id="signal-select",
                                     options=[],
@@ -552,6 +667,15 @@ app.layout = dbc.Container(
                             ),
                         ),
                         dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
+                        dbc.Button(
+                            "Download Perfetto",
+                            id="download-perfetto-btn",
+                            n_clicks=0,
+                            color="secondary",
+                            outline=True,
+                            size="sm",
+                            className="w-100",
+                        ),
                         html.Div(id="avail-msg", style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"}),
                         html.Div(
                             id="plot-msg",
@@ -919,6 +1043,25 @@ def update_time_slider(store, current_value, is_disabled):
     else:
         label = f"{_fmt_s(low - t_min)} – {_fmt_s(high - t_min)}  (total {_fmt_s(duration)})"
     return t_min, t_max, step, marks, [low, high], False, label
+
+
+@callback(
+    Output("dl-perfetto", "data"),
+    Input("download-perfetto-btn", "n_clicks"),
+    State("signal-data-cache", "data"),
+    State("signal-select", "value"),
+    prevent_initial_call=True,
+)
+def download_perfetto(_, cache_data, selected):
+    if not cache_data or not selected:
+        return dash.no_update
+    df = pd.read_json(io.StringIO(cache_data), orient="records")
+    if "event_time" in df.columns:
+        df["event_time"] = pd.to_datetime(df["event_time"], utc=True, errors="coerce")
+    trace_bytes = build_perfetto_trace(df, selected)
+    if not trace_bytes:
+        return dash.no_update
+    return dcc.send_bytes(trace_bytes, "signals.perfetto-trace")
 
 
 if __name__ == "__main__":

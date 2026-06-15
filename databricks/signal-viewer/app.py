@@ -65,7 +65,7 @@ if _LOCAL_DEV:
             rows = [{"signal_name": n, "signal_source": s} for s, n in _DUMMY_CATALOG]
             return pd.DataFrame(rows).sort_values(["signal_source", "signal_name"]).reset_index(drop=True)
         if "t_min" in stmt:
-            return pd.DataFrame({"t_min": [0.0], "t_max": [_DUMMY_DURATION]})
+            return pd.DataFrame({"t_min": [0.0], "t_max": [_DUMMY_DURATION], "t0": [_DUMMY_T0]})
         if "PARTITION BY signal_source, signal_name" in stmt:
             rows = []
             for src, name in _DUMMY_CATALOG:
@@ -713,12 +713,17 @@ def fetch_data(_, sources, max_pts, time_range, time_range_store):
         time_params = [t_lo, t_hi]
 
     new_time_range: dict | object = dash.no_update
-    range_stmt = f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders})"
+    range_stmt = f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders})"
     try:
         range_df = _query(range_stmt, list(sources))
+        t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
+        if t0_raw is not None and pd.isna(t0_raw):
+            t0_raw = None
+        t0_iso = pd.Timestamp(t0_raw).isoformat() if t0_raw is not None else None
         new_time_range = {
             "min": float(range_df["t_min"].iloc[0]),
             "max": float(range_df["t_max"].iloc[0]),
+            "t0": t0_iso,
         }
     except Exception as exc:
         print(f"[fetch_data] time-range query error: {exc}", flush=True)
@@ -855,10 +860,19 @@ def update_time_slider(store, current_value, is_disabled):
     duration = max(t_max - t_min, 1.0)
     step = max(0.1, duration / 1000)
 
+    t0_raw = pd.Timestamp(store["t0"]) if store.get("t0") else None
+    t0 = None if (t0_raw is None or pd.isna(t0_raw)) else t0_raw
+
+    def _abs_ts(offset_s: float) -> str:
+        if t0 is None:
+            return _fmt_s(offset_s - t_min)
+        ts = t0 + pd.Timedelta(seconds=offset_s - t_min)
+        return ts.strftime("%H:%M:%S")
+
     marks = {}
     for i in range(6):
         t = t_min + i * duration / 5
-        marks[round(t, 3)] = _fmt_s(i * duration / 5)
+        marks[round(t, 3)] = _abs_ts(t)
 
     # Preserve user selection when within bounds; reset to full range otherwise.
     if not is_disabled and current_value is not None:
@@ -869,7 +883,12 @@ def update_time_slider(store, current_value, is_disabled):
     else:
         low, high = t_min, t_max
 
-    label = f"{_fmt_s(low - t_min)} – {_fmt_s(high - t_min)}  (total {_fmt_s(duration)})"
+    if t0 is not None:
+        low_ts = (t0 + pd.Timedelta(seconds=low - t_min)).strftime("%H:%M:%S")
+        high_ts = (t0 + pd.Timedelta(seconds=high - t_min)).strftime("%H:%M:%S")
+        label = f"{low_ts} – {high_ts}  (duration {_fmt_s(high - low)})"
+    else:
+        label = f"{_fmt_s(low - t_min)} – {_fmt_s(high - t_min)}  (total {_fmt_s(duration)})"
     return t_min, t_max, step, marks, [low, high], False, label
 
 

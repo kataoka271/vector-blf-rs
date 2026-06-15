@@ -365,6 +365,14 @@ app.layout = dbc.Container(
                                 value=["CAN", "SOMEIP"],
                             ),
                         ),
+                        dbc.Input(
+                            id="signal-search",
+                            type="search",
+                            placeholder="Filter signals...",
+                            debounce=True,
+                            size="sm",
+                            style={"fontSize": "12px"},
+                        ),
                         html.Div(
                             [
                                 dbc.Label("Signals", size="sm", className="fw-semibold text-secondary mb-0 me-2"),
@@ -653,8 +661,10 @@ def refresh_signal_cache(_):
     Output("lon-signal", "options"),
     Input("source-filter", "value"),
     Input("all-signals-cache", "data"),
+    Input("signal-search", "value"),
+    State("signal-select", "value"),
 )
-def refresh_signals(sources, cache):
+def refresh_signals(sources, cache, search, current_value):
     print(f"[refresh_signals] sources={sources} cache={'hit' if cache is not None else 'miss'}", flush=True)
     if cache is None:
         return dash.no_update, dash.no_update, "Loading signals...", dash.no_update, dash.no_update
@@ -662,8 +672,12 @@ def refresh_signals(sources, cache):
         return [], [], "No source selected.", [], []
     source_set = set(sources)
     filtered = [r for r in cache if r["signal_source"] in source_set]
+    if search:
+        kw = search.lower()
+        filtered = [r for r in filtered if kw in r["signal_name"].lower() or kw in r["signal_source"].lower()]
     if not filtered:
-        return [], [], "No signals found. Has the pipeline run?", [], []
+        msg = "No signals match." if search else "No signals found. Has the pipeline run?"
+        return [], [], msg, [], []
     opts = [
         {
             "label": f"[{r['signal_source']}] {r['signal_name']}",
@@ -671,8 +685,19 @@ def refresh_signals(sources, cache):
         }
         for r in filtered
     ]
+    all_opts = [
+        {
+            "label": f"[{r['signal_source']}] {r['signal_name']}",
+            "value": f"{r['signal_source']}::{r['signal_name']}",
+        }
+        for r in cache
+        if r["signal_source"] in source_set
+    ]
+    all_valid = {o["value"] for o in all_opts}
+    new_value = [v for v in (current_value or []) if v in all_valid]
     print(f"[refresh_signals] returning {len(opts)} opts (from cache)", flush=True)
-    return opts, [], f"{len(opts)} signal(s) available.", opts, opts
+    suffix = f" ({len(opts)} shown)" if search and len(opts) < len(all_opts) else ""
+    return opts, new_value, f"{len(all_opts)} signal(s) available.{suffix}", all_opts, all_opts
 
 
 @callback(

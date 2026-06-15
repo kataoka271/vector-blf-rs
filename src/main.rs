@@ -1,5 +1,6 @@
 pub mod blf;
 pub mod mf4;
+mod perfetto;
 mod table;
 
 use blf::{
@@ -45,11 +46,11 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         overlay: Option<PathBuf>,
     },
-    /// Parse a BLF, MF4, or MDF file; optionally export to CSV, BLF, MF4, or MDF
+    /// Parse a BLF, MF4, or MDF file; optionally export to CSV, BLF, MF4, MDF, or Perfetto trace
     Parse {
         /// Input file (.blf, .mf4, or .mdf)
         input: PathBuf,
-        /// Output file (.blf, .csv, .mf4, or .mdf); omit to benchmark parse only
+        /// Output file (.blf, .csv, .mf4, .mdf, or .perfetto-trace); omit to benchmark parse only
         output: Option<PathBuf>,
         /// CAN signal definitions CSV (used when output is .csv)
         #[arg(long, value_name = "FILE")]
@@ -137,6 +138,83 @@ fn write_csv_with_signals(
     } else {
         Ok(blf::csv::write_csv_raw(w, objects, start_ns, channel_db)?)
     }
+}
+
+/// Write a Perfetto native trace (.perfetto-trace) from BLF objects.
+///
+/// CAN/CAN-FD/CAN-FD64 frames are decoded with `signal_path` (if supplied) and
+/// emitted as counter tracks — one track per signal name. `Mf4Signal` objects
+/// are always emitted directly since they already carry a physical value.
+/// `start_ns` is the BLF file start time in nanoseconds (UNIX epoch) and is
+/// written into a ClockSnapshot so the Perfetto UI can show wall-clock times.
+fn write_perfetto_output(
+    output: &Path,
+    objects: impl Iterator<Item = impl Borrow<BaseObject>>,
+    signal_path: Option<&Path>,
+    start_ns: u64,
+) -> Result<usize> {
+    use perfetto::PerfettoWriter;
+
+    let signal_db = signal_path
+        .map(|p| CanSignalDb::from_csv(BufReader::new(File::open(p)?)))
+        .transpose()?;
+
+    let file = BufWriter::new(File::create(output)?);
+    let mut writer = PerfettoWriter::new(file);
+
+    writer.write_clock_snapshot(start_ns)?;
+
+    let mut count = 0usize;
+
+    for item in objects {
+        let obj = item.borrow();
+        let Some(ts) = ts_ns(obj.timestamp) else {
+            continue;
+        };
+
+        match &obj.message {
+            Message::Can(m) => {
+                if let Some(db) = &signal_db {
+                    for (name, value) in db.extract(m.id, &m.data) {
+                        let uuid = writer.get_or_create_track(name, "")?;
+                        writer.write_counter(ts, uuid, value)?;
+                    }
+                }
+                count += 1;
+            }
+            Message::CanFd(m) => {
+                if let Some(db) = &signal_db {
+                    for (name, value) in db.extract(m.id, &m.data) {
+                        let uuid = writer.get_or_create_track(name, "")?;
+                        writer.write_counter(ts, uuid, value)?;
+                    }
+                }
+                count += 1;
+            }
+            Message::CanFd64(m) => {
+                if let Some(db) = &signal_db {
+                    for (name, value) in db.extract(m.id, &m.data) {
+                        let uuid = writer.get_or_create_track(name, "")?;
+                        writer.write_counter(ts, uuid, value)?;
+                    }
+                }
+                count += 1;
+            }
+            Message::Mf4Signal(m) => {
+                let track_name = if m.group.is_empty() {
+                    m.name.clone()
+                } else {
+                    format!("{}/{}", m.group, m.name)
+                };
+                let uuid = writer.get_or_create_track(&track_name, &m.unit)?;
+                writer.write_counter(ts, uuid, m.value)?;
+                count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(count)
 }
 
 fn abs_ts_str(start_ns: u64, relative_ns: u64) -> String {
@@ -627,6 +705,11 @@ fn cmd_parse(
         .as_ref()
         .map(|p| matches!(ext(p), "mf4" | "mdf"))
         .unwrap_or(false);
+    let output_is_perfetto = output
+        .as_ref()
+        .and_then(|p| p.to_str())
+        .map(|s| s.ends_with(".perfetto-trace"))
+        .unwrap_or(false);
 
     // Single-threaded CSV from BLF: stream one object at a time — O(1-container) peak memory.
     if n_threads == 1 && is_csv && opts.quiet {
@@ -694,6 +777,18 @@ fn cmd_parse(
                 write_mf4_output(out, chunk_results.iter().flatten(), repeat, mf4_start_ns)?;
             println!(
                 "wrote {} objects in {:.3}s",
+                count,
+                t.elapsed().as_secs_f32()
+            );
+        } else if output_is_perfetto {
+            let count = write_perfetto_output(
+                out,
+                chunk_results.iter().flatten(),
+                opts.signals.as_deref(),
+                start_ns,
+            )?;
+            println!(
+                "wrote {} events in {:.3}s",
                 count,
                 t.elapsed().as_secs_f32()
             );
@@ -800,6 +895,7 @@ fn cmd_parse_mf4(input: PathBuf, output: Option<PathBuf>, opts: ParseOptions) ->
         if let Some(ref out) = output {
             let t2 = time::Instant::now();
             let output_ext = ext(out);
+            let out_is_perfetto = out.to_str().is_some_and(|s| s.ends_with(".perfetto-trace"));
             if output_ext == "csv" {
                 let mut w = BufWriter::new(File::create(out)?);
                 let count = write_csv_with_signals(
@@ -815,6 +911,18 @@ fn cmd_parse_mf4(input: PathBuf, output: Option<PathBuf>, opts: ParseOptions) ->
                 let count = write_mf4_output(out, objects.iter(), 1, start_time_ns)?;
                 println!(
                     "wrote {} objects in {:.3}s",
+                    count,
+                    t2.elapsed().as_secs_f32()
+                );
+            } else if out_is_perfetto {
+                let count = write_perfetto_output(
+                    out,
+                    objects.iter(),
+                    opts.signals.as_deref(),
+                    start_time_ns,
+                )?;
+                println!(
+                    "wrote {} events in {:.3}s",
                     count,
                     t2.elapsed().as_secs_f32()
                 );
@@ -860,6 +968,18 @@ fn cmd_parse_mf4(input: PathBuf, output: Option<PathBuf>, opts: ParseOptions) ->
         let count = write_mf4_output(out, reader.filter_map(|r| r.ok()), 1, start_time_ns)?;
         println!(
             "wrote {} objects in {:.3}s",
+            count,
+            t.elapsed().as_secs_f32()
+        );
+    } else if out.to_str().is_some_and(|s| s.ends_with(".perfetto-trace")) {
+        let count = write_perfetto_output(
+            out,
+            reader.filter_map(|r| r.ok()),
+            opts.signals.as_deref(),
+            start_time_ns,
+        )?;
+        println!(
+            "wrote {} events in {:.3}s",
             count,
             t.elapsed().as_secs_f32()
         );

@@ -871,16 +871,27 @@ def toggle_all(select_clicks, clear_clicks, options):
     Output("plot-msg", "children"),
     Input("plot-btn", "n_clicks"),
     State("source-filter", "value"),
+    State("signal-select", "value"),
     State("max-pts", "value"),
     State("time-range-slider", "value"),
     State("time-range-store", "data"),
+    State("lat-signal", "value"),
+    State("lon-signal", "value"),
     prevent_initial_call=True,
 )
-def fetch_data(_, sources, max_pts, time_range, time_range_store):
+def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key):
     if not sources:
         return None, dash.no_update, "No source selected."
 
-    source_placeholders = ", ".join(["?"] * len(sources))
+    keys = set(selected or [])
+    keys.update(k for k in (lat_key, lon_key) if k)
+    if not keys:
+        return None, dash.no_update, "No signal selected."
+
+    key_pairs = [key.split("::", 1) for key in keys]
+    pair_filter = "(signal_source, signal_name) IN (" + ", ".join(["(?, ?)"] * len(key_pairs)) + ")"
+    pair_params = [part for pair in key_pairs for part in pair]
+
     time_filter = ""
     time_params: list = []
     if time_range_store is not None and time_range is not None:
@@ -889,9 +900,12 @@ def fetch_data(_, sources, max_pts, time_range, time_range_store):
         time_params = [t_lo, t_hi]
 
     new_time_range: dict | object = dash.no_update
-    range_stmt = f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders})"
+    range_stmt = (
+        f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 "
+        f"FROM {_GOLD_TABLE} WHERE {pair_filter}"
+    )
     try:
-        range_df = _query(range_stmt, list(sources))
+        range_df = _query(range_stmt, list(pair_params))
         t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
         if t0_raw is not None and pd.isna(t0_raw):
             t0_raw = None
@@ -910,7 +924,7 @@ def fetch_data(_, sources, max_pts, time_range, time_range_store):
         f"    NTILE({int(max_pts)}) OVER ("
         f"      PARTITION BY signal_source, signal_name ORDER BY timestamp_ns"
         f"    ) AS bucket"
-        f"  FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders}){time_filter}"
+        f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{time_filter}"
         f"), agg AS ("
         f"  SELECT signal_source, signal_name, bucket,"
         f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value), signal_value) AS lo,"
@@ -924,7 +938,7 @@ def fetch_data(_, sources, max_pts, time_range, time_range_store):
         f") ORDER BY signal_source, signal_name, timestamp_ns"
     )
     try:
-        df = _query(stmt, list(sources) + time_params)
+        df = _query(stmt, pair_params + time_params)
     except Exception as exc:
         msg = f"Query error: {exc}"
         print(f"[fetch_data] ERROR: {exc}\n{traceback.format_exc()}", flush=True)

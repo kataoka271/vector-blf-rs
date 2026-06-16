@@ -278,7 +278,7 @@ _Traces = list[tuple[str, str, pd.Series, pd.Series]]
 def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
     fig = go.Figure()
     for src, name, x, y in traces:
-        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=f"[{src}] {name}"))
+        fig.add_trace(go.Scattergl(x=x, y=y, mode="lines", name=f"[{src}] {name}"))
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor=_BG,
@@ -343,7 +343,7 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
             xref = "x"
 
         fig.add_trace(
-            go.Scatter(x=x, y=y, mode="lines", name=f"[{src}] {name}", xaxis=xref, yaxis=yref, showlegend=False)
+            go.Scattergl(x=x, y=y, mode="lines", name=f"[{src}] {name}", xaxis=xref, yaxis=yref, showlegend=False)
         )
         axes_kw[ykey] = {"domain": [bottom, top], **_AXIS_BOX}
         annotations.append(
@@ -599,7 +599,7 @@ app.layout = dbc.Container(
                             ),
                         ),
                         _section(
-                            "Max points / signal",
+                            "Buckets per signal",
                             dcc.Slider(
                                 id="max-pts",
                                 min=1_000,
@@ -905,12 +905,23 @@ def fetch_data(_, sources, max_pts, time_range, time_range_store):
         print(f"[fetch_data] time-range query error: {exc}", flush=True)
 
     stmt = (
-        f"WITH ranked AS ("
-        f"SELECT signal_source, signal_name, event_time, timestamp_s, timestamp_ns, signal_value,"
-        f" ROW_NUMBER() OVER (PARTITION BY signal_source, signal_name ORDER BY timestamp_ns) AS rn"
-        f" FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders}){time_filter}"
-        f") SELECT signal_source, signal_name, event_time, timestamp_s, timestamp_ns, signal_value"
-        f" FROM ranked WHERE rn <= {int(max_pts)}"
+        f"WITH bucketed AS ("
+        f"  SELECT signal_source, signal_name, event_time, timestamp_s, timestamp_ns, signal_value,"
+        f"    NTILE({int(max_pts)}) OVER ("
+        f"      PARTITION BY signal_source, signal_name ORDER BY timestamp_ns"
+        f"    ) AS bucket"
+        f"  FROM {_GOLD_TABLE} WHERE signal_source IN ({source_placeholders}){time_filter}"
+        f"), agg AS ("
+        f"  SELECT signal_source, signal_name, bucket,"
+        f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value), signal_value) AS lo,"
+        f"    MAX_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value), signal_value) AS hi"
+        f"  FROM bucketed GROUP BY signal_source, signal_name, bucket"
+        f") SELECT * FROM ("
+        f"  SELECT signal_source, signal_name, lo.event_time AS event_time, lo.timestamp_s AS timestamp_s,"
+        f"    lo.timestamp_ns AS timestamp_ns, lo.signal_value AS signal_value FROM agg"
+        f"  UNION ALL"
+        f"  SELECT signal_source, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value FROM agg"
+        f") ORDER BY signal_source, signal_name, timestamp_ns"
     )
     try:
         df = _query(stmt, list(sources) + time_params)

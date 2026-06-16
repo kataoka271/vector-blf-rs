@@ -767,18 +767,41 @@ def _fetch_all_signals() -> list[dict] | None:
         return None
 
 
-@callback(Output("all-signals-cache", "data"), Input("url", "pathname"))
+def _fetch_global_time_range() -> dict | None:
+    try:
+        df = _query(
+            f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 FROM {_GOLD_TABLE}"
+        )
+        t0_raw = df["t0"].iloc[0] if "t0" in df.columns else None
+        if t0_raw is not None and pd.isna(t0_raw):
+            t0_raw = None
+        return {
+            "min": float(df["t_min"].iloc[0]),
+            "max": float(df["t_max"].iloc[0]),
+            "t0": pd.Timestamp(t0_raw).isoformat() if t0_raw is not None else None,
+        }
+    except Exception as exc:
+        print(f"[_fetch_global_time_range] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None
+
+
+@callback(
+    Output("all-signals-cache", "data"),
+    Output("time-range-store", "data"),
+    Input("url", "pathname"),
+)
 def prefetch_signals(_):
-    return _fetch_all_signals()
+    return _fetch_all_signals(), _fetch_global_time_range()
 
 
 @callback(
     Output("all-signals-cache", "data", allow_duplicate=True),
+    Output("time-range-store", "data", allow_duplicate=True),
     Input("refresh-signals-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def refresh_signal_cache(_):
-    return _fetch_all_signals()
+    return _fetch_all_signals(), _fetch_global_time_range()
 
 
 @callback(
@@ -844,7 +867,7 @@ def toggle_all(select_clicks, clear_clicks, options):
 
 @callback(
     Output("signal-data-cache", "data"),
-    Output("time-range-store", "data"),
+    Output("time-range-store", "data", allow_duplicate=True),
     Output("plot-msg", "children"),
     Input("plot-btn", "n_clicks"),
     State("source-filter", "value"),

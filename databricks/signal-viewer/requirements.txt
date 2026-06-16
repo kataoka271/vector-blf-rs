@@ -3,5 +3,6 @@ dash-ag-grid>=31.0.0
 dash-bootstrap-components>=1.5.0
 plotly>=5.20.0,<6.0.0
 pandas>=2.0.0,<3.0.0
+pyarrow>=14.0.0
 databricks-sdk>=0.28.0
 databricks-sql-connector>=4.2.6

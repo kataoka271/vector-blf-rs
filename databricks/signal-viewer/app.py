@@ -1,6 +1,6 @@
 """Signal Viewer — Plotly Dash visualization app for Databricks Apps."""
 
-import io
+import base64
 import math
 import os
 import struct
@@ -13,6 +13,7 @@ import dash_bootstrap_components as dbc
 import flask
 import pandas as pd
 import plotly.graph_objects as go
+import pyarrow as pa
 from dash import Input, Output, State, callback, dcc, html
 from databricks.sdk.core import Config
 
@@ -118,6 +119,20 @@ def _query(stmt: str, params=None) -> pd.DataFrame:
     return _run_query(stmt, params, user_token=user_token if USE_USER_TOKEN else None)
 
 
+def _df_to_store(df: pd.DataFrame) -> str:
+    """Serialize a DataFrame to a base64-encoded Arrow IPC stream for dcc.Store."""
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
+
+
+def _store_to_df(data: str) -> pd.DataFrame:
+    """Deserialize a base64-encoded Arrow IPC stream produced by _df_to_store."""
+    return pa.ipc.open_stream(base64.b64decode(data)).read_pandas()
+
+
 # ---------------------------------------------------------------------------
 # Perfetto native trace encoding (hand-written protobuf wire format)
 # ---------------------------------------------------------------------------
@@ -187,7 +202,8 @@ def build_perfetto_trace(df: pd.DataFrame, selected: list[str]) -> bytes:
     if "event_time" in sub.columns:
         first_ts = sub.loc[sub["timestamp_ns"].idxmin(), "event_time"]
         try:
-            ts = pd.Timestamp(first_ts, tz="UTC")
+            ts = pd.Timestamp(first_ts)
+            ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
             if not pd.isna(ts):
                 realtime_ns = int(ts.timestamp() * 1e9)
         except Exception:
@@ -947,7 +963,7 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     signal_count = df["signal_name"].nunique() if not df.empty else 0
     print(f"[fetch_data] {len(df):,} rows, {signal_count} signal(s)", flush=True)
     return (
-        df.to_json(orient="records", date_format="iso"),
+        _df_to_store(df),
         new_time_range,
         f"Fetched {len(df):,} pts, {signal_count} signal(s).",
     )
@@ -976,9 +992,7 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
     if cache_data is None:
         return dash.no_update, dash.no_update, dash.no_update, dash.no_update, map_empty, map_hidden
 
-    df_all = pd.read_json(io.StringIO(cache_data), orient="records")
-    if "event_time" in df_all.columns:
-        df_all["event_time"] = pd.to_datetime(df_all["event_time"], utc=True, errors="coerce")
+    df_all = _store_to_df(cache_data)
 
     chart_fig: object = dash.no_update
     chart_msg = ""
@@ -1103,9 +1117,7 @@ def update_time_slider(store, current_value, is_disabled):
 def download_perfetto(_, cache_data, selected):
     if not cache_data or not selected:
         return dash.no_update
-    df = pd.read_json(io.StringIO(cache_data), orient="records")
-    if "event_time" in df.columns:
-        df["event_time"] = pd.to_datetime(df["event_time"], utc=True, errors="coerce")
+    df = _store_to_df(cache_data)
     trace_bytes = build_perfetto_trace(df, selected)
     if not trace_bytes:
         return dash.no_update

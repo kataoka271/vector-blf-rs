@@ -219,7 +219,7 @@ fn write_perfetto_output(
 
 fn abs_ts_str(start_ns: u64, relative_ns: u64) -> String {
     use chrono::{TimeZone, Utc};
-    let total = start_ns.saturating_add(relative_ns);
+    let total = start_ns + relative_ns;
     let secs = (total / 1_000_000_000) as i64;
     let nanos = (total % 1_000_000_000) as u32;
     Utc.timestamp_opt(secs, nanos)

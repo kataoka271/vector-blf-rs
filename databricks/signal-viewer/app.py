@@ -513,7 +513,6 @@ app.layout = dbc.Container(
                             id="signal-search",
                             type="search",
                             placeholder="Filter signals...",
-                            debounce=True,
                             size="sm",
                             style={"fontSize": "12px"},
                         ),
@@ -562,6 +561,7 @@ app.layout = dbc.Container(
                         dcc.Loading(
                             type="dot",
                             color=_ACCENT,
+                            target_components={"all-signals-cache": "data"},
                             children=[
                                 dcc.Store(id="all-signals-cache"),
                                 dbc.Checklist(
@@ -856,7 +856,64 @@ def refresh_signal_cache(_):
     return _fetch_all_signals(), _fetch_global_time_range()
 
 
-@callback(
+app.clientside_callback(
+    """
+    function(sources, cache, search, currentValue) {
+        var no_update = window.dash_clientside.no_update;
+
+        if (cache === null || cache === undefined) {
+            return [no_update, no_update, "Loading signals...", no_update, no_update];
+        }
+        if (!sources || sources.length === 0) {
+            return [[], [], "No source selected.", [], []];
+        }
+
+        var ctx = window.dash_clientside.callback_context;
+        var triggeredId = (ctx.triggered && ctx.triggered.length > 0)
+            ? ctx.triggered[0].prop_id.split(".")[0]
+            : null;
+        var searchTriggered = triggeredId === "signal-search";
+
+        var sourceSet = new Set(sources);
+
+        function toOpt(r) {
+            return {
+                label: "[" + r.signal_source + "] " + r.signal_name,
+                value: r.signal_source + "::" + r.signal_name
+            };
+        }
+
+        var bySource = cache.filter(function(r) { return sourceSet.has(r.signal_source); });
+        var allOpts = bySource.map(toOpt);
+
+        var filtered = bySource;
+        if (search) {
+            var kw = search.toLowerCase();
+            filtered = bySource.filter(function(r) {
+                return r.signal_name.toLowerCase().indexOf(kw) !== -1 ||
+                       r.signal_source.toLowerCase().indexOf(kw) !== -1;
+            });
+        }
+
+        if (filtered.length === 0) {
+            var msg = search ? "No signals match." : "No signals found. Has the pipeline run?";
+            var valueOut = searchTriggered ? no_update : [];
+            return [[], valueOut, msg, [], []];
+        }
+
+        var opts = filtered.map(toOpt);
+        var suffix = (search && opts.length < allOpts.length) ? " (" + opts.length + " shown)" : "";
+        var statusMsg = allOpts.length + " signal(s) available." + suffix;
+
+        if (searchTriggered) {
+            return [opts, no_update, statusMsg, allOpts, allOpts];
+        }
+
+        var allValid = new Set(allOpts.map(function(o) { return o.value; }));
+        var newValue = (currentValue || []).filter(function(v) { return allValid.has(v); });
+        return [opts, newValue, statusMsg, allOpts, allOpts];
+    }
+    """,
     Output("signal-select", "options"),
     Output("signal-select", "value"),
     Output("avail-msg", "children"),
@@ -867,44 +924,6 @@ def refresh_signal_cache(_):
     Input("signal-search", "value"),
     State("signal-select", "value"),
 )
-def refresh_signals(sources, cache, search, current_value):
-    print(f"[refresh_signals] sources={sources} cache={'hit' if cache is not None else 'miss'}", flush=True)
-    search_triggered = dash.ctx.triggered_id == "signal-search"
-    if cache is None:
-        return dash.no_update, dash.no_update, "Loading signals...", dash.no_update, dash.no_update
-    if not sources:
-        return [], [], "No source selected.", [], []
-    source_set = set(sources)
-    filtered = [r for r in cache if r["signal_source"] in source_set]
-    if search:
-        kw = search.lower()
-        filtered = [r for r in filtered if kw in r["signal_name"].lower() or kw in r["signal_source"].lower()]
-    if not filtered:
-        msg = "No signals match." if search else "No signals found. Has the pipeline run?"
-        value_out = dash.no_update if search_triggered else []
-        return [], value_out, msg, [], []
-    opts = [
-        {
-            "label": f"[{r['signal_source']}] {r['signal_name']}",
-            "value": f"{r['signal_source']}::{r['signal_name']}",
-        }
-        for r in filtered
-    ]
-    all_opts = [
-        {
-            "label": f"[{r['signal_source']}] {r['signal_name']}",
-            "value": f"{r['signal_source']}::{r['signal_name']}",
-        }
-        for r in cache
-        if r["signal_source"] in source_set
-    ]
-    print(f"[refresh_signals] returning {len(opts)} opts (from cache)", flush=True)
-    suffix = f" ({len(opts)} shown)" if search and len(opts) < len(all_opts) else ""
-    if search_triggered:
-        return opts, dash.no_update, f"{len(all_opts)} signal(s) available.{suffix}", all_opts, all_opts
-    all_valid = {o["value"] for o in all_opts}
-    new_value = [v for v in (current_value or []) if v in all_valid]
-    return opts, new_value, f"{len(all_opts)} signal(s) available.{suffix}", all_opts, all_opts
 
 
 @callback(

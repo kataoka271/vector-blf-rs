@@ -43,9 +43,9 @@ Setup
        blf.container_long_header false                (optional, default: false)
 
    CAN signal CSV format (header required):
-       message_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-       0x100,EngineSpeed,0,16,Intel,false,0.25,0.0
-       0x200,BrakeForce,7,12,Motorola,true,0.1,-100.0
+       message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+       0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
+       0x200,BrakeForce,0,7,12,Motorola,true,0.1,-100.0
 
    message_id accepts hex (0x...) or decimal.  byte_order is Intel or Motorola
    (case-insensitive).  is_signed accepts true/false or 1/0.
@@ -53,9 +53,9 @@ Setup
    blf_silver_can_signals will both be empty.
 
    SOME/IP signal CSV format (header required):
-       service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
-       0x0064,0x0001,MotorSpeed_rpm,0,16,Intel,false,1.0,0.0
-       0x0064,0x0001,MotorTorque_Nm,16,16,Intel,true,0.1,0.0
+       service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+       0x0064,0x0001,MotorSpeed_rpm,0,0,16,Intel,false,1.0,0.0
+       0x0064,0x0001,MotorTorque_Nm,2,0,16,Intel,true,0.1,0.0
 
    service_id and method_id accept hex (0x...) or decimal.
    Bit extraction uses the same Intel/Motorola logic as CAN signals, applied

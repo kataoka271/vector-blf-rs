@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1f12"/>
+      <stop offset="100%" stop-color="#0a1a10"/>
+    </linearGradient>
+    <linearGradient id="wave1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.2"/>
+      <stop offset="30%" stop-color="#22d3ee"/>
+      <stop offset="70%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="wave2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4ade80" stop-opacity="0.2"/>
+      <stop offset="30%" stop-color="#4ade80"/>
+      <stop offset="70%" stop-color="#4ade80"/>
+      <stop offset="100%" stop-color="#4ade80" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="wave3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.2"/>
+      <stop offset="30%" stop-color="#f59e0b"/>
+      <stop offset="70%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.2"/>
+    </linearGradient>
+    <filter id="glow1">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow2">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="screenClip">
+      <rect x="28" y="52" width="200" height="136" rx="4"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="256" height="256" rx="32" fill="url(#bg)"/>
+
+  <!-- Screen bezel -->
+  <rect x="22" y="46" width="212" height="148" rx="8" fill="#334155"/>
+  <rect x="24" y="48" width="208" height="144" rx="6" fill="#1e293b"/>
+
+  <!-- Screen surface -->
+  <rect x="28" y="52" width="200" height="136" rx="4" fill="url(#screen)"/>
+
+  <!-- Grid lines (horizontal) -->
+  <g clip-path="url(#screenClip)" stroke="#1a3a1a" stroke-width="0.5" opacity="0.6">
+    <line x1="28" y1="86" x2="228" y2="86"/>
+    <line x1="28" y1="120" x2="228" y2="120"/>
+    <line x1="28" y1="154" x2="228" y2="154"/>
+  </g>
+
+  <!-- Grid lines (vertical) -->
+  <g clip-path="url(#screenClip)" stroke="#1a3a1a" stroke-width="0.5" opacity="0.6">
+    <line x1="78" y1="52" x2="78" y2="188"/>
+    <line x1="128" y1="52" x2="128" y2="188"/>
+    <line x1="178" y1="52" x2="178" y2="188"/>
+  </g>
+
+  <!-- CAN-bus style square wave signal 1 (cyan) -->
+  <polyline
+    clip-path="url(#screenClip)"
+    filter="url(#glow1)"
+    fill="none"
+    stroke="url(#wave1)"
+    stroke-width="2"
+    stroke-linecap="square"
+    points="
+      28,75  48,75
+      48,95  62,95
+      62,75  78,75
+      78,95  92,95
+      92,75  108,75
+      108,95 118,95
+      118,75 138,75
+      138,95 152,95
+      152,75 162,75
+      162,95 178,95
+      178,75 198,75
+      198,95 228,95
+    "
+  />
+
+  <!-- Analog signal 2 (green) - smoother wave -->
+  <path
+    clip-path="url(#screenClip)"
+    filter="url(#glow2)"
+    fill="none"
+    stroke="url(#wave2)"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    d="M28,120 C38,120 42,100 52,100 C62,100 66,140 76,140 C86,140 90,110 100,110 C110,110 114,130 124,130 C134,130 138,105 148,105 C158,105 162,135 172,135 C182,135 186,115 196,115 C206,115 218,120 228,120"
+  />
+
+  <!-- CAN-bus style square wave signal 3 (amber) - different pattern -->
+  <polyline
+    clip-path="url(#screenClip)"
+    filter="url(#glow2)"
+    fill="none"
+    stroke="url(#wave3)"
+    stroke-width="2"
+    stroke-linecap="square"
+    points="
+      28,165  38,165
+      38,149  58,149
+      58,165  68,165
+      68,149  88,149
+      88,165  98,165
+      98,149  118,149
+      118,165 128,165
+      128,149 158,149
+      158,165 168,165
+      168,149 188,149
+      188,165 198,165
+      198,149 228,149
+    "
+  />
+
+  <!-- Signal labels -->
+  <text x="34" y="71" font-family="monospace" font-size="7" fill="#22d3ee" opacity="0.9">CAN1</text>
+  <text x="34" y="116" font-family="monospace" font-size="7" fill="#4ade80" opacity="0.9">ETH</text>
+  <text x="34" y="145" font-family="monospace" font-size="7" fill="#f59e0b" opacity="0.9">CAN2</text>
+
+  <!-- Bottom bar -->
+  <rect x="22" y="198" width="212" height="16" rx="4" fill="#0f172a"/>
+  <text x="128" y="210" font-family="monospace" font-size="8" fill="#475569" text-anchor="middle" letter-spacing="2">SIGNAL VIEWER</text>
+
+  <!-- Status dots -->
+  <circle cx="36" cy="206" r="3" fill="#4ade80" opacity="0.8"/>
+  <circle cx="220" cy="206" r="3" fill="#22d3ee" opacity="0.6"/>
+
+  <!-- Corner accent -->
+  <rect x="22" y="216" width="212" height="20" rx="0" fill="#0f172a"/>
+  <rect x="22" y="228" width="212" height="8" rx="0" fill="none"/>
+
+  <!-- Bottom rounded corners for stand -->
+  <rect x="96" y="214" width="64" height="6" rx="2" fill="#1e3a5f" opacity="0.6"/>
+  <rect x="80" y="219" width="96" height="8" rx="4" fill="#1e293b"/>
+</svg>

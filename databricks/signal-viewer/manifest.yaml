@@ -1,6 +1,7 @@
 version: 1
 name: "Signal Viewer"
 description: "Interactive signal visualization dashboard for BLF/MF4 data stored in Unity Catalog."
+icon: icon.svg
 
 resource_specs:
   - name: "sql-warehouse"

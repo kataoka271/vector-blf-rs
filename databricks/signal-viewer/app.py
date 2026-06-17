@@ -555,22 +555,24 @@ app.layout = dbc.Container(
                             ],
                             className="d-flex align-items-center mb-1",
                         ),
+                        dcc.Store(id="signal-data-cache"),
+                        dcc.Store(id="time-range-store"),
+                        dcc.Download(id="dl-perfetto"),
                         dcc.Loading(
                             type="dot",
                             color=_ACCENT,
                             children=[
                                 dcc.Store(id="all-signals-cache"),
-                                dcc.Store(id="time-range-store"),
-                                dcc.Store(id="signal-data-cache"),
-                                dcc.Download(id="dl-perfetto"),
                                 dbc.Checklist(
                                     id="signal-select",
                                     options=[],
                                     value=[],
+                                    labelStyle={"whiteSpace": "nowrap"},
                                     style={
-                                        "fontSize": "13px",
+                                        "fontSize": "11px",
                                         "maxHeight": "260px",
                                         "overflowY": "auto",
+                                        "overflowX": "auto",
                                         "border": f"1px solid {_BORDER}",
                                         "borderRadius": "4px",
                                         "padding": "6px 8px",
@@ -690,6 +692,10 @@ app.layout = dbc.Container(
                                 ],
                                 className="d-flex align-items-center gap-2",
                             ),
+                        ),
+                        html.Div(
+                            id="replot-msg",
+                            style={"fontSize": "12px", "color": "#f0a500", "minHeight": "16px"},
                         ),
                         dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
                         dbc.Button(
@@ -842,6 +848,7 @@ def refresh_signal_cache(_):
 )
 def refresh_signals(sources, cache, search, current_value):
     print(f"[refresh_signals] sources={sources} cache={'hit' if cache is not None else 'miss'}", flush=True)
+    search_triggered = dash.ctx.triggered_id == "signal-search"
     if cache is None:
         return dash.no_update, dash.no_update, "Loading signals...", dash.no_update, dash.no_update
     if not sources:
@@ -853,7 +860,8 @@ def refresh_signals(sources, cache, search, current_value):
         filtered = [r for r in filtered if kw in r["signal_name"].lower() or kw in r["signal_source"].lower()]
     if not filtered:
         msg = "No signals match." if search else "No signals found. Has the pipeline run?"
-        return [], [], msg, [], []
+        value_out = dash.no_update if search_triggered else []
+        return [], value_out, msg, [], []
     opts = [
         {
             "label": f"[{r['signal_source']}] {r['signal_name']}",
@@ -869,10 +877,12 @@ def refresh_signals(sources, cache, search, current_value):
         for r in cache
         if r["signal_source"] in source_set
     ]
-    all_valid = {o["value"] for o in all_opts}
-    new_value = [v for v in (current_value or []) if v in all_valid]
     print(f"[refresh_signals] returning {len(opts)} opts (from cache)", flush=True)
     suffix = f" ({len(opts)} shown)" if search and len(opts) < len(all_opts) else ""
+    if search_triggered:
+        return opts, dash.no_update, f"{len(all_opts)} signal(s) available.{suffix}", all_opts, all_opts
+    all_valid = {o["value"] for o in all_opts}
+    new_value = [v for v in (current_value or []) if v in all_valid]
     return opts, new_value, f"{len(all_opts)} signal(s) available.{suffix}", all_opts, all_opts
 
 
@@ -1114,6 +1124,22 @@ def update_time_slider(store, current_value, is_disabled):
     else:
         label = f"{_fmt_s(low - t_min)} – {_fmt_s(high - t_min)}  (total {_fmt_s(duration)})"
     return t_min, t_max, step, marks, [low, high], False, label
+
+
+@callback(
+    Output("replot-msg", "children"),
+    Input("signal-select", "value"),
+    Input("signal-data-cache", "data"),
+)
+def update_replot_notice(selected, cache_data):
+    if not cache_data or not selected:
+        return ""
+    df = _store_to_df(cache_data)
+    cached_keys = set(df["signal_source"] + "::" + df["signal_name"])
+    new_count = sum(1 for s in selected if s not in cached_keys)
+    if new_count == 0:
+        return ""
+    return f"Re-plot needed: {new_count} new signal(s) not yet fetched."
 
 
 @callback(

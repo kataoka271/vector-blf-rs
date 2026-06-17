@@ -482,6 +482,7 @@ app.layout = dbc.Container(
             children=[
                 # Sidebar
                 dbc.Col(
+                    id="sidebar",
                     width="auto",
                     className="d-flex flex-column overflow-auto",
                     style={
@@ -713,6 +714,26 @@ app.layout = dbc.Container(
                             style={"fontSize": "12px", "color": "#ccc", "wordBreak": "break-word", "minHeight": "16px"},
                         ),
                     ],
+                ),
+                # Sidebar toggle strip
+                dbc.Col(
+                    width="auto",
+                    children=dbc.Button(
+                        "<",
+                        id="sidebar-toggle",
+                        size="sm",
+                        color="secondary",
+                        outline=True,
+                        style={"fontSize": "12px", "padding": "4px 5px", "lineHeight": "1"},
+                        title="Collapse sidebar",
+                    ),
+                    style={
+                        "display": "flex",
+                        "alignItems": "flex-start",
+                        "padding": "8px 2px",
+                        "backgroundColor": _PANEL,
+                        "borderRight": f"1px solid {_BORDER}",
+                    },
                 ),
                 # Chart + table area
                 dbc.Col(
@@ -1157,6 +1178,40 @@ def download_perfetto(_, cache_data, selected):
     if not trace_bytes:
         return dash.no_update
     return dcc.send_bytes(trace_bytes, "signals.perfetto-trace")
+
+
+@callback(
+    Output("sidebar", "style"),
+    Output("sidebar-toggle", "children"),
+    Output("sidebar-toggle", "title"),
+    Input("sidebar-toggle", "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_sidebar(n_clicks):
+    collapsed = (n_clicks or 0) % 2 == 1
+    if collapsed:
+        return (
+            {
+                "width": "0",
+                "minWidth": "0",
+                "overflow": "hidden",
+                "padding": "0",
+            },
+            ">",
+            "Expand sidebar",
+        )
+    return (
+        {
+            "width": "270px",
+            "backgroundColor": _PANEL,
+            "padding": "12px 12px",
+            "gap": "10px",
+            "color": _TEXT,
+            "borderRight": f"1px solid {_BORDER}",
+        },
+        "<",
+        "Collapse sidebar",
+    )
 
 
 if __name__ == "__main__":

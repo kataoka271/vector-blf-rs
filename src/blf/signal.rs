@@ -361,10 +361,25 @@ impl CanSignalDb {
 
     /// Decode all regular-frame signals for `message_id` from `data`.
     /// Signals that extend outside `data` are silently skipped.
-    pub fn extract(&self, message_id: u32, data: &[u8]) -> Vec<(&str, f64)> {
+    /// If `enums` is provided, the third element of each tuple is the category string for the
+    /// raw value, or `None` when no mapping exists.
+    pub fn extract<'a>(
+        &'a self,
+        message_id: u32,
+        data: &[u8],
+        enums: Option<&EnumValueMap>,
+    ) -> Vec<(&'a str, f64, Option<String>)> {
         self.signals(message_id)
             .iter()
-            .filter_map(|def| def.signal.decode(data).map(|v| (def.name.as_str(), v)))
+            .filter_map(|def| {
+                let raw = def.signal.decode_raw(data)?;
+                let v = def.signal.decode(data)?;
+                let cat = enums
+                    .and_then(|m| m.get(def.name.as_str()))
+                    .and_then(|inner| inner.get(&raw))
+                    .cloned();
+                Some((def.name.as_str(), v, cat))
+            })
             .collect()
     }
 
@@ -377,7 +392,8 @@ impl CanSignalDb {
         can_id: u32,
         data: &[u8],
         header: ContainerHeader,
-    ) -> Vec<(&'a str, f64)> {
+        enums: Option<&EnumValueMap>,
+    ) -> Vec<(&'a str, f64, Option<String>)> {
         let Some(pdu_map) = self.containers.get(&can_id) else {
             return vec![];
         };
@@ -385,8 +401,14 @@ impl CanSignalDb {
         for (pdu_id, payload) in demux_container(data, header) {
             if let Some(defs) = pdu_map.get(&pdu_id) {
                 for def in defs {
-                    if let Some(v) = def.signal.decode(payload) {
-                        result.push((def.name.as_str(), v));
+                    if let Some(raw) = def.signal.decode_raw(payload) {
+                        if let Some(v) = def.signal.decode(payload) {
+                            let cat = enums
+                                .and_then(|m| m.get(def.name.as_str()))
+                                .and_then(|inner| inner.get(&raw))
+                                .cloned();
+                            result.push((def.name.as_str(), v, cat));
+                        }
                     }
                 }
             }
@@ -414,7 +436,13 @@ impl CanSignalDb {
     /// Decode signals for a single already-demuxed I-PDU identified by `(can_id, pdu_id)`.
     ///
     /// Bit positions in `data` are relative to the I-PDU payload start.
-    pub fn extract_pdu(&self, can_id: u32, pdu_id: u32, data: &[u8]) -> Vec<(&str, f64)> {
+    pub fn extract_pdu<'a>(
+        &'a self,
+        can_id: u32,
+        pdu_id: u32,
+        data: &[u8],
+        enums: Option<&EnumValueMap>,
+    ) -> Vec<(&'a str, f64, Option<String>)> {
         let Some(pdu_map) = self.containers.get(&can_id) else {
             return vec![];
         };
@@ -422,7 +450,15 @@ impl CanSignalDb {
             return vec![];
         };
         defs.iter()
-            .filter_map(|def| def.signal.decode(data).map(|v| (def.name.as_str(), v)))
+            .filter_map(|def| {
+                let raw = def.signal.decode_raw(data)?;
+                let v = def.signal.decode(data)?;
+                let cat = enums
+                    .and_then(|m| m.get(def.name.as_str()))
+                    .and_then(|inner| inner.get(&raw))
+                    .cloned();
+                Some((def.name.as_str(), v, cat))
+            })
             .collect()
     }
 
@@ -681,10 +717,24 @@ impl SomeIpSignalDb {
     }
 
     /// Decode all signals for `(service_id, method_id)` from `payload`.
-    pub fn extract(&self, service_id: u16, method_id: u16, payload: &[u8]) -> Vec<(&str, f64)> {
+    pub fn extract<'a>(
+        &'a self,
+        service_id: u16,
+        method_id: u16,
+        payload: &[u8],
+        enums: Option<&EnumValueMap>,
+    ) -> Vec<(&'a str, f64, Option<String>)> {
         self.signals(service_id, method_id)
             .iter()
-            .filter_map(|def| def.signal.decode(payload).map(|v| (def.name.as_str(), v)))
+            .filter_map(|def| {
+                let raw = def.signal.decode_raw(payload)?;
+                let v = def.signal.decode(payload)?;
+                let cat = enums
+                    .and_then(|m| m.get(def.name.as_str()))
+                    .and_then(|inner| inner.get(&raw))
+                    .cloned();
+                Some((def.name.as_str(), v, cat))
+            })
             .collect()
     }
 
@@ -899,6 +949,85 @@ pub fn check_someip_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
     errors
 }
 
+/// Maps `signal_name → (raw_value → category_string)`, loaded from an enum CSV.
+///
+/// CSV format (header required):
+/// ```text
+/// signal_name,raw_value,category
+/// GearPosition,0,Neutral
+/// GearPosition,1,First
+/// IgnitionStatus,0,Off
+/// IgnitionStatus,1,On
+/// ```
+/// `raw_value` is the raw bit-extracted integer **before** scale/offset is applied.
+/// Accepts hex (`0x…`) or decimal.
+pub type EnumValueMap = HashMap<String, HashMap<u64, String>>;
+
+/// Load an `EnumValueMap` from a CSV reader.
+pub fn enum_value_map_from_csv<R: std::io::Read>(reader: R) -> ParseResult<EnumValueMap> {
+    let mut map: EnumValueMap = HashMap::new();
+    for (i, line) in std::io::BufReader::new(reader).lines().enumerate() {
+        let lineno = i + 1;
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("signal_name") {
+            continue;
+        }
+        let p: Vec<&str> = line.split(',').map(str::trim).collect();
+        if p.len() < 3 {
+            return Err(ParseError::Csv {
+                line: lineno,
+                message: format!("expected at least 3 columns, got {}", p.len()),
+            });
+        }
+        let name = p[0].to_string();
+        let raw = parse_u32(p[1]).map_err(|_| ParseError::Csv {
+            line: lineno,
+            message: format!("invalid raw_value: {:?}", p[1]),
+        })? as u64;
+        let category = p[2].to_string();
+        map.entry(name).or_default().insert(raw, category);
+    }
+    Ok(map)
+}
+
+/// Validate every data row of an enum CSV and return all errors as `(line, message)` pairs.
+///
+/// Skips blank lines, comment lines (`#`), and the header row (`signal_name,...`).
+pub fn check_enum_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
+    let mut errors = Vec::new();
+    let mut lineno = 0usize;
+    for line in std::io::BufReader::new(reader).lines() {
+        lineno += 1;
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                errors.push((lineno, format!("I/O error: {e}")));
+                break;
+            }
+        };
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("signal_name") {
+            continue;
+        }
+        let p: Vec<&str> = line.split(',').map(str::trim).collect();
+        if p.len() < 3 {
+            errors.push((
+                lineno,
+                format!("expected at least 3 columns, got {}", p.len()),
+            ));
+            continue;
+        }
+        if parse_u32(p[1]).is_err() {
+            errors.push((lineno, format!("invalid raw_value: {:?}", p[1])));
+        }
+        if p[2].is_empty() {
+            errors.push((lineno, "category must not be empty".to_string()));
+        }
+    }
+    errors
+}
+
 /// Protocol family used as the key dimension in `ChannelDb`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChannelType {
@@ -1051,11 +1180,11 @@ message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scal
 
         // EngineSpeed: raw=0x0100 → 256 * 0.25 = 64.0
         let data = [0x00u8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-        let vals = db.extract(0x100, &data);
+        let vals = db.extract(0x100, &data, None);
         let speed = vals
             .iter()
-            .find(|(n, _)| *n == "EngineSpeed")
-            .map(|(_, v)| *v);
+            .find(|(n, _, _)| *n == "EngineSpeed")
+            .map(|(_, v, _)| *v);
         assert_eq!(speed, Some(64.0));
     }
 
@@ -1093,12 +1222,15 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
         // Temperature: raw=0x0190 (400) → 400 * 0.01 = 4.0
         // Pressure: raw=0x32 (50) → 50 * 1.0 = 50.0
         let payload = [0x90u8, 0x01, 0x32];
-        let vals = db.extract(0x0064, 0x0001, &payload);
+        let vals = db.extract(0x0064, 0x0001, &payload, None);
         let temp = vals
             .iter()
-            .find(|(n, _)| *n == "Temperature")
-            .map(|(_, v)| *v);
-        let pres = vals.iter().find(|(n, _)| *n == "Pressure").map(|(_, v)| *v);
+            .find(|(n, _, _)| *n == "Temperature")
+            .map(|(_, v, _)| *v);
+        let pres = vals
+            .iter()
+            .find(|(n, _, _)| *n == "Pressure")
+            .map(|(_, v, _)| *v);
         assert_eq!(temp, Some(4.0));
         assert_eq!(pres, Some(50.0));
     }
@@ -1133,8 +1265,8 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
                    0x100,Speed,0,0,8,Intel,false,,\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         // scale=1.0, offset=0.0: raw=42 → 42.0
-        let vals = db.extract(0x100, &[42]);
-        assert_eq!(vals.first().map(|(_, v)| *v), Some(42.0));
+        let vals = db.extract(0x100, &[42], None);
+        assert_eq!(vals.first().map(|(_, v, _)| *v), Some(42.0));
     }
 
     #[test]
@@ -1151,8 +1283,8 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
                    0x0010,0x0001,Sig,0,0,8,Intel,false,,\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         // scale=1.0, offset=0.0: raw=7 → 7.0
-        let vals = db.extract(0x0010, 0x0001, &[7]);
-        assert_eq!(vals.first().map(|(_, v)| *v), Some(7.0));
+        let vals = db.extract(0x0010, 0x0001, &[7], None);
+        assert_eq!(vals.first().map(|(_, v, _)| *v), Some(7.0));
     }
 
     #[test]
@@ -1199,8 +1331,8 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
                    0x0010,0x0003,Temp,0,0,8,Intel,true,0.5,-40.0\n";
         let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
         // raw=0xFF = -1 signed → -1 * 0.5 - 40.0 = -40.5
-        let vals = db.extract(0x0010, 0x0003, &[0xFF]);
-        assert_eq!(vals.first().map(|(_, v)| *v), Some(-40.5));
+        let vals = db.extract(0x0010, 0x0003, &[0xFF], None);
+        assert_eq!(vals.first().map(|(_, v, _)| *v), Some(-40.5));
     }
 
     // ── container frame tests ─────────────────────────────────────────────────
@@ -1264,8 +1396,8 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
             0x00u8, 0x00, 0x10, 0x02, 0x05, 0x0A, // PDU 0x10: Sig1=5, Sig2=10
             0x00, 0x00, 0x20, 0x01, 0x08, // PDU 0x20: Sig3=8*0.5=4.0
         ];
-        let vals = db.extract_container(0x200, &frame, ContainerHeader::Short);
-        let get = |name: &str| vals.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
+        let vals = db.extract_container(0x200, &frame, ContainerHeader::Short, None);
+        let get = |name: &str| vals.iter().find(|(n, _, _)| *n == name).map(|(_, v, _)| *v);
         assert_eq!(get("Sig1"), Some(5.0));
         assert_eq!(get("Sig2"), Some(20.0));
         assert_eq!(get("Sig3"), Some(4.0));
@@ -1289,11 +1421,11 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
             0x00, 0x00, 0x01, 0x02, 0x40, 0x1F, // PDU 0x01
         ];
 
-        let vals_ab = db.extract_container(0x600, &frame_ab, ContainerHeader::Short);
-        let vals_ba = db.extract_container(0x600, &frame_ba, ContainerHeader::Short);
+        let vals_ab = db.extract_container(0x600, &frame_ab, ContainerHeader::Short, None);
+        let vals_ba = db.extract_container(0x600, &frame_ba, ContainerHeader::Short, None);
 
-        let get = |vals: &[(&str, f64)], name: &str| {
-            vals.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+        let get = |vals: &[(&str, f64, Option<String>)], name: &str| {
+            vals.iter().find(|(n, _, _)| *n == name).map(|(_, v, _)| *v)
         };
         assert_eq!(get(&vals_ab, "Radar_Distance_m"), Some(80.0));
         assert_eq!(get(&vals_ab, "CabinTemp_degC"), Some(10.0));
@@ -1315,12 +1447,66 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert!(!db.is_container(0x100));
         assert!(db.is_container(0x200));
-        assert_eq!(db.extract(0x100, &[0x42]).len(), 1);
+        assert_eq!(db.extract(0x100, &[0x42], None).len(), 1);
         let frame = [0x00u8, 0x00, 0x01, 0x01, 0x07];
         assert_eq!(
-            db.extract_container(0x200, &frame, ContainerHeader::Short)
+            db.extract_container(0x200, &frame, ContainerHeader::Short, None)
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn enum_csv_round_trip() {
+        let csv = "\
+signal_name,raw_value,category
+GearPosition,0,Neutral
+GearPosition,1,First
+GearPosition,2,Second
+IgnitionStatus,0,Off
+IgnitionStatus,0x01,On
+";
+        let map = enum_value_map_from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(map["GearPosition"][&0], "Neutral");
+        assert_eq!(map["GearPosition"][&1], "First");
+        assert_eq!(map["GearPosition"][&2], "Second");
+        assert_eq!(map["IgnitionStatus"][&0], "Off");
+        assert_eq!(map["IgnitionStatus"][&1], "On");
+    }
+
+    #[test]
+    fn extract_with_enum() {
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,GearPosition,0,0,8,Intel,false,1.0,0.0\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+
+        let enum_csv = "signal_name,raw_value,category\nGearPosition,0,Neutral\nGearPosition,1,First\n";
+        let enums = enum_value_map_from_csv(enum_csv.as_bytes()).unwrap();
+
+        let vals = db.extract(0x100, &[1], Some(&enums));
+        let (_, v, cat) = vals.first().unwrap();
+        assert_eq!(*v, 1.0);
+        assert_eq!(cat.as_deref(), Some("First"));
+
+        let vals_no_match = db.extract(0x100, &[5], Some(&enums));
+        assert_eq!(vals_no_match.first().unwrap().2, None);
+    }
+
+    #[test]
+    fn extract_without_enum() {
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,GearPosition,0,0,8,Intel,false,1.0,0.0\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        let vals = db.extract(0x100, &[1], None);
+        assert_eq!(vals.first().unwrap().2, None);
+    }
+
+    #[test]
+    fn check_enum_csv_errors() {
+        let csv = "signal_name,raw_value,category\nGearPosition,notanumber,First\nOther,1,\n";
+        let errs = check_enum_csv(csv.as_bytes());
+        assert_eq!(errs.len(), 2);
+        assert!(errs[0].1.contains("raw_value"));
+        assert!(errs[1].1.contains("category"));
     }
 }

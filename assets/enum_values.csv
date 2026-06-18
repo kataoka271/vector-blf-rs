@@ -1,0 +1,16 @@
+signal_name,raw_value,category
+IgnitionStatus,0,Off
+IgnitionStatus,1,Accessory
+IgnitionStatus,2,On
+IgnitionStatus,3,Start
+GearPosition,0,Neutral
+GearPosition,1,First
+GearPosition,2,Second
+GearPosition,3,Third
+GearPosition,4,Fourth
+GearPosition,5,Fifth
+GearPosition,6,Reverse
+FaultCode,0,None
+FaultCode,1,Minor
+FaultCode,2,Major
+FaultCode,3,Critical

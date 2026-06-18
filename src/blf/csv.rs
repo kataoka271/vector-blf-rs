@@ -2,7 +2,9 @@ use super::diag::someip::SomeIp;
 use super::eth::ip::Ip;
 use super::eth::transport::Transport;
 use super::message::Message;
-use super::signal::{CanSignalDb, ChannelDb, ChannelType, ContainerHeader, SomeIpSignalDb};
+use super::signal::{
+    CanSignalDb, ChannelDb, ChannelType, ContainerHeader, EnumValueMap, SomeIpSignalDb,
+};
 use super::BaseObject;
 use super::Timestamp;
 use chrono::{TimeZone, Utc};
@@ -32,12 +34,13 @@ fn channel_str(db: Option<&ChannelDb>, ty: ChannelType, ch: u32) -> String {
         .unwrap_or_else(|| ch.to_string())
 }
 
-type SomeIpDecoded<'a> = Option<(u16, u16, Vec<(&'a str, f64)>)>;
+type SomeIpDecoded<'a> = Option<(u16, u16, Vec<(&'a str, f64, Option<String>)>)>;
 
 fn try_someip_signals<'a>(
     ether_type: u16,
     data: &[u8],
     db: &'a SomeIpSignalDb,
+    enums: Option<&EnumValueMap>,
 ) -> SomeIpDecoded<'a> {
     let ip = Ip::parse(ether_type, data).ok()?;
     let transport = match &ip {
@@ -48,7 +51,7 @@ fn try_someip_signals<'a>(
         Transport::Udp(udp) => SomeIp::parse(udp.data.as_slice()).ok()?,
         Transport::Tcp(tcp) => SomeIp::parse(tcp.data.as_slice()).ok()?,
     };
-    let vals = db.extract(someip.service_id, someip.method_id, &someip.payload);
+    let vals = db.extract(someip.service_id, someip.method_id, &someip.payload, enums);
     if vals.is_empty() {
         None
     } else {
@@ -167,11 +170,16 @@ pub fn write_csv_raw<W: Write, T: Borrow<BaseObject>>(
     Ok(count)
 }
 
-fn can_extract<'a>(db: &'a CanSignalDb, can_id: u32, data: &[u8]) -> Vec<(&'a str, f64)> {
+fn can_extract<'a>(
+    db: &'a CanSignalDb,
+    can_id: u32,
+    data: &[u8],
+    enums: Option<&EnumValueMap>,
+) -> Vec<(&'a str, f64, Option<String>)> {
     if db.is_container(can_id) {
-        db.extract_container(can_id, data, ContainerHeader::Short)
+        db.extract_container(can_id, data, ContainerHeader::Short, enums)
     } else {
-        db.extract(can_id, data)
+        db.extract(can_id, data, enums)
     }
 }
 
@@ -182,10 +190,11 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
     someip_db: Option<&SomeIpSignalDb>,
     start_ns: u64,
     channel_db: Option<&ChannelDb>,
+    enums: Option<&EnumValueMap>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     writeln!(
         w,
-        "timestamp_ns,absolute_timestamp,channel,message_id,signal_name,value"
+        "timestamp_ns,absolute_timestamp,channel,message_id,signal_name,value,category"
     )?;
     let mut count = 0usize;
     for item in objects {
@@ -200,39 +209,77 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
         let abs = abs_ts_str(start_ns, ns);
         match &obj.message {
             Message::Can(m) => {
-                let vals = can_extract(db, m.id, &m.data);
+                let vals = can_extract(db, m.id, &m.data, enums);
                 let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
-                for (name, value) in vals {
-                    writeln!(w, "{},{},{},0x{:X},{},{}", ns, abs, ch, m.id, name, value)?;
+                for (name, value, cat) in vals {
+                    writeln!(
+                        w,
+                        "{},{},{},0x{:X},{},{},{}",
+                        ns,
+                        abs,
+                        ch,
+                        m.id,
+                        name,
+                        value,
+                        cat.as_deref().unwrap_or("")
+                    )?;
                     count += 1;
                 }
             }
             Message::CanFd(m) => {
-                let vals = can_extract(db, m.id, &m.data);
+                let vals = can_extract(db, m.id, &m.data, enums);
                 let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
-                for (name, value) in vals {
-                    writeln!(w, "{},{},{},0x{:X},{},{}", ns, abs, ch, m.id, name, value)?;
+                for (name, value, cat) in vals {
+                    writeln!(
+                        w,
+                        "{},{},{},0x{:X},{},{},{}",
+                        ns,
+                        abs,
+                        ch,
+                        m.id,
+                        name,
+                        value,
+                        cat.as_deref().unwrap_or("")
+                    )?;
                     count += 1;
                 }
             }
             Message::CanFd64(m) => {
-                let vals = can_extract(db, m.id, &m.data);
+                let vals = can_extract(db, m.id, &m.data, enums);
                 let ch = channel_str(channel_db, ChannelType::Can, m.channel as u32);
-                for (name, value) in vals {
-                    writeln!(w, "{},{},{},0x{:X},{},{}", ns, abs, ch, m.id, name, value)?;
+                for (name, value, cat) in vals {
+                    writeln!(
+                        w,
+                        "{},{},{},0x{:X},{},{},{}",
+                        ns,
+                        abs,
+                        ch,
+                        m.id,
+                        name,
+                        value,
+                        cat.as_deref().unwrap_or("")
+                    )?;
                     count += 1;
                 }
             }
             Message::Ethernet(m) => {
                 if let Some(sdb) = someip_db {
-                    if let Some((svc, mth, vals)) = try_someip_signals(m.ether_type, &m.data, sdb) {
+                    if let Some((svc, mth, vals)) =
+                        try_someip_signals(m.ether_type, &m.data, sdb, enums)
+                    {
                         let msg_id = ((svc as u32) << 16) | (mth as u32);
                         let ch = channel_str(channel_db, ChannelType::Ethernet, m.channel as u32);
-                        for (name, value) in vals {
+                        for (name, value, cat) in vals {
                             writeln!(
                                 w,
-                                "{},{},{},0x{:08X},{},{}",
-                                ns, abs, ch, msg_id, name, value
+                                "{},{},{},0x{:08X},{},{},{}",
+                                ns,
+                                abs,
+                                ch,
+                                msg_id,
+                                name,
+                                value,
+                                cat.as_deref().unwrap_or("")
                             )?;
                             count += 1;
                         }
@@ -241,14 +288,22 @@ pub fn write_csv_signals<W: Write, T: Borrow<BaseObject>>(
             }
             Message::EthernetEx(m) => {
                 if let Some(sdb) = someip_db {
-                    if let Some((svc, mth, vals)) = try_someip_signals(m.ether_type, &m.data, sdb) {
+                    if let Some((svc, mth, vals)) =
+                        try_someip_signals(m.ether_type, &m.data, sdb, enums)
+                    {
                         let msg_id = ((svc as u32) << 16) | (mth as u32);
                         let ch = channel_str(channel_db, ChannelType::Ethernet, m.channel as u32);
-                        for (name, value) in vals {
+                        for (name, value, cat) in vals {
                             writeln!(
                                 w,
-                                "{},{},{},0x{:08X},{},{}",
-                                ns, abs, ch, msg_id, name, value
+                                "{},{},{},0x{:08X},{},{},{}",
+                                ns,
+                                abs,
+                                ch,
+                                msg_id,
+                                name,
+                                value,
+                                cat.as_deref().unwrap_or("")
                             )?;
                             count += 1;
                         }

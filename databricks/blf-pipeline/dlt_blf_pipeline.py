@@ -40,6 +40,7 @@ Setup
        blf.target_schema       automotive       (optional, default: blf)
        blf.signals_path        /Volumes/mycat/myschema/can_signals.csv        (optional)
        blf.someip_signals_path /Volumes/mycat/myschema/someip_signals.csv (optional)
+       blf.enum_signals_path   /Volumes/mycat/myschema/enum_values.csv        (optional)
        blf.container_long_header false                (optional, default: false)
 
    CAN signal CSV format (header required):
@@ -62,6 +63,17 @@ Setup
    to the SOME/IP application payload (bytes after the 16-byte SOME/IP header).
    SOME/IP messages are detected via UDP; SOME/IP-SD (service_id=0xFFFF) is skipped.
    If blf.someip_signals_path is not set, blf_silver_someip_signals will be empty.
+
+   Enum value CSV format (header required):
+       signal_name,raw_value,category
+       IgnitionStatus,0,Off
+       IgnitionStatus,1,On
+       GearPosition,0,Neutral
+
+   raw_value is the raw integer extracted from the signal bits before scale/offset.
+   Accepts hex (0x...) or decimal.  When set, decoded signals carry a signal_str
+   column with the category name; numeric signals without a mapping get NULL.
+   Applies to both CAN and SOME/IP signals.
 
 The pipeline is continuous-streaming: Auto Loader tracks which files have
 been processed, so only new *.blf files are ingested on each run.
@@ -92,6 +104,7 @@ TARGET_CATALOG = spark.conf.get("blf.target_catalog", "main")
 TARGET_SCHEMA = spark.conf.get("blf.target_schema", "blf")
 SIGNALS_PATH = spark.conf.get("blf.signals_path", "")
 SOMEIP_SIGNALS_PATH = spark.conf.get("blf.someip_signals_path", "")
+ENUM_SIGNALS_PATH = spark.conf.get("blf.enum_signals_path", "")
 CONTAINER_LONG_HEADER: bool = spark.conf.get("blf.container_long_header", "false").lower() == "true"
 
 # ── bronze output schema (flat rows emitted by _parse_blf_batch) ──────────────
@@ -152,6 +165,7 @@ _SIGNAL_RESULT_SCHEMA = ArrayType(
         [
             StructField("signal_name", StringType(), nullable=False),
             StructField("signal_value", DoubleType(), nullable=False),
+            StructField("signal_str", StringType(), nullable=True),
         ]
     )
 )
@@ -523,7 +537,7 @@ def _load_signal_db(csv_path: str):
 
     db = None
     if csv_path:
-        db = vector_blf.CanSignalDb(csv_path)
+        db = vector_blf.CanSignalDb(csv_path, enum_path=ENUM_SIGNALS_PATH or None)
     _SIGNAL_DB_CACHE[csv_path] = db
     return db
 
@@ -549,7 +563,10 @@ def _decode_signals(
         if data is not None and db is not None:
             mid = int(can_id)
             if not db.is_container(mid):
-                decoded = [{"signal_name": name, "signal_value": value} for name, value in db.decode(mid, bytes(data))]
+                decoded = [
+                    {"signal_name": name, "signal_value": value, "signal_str": cat}
+                    for name, value, cat in db.decode(mid, bytes(data))
+                ]
         result.append(decoded)
 
     return pd.Series(result)
@@ -601,8 +618,8 @@ def _decode_pdu_signals(
         decoded = []
         if payload is not None and db is not None:
             decoded = [
-                {"signal_name": name, "signal_value": value}
-                for name, value in db.decode_pdu(int(can_id), int(pdu_id), bytes(payload))
+                {"signal_name": name, "signal_value": value, "signal_str": cat}
+                for name, value, cat in db.decode_pdu(int(can_id), int(pdu_id), bytes(payload))
             ]
         result.append(decoded)
 
@@ -694,6 +711,7 @@ def blf_silver_can_signals():
         "dir",
         F.col("_sig.signal_name"),
         F.col("_sig.signal_value"),
+        F.col("_sig.signal_str"),
     ]
 
     non_container = (
@@ -928,7 +946,7 @@ def _load_someip_signal_db(csv_path: str):
 
     db = None
     if csv_path:
-        db = vector_blf.SomeIpSignalDb(csv_path)
+        db = vector_blf.SomeIpSignalDb(csv_path, enum_path=ENUM_SIGNALS_PATH or None)
     _SOMEIP_SIGNAL_DB_CACHE[csv_path] = db
     return db
 
@@ -1034,8 +1052,8 @@ def _decode_someip_signals(
         decoded = []
         if payload is not None and db is not None:
             decoded = [
-                {"signal_name": name, "signal_value": value}
-                for name, value in db.decode(int(service_id), int(method_id), bytes(payload))
+                {"signal_name": name, "signal_value": value, "signal_str": cat}
+                for name, value, cat in db.decode(int(service_id), int(method_id), bytes(payload))
             ]
         result.append(decoded)
     return pd.Series(result)
@@ -1113,6 +1131,7 @@ def blf_silver_someip_signals():
             "someip_msg_type",
             F.col("_sig.signal_name"),
             F.col("_sig.signal_value"),
+            F.col("_sig.signal_str"),
         )
     )
 
@@ -1186,7 +1205,7 @@ def blf_silver_diag():
         "One row per (message, signal). "
         "signal_source: 'CAN', 'ETH', or 'SOMEIP'. "
         "message_id_str: can_id_hex | ether_type_hex | service_id_hex/method_id_hex. "
-        "signal_value for numeric signals; signal_str for address strings (ETH only). "
+        "signal_value for numeric signals; signal_str for address strings (ETH) or enum categories (CAN/SOMEIP). "
         "WARNING: signal_name is NOT unique across sources — always filter by "
         "signal_source when querying a specific signal by name."
     ),
@@ -1197,7 +1216,6 @@ def blf_silver_diag():
     partition_cols=["signal_source"],
 )
 def blf_gold_signals():
-    _null_str = F.lit(None).cast(StringType())
     can = dlt.read_stream("blf_silver_can_signals").select(
         "_source_file",
         "_ingested_at",
@@ -1211,7 +1229,7 @@ def blf_gold_signals():
         "dir",
         "signal_name",
         "signal_value",
-        _null_str.alias("signal_str"),
+        "signal_str",
     )
     eth = dlt.read_stream("blf_silver_eth_signals").select(
         "_source_file",
@@ -1241,7 +1259,7 @@ def blf_gold_signals():
         "dir",
         "signal_name",
         "signal_value",
-        _null_str.alias("signal_str"),
+        "signal_str",
     )
     # signal_name is not globally unique; consumers must include signal_source in WHERE.
     return can.union(eth).union(someip)

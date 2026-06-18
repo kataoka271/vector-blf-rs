@@ -547,27 +547,37 @@ impl Reader {
 #[pyclass]
 pub struct CanSignalDb {
     inner: blf::CanSignalDb,
+    enum_map: Option<blf::EnumValueMap>,
 }
 
 #[pymethods]
 impl CanSignalDb {
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
+    #[pyo3(signature = (path, enum_path=None))]
+    fn new(path: &str, enum_path: Option<&str>) -> PyResult<Self> {
         let f =
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         let db = blf::CanSignalDb::from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner: db })
+        let enum_map = enum_path
+            .map(|p| {
+                let f = File::open(p)
+                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+                blf::enum_value_map_from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))
+            })
+            .transpose()?;
+        Ok(Self { inner: db, enum_map })
     }
 
     /// Decode all matching signals for ``message_id`` from ``data``.
     ///
-    /// Returns a list of ``(signal_name, signal_value)`` tuples.
+    /// Returns a list of ``(signal_name, signal_value, category)`` tuples.
+    /// ``category`` is a string when a value-to-category mapping exists, otherwise ``None``.
     /// Signals whose bit range extends outside ``data`` are silently skipped.
-    fn decode(&self, message_id: u32, data: &[u8]) -> Vec<(String, f64)> {
+    fn decode(&self, message_id: u32, data: &[u8]) -> Vec<(String, f64, Option<String>)> {
         self.inner
-            .extract(message_id, data)
+            .extract(message_id, data, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val)| (name.to_string(), val))
+            .map(|(name, val, cat)| (name.to_string(), val, cat))
             .collect()
     }
 
@@ -581,23 +591,23 @@ impl CanSignalDb {
     ///
     /// ``data`` is the raw CAN frame payload. ``long_header`` selects between
     /// the 4-byte-overhead short header (default) and the 8-byte-overhead long header.
-    /// Returns a list of ``(signal_name, value)`` tuples for all matched I-PDUs.
+    /// Returns a list of ``(signal_name, value, category)`` tuples for all matched I-PDUs.
     #[pyo3(signature = (message_id, data, long_header = false))]
     fn decode_container(
         &self,
         message_id: u32,
         data: &[u8],
         long_header: bool,
-    ) -> Vec<(String, f64)> {
+    ) -> Vec<(String, f64, Option<String>)> {
         let header = if long_header {
             ContainerHeader::Long
         } else {
             ContainerHeader::Short
         };
         self.inner
-            .extract_container(message_id, data, header)
+            .extract_container(message_id, data, header, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val)| (name.to_string(), val))
+            .map(|(name, val, cat)| (name.to_string(), val, cat))
             .collect()
     }
 
@@ -624,12 +634,12 @@ impl CanSignalDb {
     /// Decode signals for a single I-PDU previously extracted from a container frame.
     ///
     /// ``can_id`` is the parent container CAN ID; ``pdu_id`` identifies the I-PDU.
-    /// Returns ``(signal_name, signal_value)`` tuples.
-    fn decode_pdu(&self, can_id: u32, pdu_id: u32, data: &[u8]) -> Vec<(String, f64)> {
+    /// Returns ``(signal_name, signal_value, category)`` tuples.
+    fn decode_pdu(&self, can_id: u32, pdu_id: u32, data: &[u8]) -> Vec<(String, f64, Option<String>)> {
         self.inner
-            .extract_pdu(can_id, pdu_id, data)
+            .extract_pdu(can_id, pdu_id, data, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val)| (name.to_string(), val))
+            .map(|(name, val, cat)| (name.to_string(), val, cat))
             .collect()
     }
 }
@@ -646,28 +656,38 @@ impl CanSignalDb {
 #[pyclass]
 pub struct SomeIpSignalDb {
     inner: blf::SomeIpSignalDb,
+    enum_map: Option<blf::EnumValueMap>,
 }
 
 #[pymethods]
 impl SomeIpSignalDb {
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
+    #[pyo3(signature = (path, enum_path=None))]
+    fn new(path: &str, enum_path: Option<&str>) -> PyResult<Self> {
         let f =
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         let db =
             blf::SomeIpSignalDb::from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner: db })
+        let enum_map = enum_path
+            .map(|p| {
+                let f = File::open(p)
+                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+                blf::enum_value_map_from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))
+            })
+            .transpose()?;
+        Ok(Self { inner: db, enum_map })
     }
 
     /// Decode all matching signals for ``(service_id, method_id)`` from ``payload``.
     ///
-    /// Returns a list of ``(signal_name, signal_value)`` tuples.
+    /// Returns a list of ``(signal_name, signal_value, category)`` tuples.
+    /// ``category`` is a string when a value-to-category mapping exists, otherwise ``None``.
     /// Signals whose bit range extends outside ``payload`` are silently skipped.
-    fn decode(&self, service_id: u16, method_id: u16, payload: &[u8]) -> Vec<(String, f64)> {
+    fn decode(&self, service_id: u16, method_id: u16, payload: &[u8]) -> Vec<(String, f64, Option<String>)> {
         self.inner
-            .extract(service_id, method_id, payload)
+            .extract(service_id, method_id, payload, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val)| (name.to_string(), val))
+            .map(|(name, val, cat)| (name.to_string(), val, cat))
             .collect()
     }
 }

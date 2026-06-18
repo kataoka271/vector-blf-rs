@@ -121,15 +121,16 @@ class CanSignalDb:
     ``start_byte`` and ``start_bit`` are then relative to the I-PDU payload after demultiplexing.
     """
 
-    def __init__(self, path: str) -> None: ...
+    def __init__(self, path: str, enum_path: Optional[str] = None) -> None: ...
     def is_container(self, message_id: int) -> bool:
         """Return True if message_id is configured as a CAN-FD container frame."""
         ...
 
-    def decode(self, message_id: int, data: bytes) -> List[Tuple[str, float]]:
+    def decode(self, message_id: int, data: bytes) -> List[Tuple[str, float, Optional[str]]]:
         """Decode all matching signals for message_id from data.
 
-        Returns a list of (signal_name, value) tuples.
+        Returns a list of (signal_name, value, category) tuples.
+        category is a string when a value-to-category mapping exists, otherwise None.
         Signals whose bit range extends outside data are silently skipped.
         """
         ...
@@ -139,12 +140,12 @@ class CanSignalDb:
         message_id: int,
         data: bytes,
         long_header: bool = False,
-    ) -> List[Tuple[str, float]]:
+    ) -> List[Tuple[str, float, Optional[str]]]:
         """Demultiplex a CAN-FD container frame and decode all signals.
 
         data is the raw CAN frame payload. long_header selects between the
         4-byte-overhead short header (default) and the 8-byte-overhead long header.
-        Returns a list of (signal_name, value) tuples for all matched I-PDUs.
+        Returns a list of (signal_name, value, category) tuples for all matched I-PDUs.
         """
         ...
 
@@ -161,11 +162,11 @@ class CanSignalDb:
         """
         ...
 
-    def decode_pdu(self, can_id: int, pdu_id: int, data: bytes) -> List[Tuple[str, float]]:
+    def decode_pdu(self, can_id: int, pdu_id: int, data: bytes) -> List[Tuple[str, float, Optional[str]]]:
         """Decode signals for a single I-PDU previously extracted from a container frame.
 
         can_id is the parent container CAN ID; pdu_id identifies the I-PDU within it.
-        Returns a list of (signal_name, value) tuples.
+        Returns a list of (signal_name, value, category) tuples.
         """
         ...
 
@@ -182,11 +183,12 @@ class SomeIpSignalDb:
     16-byte header).
     """
 
-    def __init__(self, path: str) -> None: ...
-    def decode(self, service_id: int, method_id: int, payload: bytes) -> List[Tuple[str, float]]:
+    def __init__(self, path: str, enum_path: Optional[str] = None) -> None: ...
+    def decode(self, service_id: int, method_id: int, payload: bytes) -> List[Tuple[str, float, Optional[str]]]:
         """Decode all matching signals for (service_id, method_id) from payload.
 
-        Returns a list of (signal_name, value) tuples.
+        Returns a list of (signal_name, value, category) tuples.
+        category is a string when a value-to-category mapping exists, otherwise None.
         Signals whose bit range extends outside payload are silently skipped.
         """
         ...

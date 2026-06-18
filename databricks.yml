@@ -76,6 +76,14 @@ variables:
       Format: service_id,method_id,signal_name,start_bit,bit_length,byte_order,is_signed,scale,offset
     default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/someip_signals.csv
 
+  enum_signals_path:
+    description: >
+      Unity Catalog Volume path to the enum value mapping CSV (optional).
+      Maps raw integer signal values to human-readable category strings.
+      Format: signal_name,raw_value,category
+      When set, decoded CAN and SOME/IP signals carry a signal_str column with the category name.
+    default: ""
+
   warehouse_id:
     description: >
       SQL warehouse ID for the BLF signal viewer app.

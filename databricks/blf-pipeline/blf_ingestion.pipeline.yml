@@ -14,6 +14,7 @@ resources:
         blf.target_schema:       ${var.target_schema}
         blf.signals_path:        ${var.signals_path}
         blf.someip_signals_path: ${var.someip_signals_path}
+        blf.enum_signals_path:   ${var.enum_signals_path}
 
       libraries:
         # DLT pipeline definition (path relative to this file)

@@ -113,13 +113,16 @@ if _LOCAL_DEV:
                             "timestamp_s": t,
                             "timestamp_ns": ts_ns,
                             "signal_value": v,
+                            "signal_str": None,
                         }
                     )
             return pd.DataFrame(rows)
         # Single-signal fallback (ORDER BY timestamp_ns, no PARTITION BY)
         _fb = params or ["CAN", 1, "GPS_Latitude"]
         vals = _dummy_values(str(_fb[0]), int(_fb[1]), str(_fb[2]))
-        return pd.DataFrame({"timestamp_ns": _DUMMY_TS_NS, "signal_value": vals})
+        return pd.DataFrame(
+            {"timestamp_ns": _DUMMY_TS_NS, "signal_value": vals, "signal_str": [None] * len(_DUMMY_TS_NS)}
+        )
 
 
 def _run_query(stmt: str, params: list | dict | None, user_token: str | None = None) -> pd.DataFrame:
@@ -317,31 +320,34 @@ def _empty_fig(msg="") -> go.Figure:
     return fig
 
 
-_Traces = list[tuple[str, int, str, pd.Series, pd.Series]]
+_Traces = list[tuple[str, int, str, pd.Series, pd.Series, "pd.Series | None"]]
 
 _VAL_WIDTH = 12  # fixed character width for right-aligned signal values in hover tooltip
 
 
-def _hover_customdata(y: pd.Series) -> "list[list[str]]":
-    """Return customdata for right-aligned signal value column (monospace, &nbsp; padded)."""
+def _hover_customdata(y: pd.Series, y_str: "pd.Series | None" = None) -> "list[list[str]]":
+    """Return customdata for hover tooltip: category string when available, formatted float otherwise."""
+    if y_str is not None:
+        return [[str(s) if pd.notna(s) else f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")] for v, s in zip(y, y_str)]
     return [[f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")] for v in y]
 
 
 def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
     fig = go.Figure()
-    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _ in traces), default=0)
-    for src, channel, name, x, y in traces:
+    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
+    for src, channel, name, x, y, y_str in traces:
         label = f"{src}{channel}::{name}"
         pad = "&nbsp;" * (max_label - len(label))
+        y_plot = y_str if y_str is not None else y
         fig.add_trace(
             go.Scattergl(
                 x=x,
-                y=y,
+                y=y_plot,
                 mode="lines+markers",
                 line=dict(shape="hv"),
                 name=label,
                 showlegend=False,
-                customdata=_hover_customdata(y),
+                customdata=_hover_customdata(y, y_str),
                 hovertemplate=f"{label}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )
@@ -379,13 +385,13 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
     n = len(traces)
     spacing = max(0.03, 0.20 / n) if xaxis_mode in ("synced", "free") else max(0.02, 0.20 / n)
     h = (1.0 - spacing * max(n - 1, 0)) / n
-    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _ in traces), default=0)
+    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
 
     fig = go.Figure()
     axes_kw: dict = {}
     annotations = []
 
-    for i, (src, channel, name, x, y) in enumerate(traces):
+    for i, (src, channel, name, x, y, y_str) in enumerate(traces):
         bottom = max(0.0, 1.0 - (i + 1) * h - i * spacing)
         top = min(1.0, 1.0 - i * (h + spacing))
         yref = "y" if i == 0 else f"y{i + 1}"
@@ -411,17 +417,18 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
 
         label = f"{src}{channel}::{name}"
         pad = "&nbsp;" * (max_label - len(label))
+        y_plot = y_str if y_str is not None else y
         fig.add_trace(
             go.Scattergl(
                 x=x,
-                y=y,
+                y=y_plot,
                 mode="lines+markers",
                 line=dict(shape="hv"),
                 name=label,
                 xaxis=xref,
                 yaxis=yref,
                 showlegend=False,
-                customdata=_hover_customdata(y),
+                customdata=_hover_customdata(y, y_str),
                 hovertemplate=f"{label}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )
@@ -474,13 +481,21 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
 def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
     """Return (row_data, col_defs) for the AgGrid pivot view."""
     parts = [traces[0][3].reset_index(drop=True).astype(str).rename("time")]
-    for src, channel, name, _, y in traces:
-        parts.append(y.reset_index(drop=True).rename(f"{src}{channel}::{name}"))
+    categorical_cols: set[str] = set()
+    for src, channel, name, _, y, y_str in traces:
+        col_name = f"{src}{channel}::{name}"
+        col = (y_str if y_str is not None else y).reset_index(drop=True)
+        parts.append(col.rename(col_name))
+        if y_str is not None:
+            categorical_cols.add(col_name)
     pivot = pd.concat(parts, axis=1)
 
     signal_cols = [c for c in pivot.columns if c != "time"]
     col_defs = [{"field": "time", "headerName": "Time", "pinned": "left", "filter": True, "minWidth": 160}] + [
-        {"field": c, "headerName": c, "type": "numericColumn", "filter": True, "minWidth": 140} for c in signal_cols
+        {"field": c, "headerName": c, "filter": True, "minWidth": 140}
+        if c in categorical_cols
+        else {"field": c, "headerName": c, "type": "numericColumn", "filter": True, "minWidth": 140}
+        for c in signal_cols
     ]
     return pivot.to_dict("records"), col_defs
 
@@ -1379,21 +1394,21 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
 
     stmt = (
         f"WITH bucketed AS ("
-        f"  SELECT signal_source, channel, signal_name, event_time, timestamp_s, timestamp_ns, signal_value,"
+        f"  SELECT signal_source, channel, signal_name, event_time, timestamp_s, timestamp_ns, signal_value, signal_str,"
         f"    NTILE({int(max_pts)}) OVER ("
         f"      PARTITION BY signal_source, channel, signal_name ORDER BY timestamp_ns"
         f"    ) AS bucket"
         f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{time_filter}"
         f"), agg AS ("
         f"  SELECT signal_source, channel, signal_name, bucket,"
-        f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value), signal_value) AS lo,"
-        f"    MAX_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value), signal_value) AS hi"
+        f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS lo,"
+        f"    MAX_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS hi"
         f"  FROM bucketed GROUP BY signal_source, channel, signal_name, bucket"
         f") SELECT * FROM ("
         f"  SELECT signal_source, channel, signal_name, lo.event_time AS event_time, lo.timestamp_s AS timestamp_s,"
-        f"    lo.timestamp_ns AS timestamp_ns, lo.signal_value AS signal_value FROM agg"
+        f"    lo.timestamp_ns AS timestamp_ns, lo.signal_value AS signal_value, lo.signal_str AS signal_str FROM agg"
         f"  UNION ALL"
-        f"  SELECT signal_source, channel, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value FROM agg"
+        f"  SELECT signal_source, channel, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value, hi.signal_str FROM agg"
         f") ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
     )
     try:
@@ -1459,7 +1474,8 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
                 if "event_time" in df_all.columns and sub["event_time"].notna().any()
                 else sub["timestamp_s"]
             )
-            traces.append((src, channel, name, x, sub["signal_value"]))
+            y_str = sub["signal_str"] if "signal_str" in df_all.columns and sub["signal_str"].notna().any() else None
+            traces.append((src, channel, name, x, sub["signal_value"], y_str))
 
         if traces:
             h = int(chart_height or 600)
@@ -1467,7 +1483,7 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
                 _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h, xaxis_mode or "shared")
             )
             row_data, col_defs = _pivot_table(traces)
-            total = sum(len(x) for _, _, _, x, _ in traces)
+            total = sum(len(x) for _, _, _, x, _, _ in traces)
             chart_msg = f"{total:,} pts across {len(traces)} signal(s)."
         else:
             chart_msg = "No data for selected signals."

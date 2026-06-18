@@ -4,9 +4,9 @@ mod perfetto;
 mod table;
 
 use blf::{
-    check_can_csv, check_someip_csv, BaseObject, CanSignalDb, ChannelDb, ChannelType,
-    ContainerHeader, Dir, Ip, Message, ParseError, SomeIp, SomeIpSignalDb, Timestamp, Transport,
-    Writer,
+    check_can_csv, check_enum_csv, check_someip_csv, BaseObject, CanSignalDb, ChannelDb,
+    ChannelType, ContainerHeader, Dir, EnumValueMap, Ip, Message, ParseError, SomeIp,
+    SomeIpSignalDb, Timestamp, Transport, Writer,
 };
 use clap::{Parser, Subcommand};
 use std::borrow::Borrow;
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-type SomeIpDecoded<'a> = Option<(u16, u16, Vec<(&'a str, f64)>)>;
+type SomeIpDecoded<'a> = Option<(u16, u16, Vec<(&'a str, f64, Option<String>)>)>;
 
 #[derive(Parser)]
 #[command(
@@ -58,6 +58,9 @@ enum Command {
         /// SOME/IP signal definitions CSV
         #[arg(long, value_name = "FILE")]
         someip_signals: Option<PathBuf>,
+        /// Enum/categorical value mapping CSV (signal_name,raw_value,category)
+        #[arg(long, value_name = "FILE")]
+        enum_signals: Option<PathBuf>,
         /// Channel number to channel name mapping CSV
         #[arg(long, value_name = "FILE")]
         channels: Option<PathBuf>,
@@ -119,6 +122,7 @@ fn write_csv_with_signals(
     objects: impl Iterator<Item = impl Borrow<BaseObject>>,
     signals: Option<&Path>,
     someip_signals: Option<&Path>,
+    enum_signals: Option<&Path>,
     start_ns: u64,
     channel_db: Option<&ChannelDb>,
 ) -> Result<usize> {
@@ -127,6 +131,9 @@ fn write_csv_with_signals(
         let someip_db = someip_signals
             .map(|p| SomeIpSignalDb::from_csv(BufReader::new(File::open(p)?)))
             .transpose()?;
+        let enum_map: Option<EnumValueMap> = enum_signals
+            .map(|p| blf::signal::enum_value_map_from_csv(BufReader::new(File::open(p)?)))
+            .transpose()?;
         Ok(blf::csv::write_csv_signals(
             w,
             objects,
@@ -134,6 +141,7 @@ fn write_csv_with_signals(
             someip_db.as_ref(),
             start_ns,
             channel_db,
+            enum_map.as_ref(),
         )?)
     } else {
         Ok(blf::csv::write_csv_raw(w, objects, start_ns, channel_db)?)
@@ -175,7 +183,7 @@ fn write_perfetto_output(
         match &obj.message {
             Message::Can(m) => {
                 if let Some(db) = &signal_db {
-                    for (name, value) in db.extract(m.id, &m.data) {
+                    for (name, value, _) in db.extract(m.id, &m.data, None) {
                         let uuid = writer.get_or_create_track(name, "")?;
                         writer.write_counter(ts, uuid, value)?;
                     }
@@ -184,7 +192,7 @@ fn write_perfetto_output(
             }
             Message::CanFd(m) => {
                 if let Some(db) = &signal_db {
-                    for (name, value) in db.extract(m.id, &m.data) {
+                    for (name, value, _) in db.extract(m.id, &m.data, None) {
                         let uuid = writer.get_or_create_track(name, "")?;
                         writer.write_counter(ts, uuid, value)?;
                     }
@@ -193,7 +201,7 @@ fn write_perfetto_output(
             }
             Message::CanFd64(m) => {
                 if let Some(db) = &signal_db {
-                    for (name, value) in db.extract(m.id, &m.data) {
+                    for (name, value, _) in db.extract(m.id, &m.data, None) {
                         let uuid = writer.get_or_create_track(name, "")?;
                         writer.write_counter(ts, uuid, value)?;
                     }
@@ -389,7 +397,7 @@ fn try_someip_decode<'a>(
         Transport::Tcp(t) => &t.data,
     };
     let someip = SomeIp::parse(someip_data).ok()?;
-    let vals = db.extract(someip.service_id, someip.method_id, &someip.payload);
+    let vals = db.extract(someip.service_id, someip.method_id, &someip.payload, None);
     if vals.is_empty() {
         None
     } else {
@@ -426,13 +434,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
             Message::Can(m) => {
                 if let Some(db) = can_db {
                     let vals = if db.is_container(m.id) {
-                        db.extract_container(m.id, &m.data, ContainerHeader::Short)
+                        db.extract_container(m.id, &m.data, ContainerHeader::Short, None)
                     } else {
-                        db.extract(m.id, &m.data)
+                        db.extract(m.id, &m.data, None)
                     };
                     let id = format!("0x{:X}", m.id);
                     let ch = ch_name(channel_db, ChannelType::Can, m.channel as u32);
-                    for (name, value) in vals {
+                    for (name, value, cat) in vals {
                         tbl.push(vec![
                             ns_str.clone(),
                             abs.clone(),
@@ -440,7 +448,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                             ch.clone(),
                             id.clone(),
                             name.to_string(),
-                            value.to_string(),
+                            cat.unwrap_or_else(|| value.to_string()),
                         ]);
                     }
                 }
@@ -448,13 +456,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
             Message::CanFd(m) => {
                 if let Some(db) = can_db {
                     let vals = if db.is_container(m.id) {
-                        db.extract_container(m.id, &m.data, ContainerHeader::Short)
+                        db.extract_container(m.id, &m.data, ContainerHeader::Short, None)
                     } else {
-                        db.extract(m.id, &m.data)
+                        db.extract(m.id, &m.data, None)
                     };
                     let id = format!("0x{:X}", m.id);
                     let ch = ch_name(channel_db, ChannelType::Can, m.channel as u32);
-                    for (name, value) in vals {
+                    for (name, value, cat) in vals {
                         tbl.push(vec![
                             ns_str.clone(),
                             abs.clone(),
@@ -462,7 +470,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                             ch.clone(),
                             id.clone(),
                             name.to_string(),
-                            value.to_string(),
+                            cat.unwrap_or_else(|| value.to_string()),
                         ]);
                     }
                 }
@@ -470,13 +478,13 @@ fn print_signal_table<T: Borrow<BaseObject>>(
             Message::CanFd64(m) => {
                 if let Some(db) = can_db {
                     let vals = if db.is_container(m.id) {
-                        db.extract_container(m.id, &m.data, ContainerHeader::Short)
+                        db.extract_container(m.id, &m.data, ContainerHeader::Short, None)
                     } else {
-                        db.extract(m.id, &m.data)
+                        db.extract(m.id, &m.data, None)
                     };
                     let id = format!("0x{:X}", m.id);
                     let ch = ch_name(channel_db, ChannelType::Can, m.channel as u32);
-                    for (name, value) in vals {
+                    for (name, value, cat) in vals {
                         tbl.push(vec![
                             ns_str.clone(),
                             abs.clone(),
@@ -484,7 +492,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                             ch.clone(),
                             id.clone(),
                             name.to_string(),
-                            value.to_string(),
+                            cat.unwrap_or_else(|| value.to_string()),
                         ]);
                     }
                 }
@@ -494,7 +502,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                     if let Some((svc, mth, vals)) = try_someip_decode(db, m.ether_type, &m.data) {
                         let id = format!("0x{:04X}{:04X}", svc, mth);
                         let ch = ch_name(channel_db, ChannelType::Ethernet, m.channel as u32);
-                        for (name, value) in vals {
+                        for (name, value, cat) in vals {
                             tbl.push(vec![
                                 ns_str.clone(),
                                 abs.clone(),
@@ -502,7 +510,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                                 ch.clone(),
                                 id.clone(),
                                 name.to_string(),
-                                value.to_string(),
+                                cat.unwrap_or_else(|| value.to_string()),
                             ]);
                         }
                     }
@@ -513,7 +521,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                     if let Some((svc, mth, vals)) = try_someip_decode(db, m.ether_type, &m.data) {
                         let id = format!("0x{:04X}{:04X}", svc, mth);
                         let ch = ch_name(channel_db, ChannelType::Ethernet, m.channel as u32);
-                        for (name, value) in vals {
+                        for (name, value, cat) in vals {
                             tbl.push(vec![
                                 ns_str.clone(),
                                 abs.clone(),
@@ -521,7 +529,7 @@ fn print_signal_table<T: Borrow<BaseObject>>(
                                 ch.clone(),
                                 id.clone(),
                                 name.to_string(),
-                                value.to_string(),
+                                cat.unwrap_or_else(|| value.to_string()),
                             ]);
                         }
                     }
@@ -610,10 +618,13 @@ fn cmd_check(path: PathBuf) -> Result<()> {
                     detected = "can";
                 } else if trimmed.starts_with("service_id") {
                     detected = "someip";
+                } else if trimmed.starts_with("signal_name") {
+                    detected = "enum";
                 } else {
                     eprintln!(
                         "error: cannot detect CSV type from header {:?}; \
-                         expected header starting with 'message_id' (CAN) or 'service_id' (SOME/IP)",
+                         expected header starting with 'message_id' (CAN), 'service_id' (SOME/IP), \
+                         or 'signal_name' (enum)",
                         trimmed
                     );
                     std::process::exit(1);
@@ -626,8 +637,10 @@ fn cmd_check(path: PathBuf) -> Result<()> {
 
     let errors = if csv_type == "can" {
         check_can_csv(BufReader::new(File::open(&path)?))
-    } else {
+    } else if csv_type == "someip" {
         check_someip_csv(BufReader::new(File::open(&path)?))
+    } else {
+        check_enum_csv(BufReader::new(File::open(&path)?))
     };
 
     let display = path.display();
@@ -679,6 +692,7 @@ fn ext(p: &Path) -> &str {
 struct ParseOptions {
     signals: Option<PathBuf>,
     someip_signals_path: Option<PathBuf>,
+    enum_signals_path: Option<PathBuf>,
     channels_path: Option<PathBuf>,
     quiet: bool,
     pdu_list: bool,
@@ -718,6 +732,7 @@ fn cmd_parse(
             output.as_ref().unwrap(),
             opts.signals,
             opts.someip_signals_path,
+            opts.enum_signals_path,
             channel_db.as_ref(),
         );
     }
@@ -762,6 +777,7 @@ fn cmd_parse(
                 chunk_results.iter().flatten(),
                 opts.signals.as_deref(),
                 opts.someip_signals_path.as_deref(),
+                opts.enum_signals_path.as_deref(),
                 start_ns,
                 channel_db.as_ref(),
             )?;
@@ -903,6 +919,7 @@ fn cmd_parse_mf4(input: PathBuf, output: Option<PathBuf>, opts: ParseOptions) ->
                     objects.iter(),
                     opts.signals.as_deref(),
                     opts.someip_signals_path.as_deref(),
+                    opts.enum_signals_path.as_deref(),
                     start_time_ns,
                     channel_db.as_ref(),
                 )?;
@@ -960,6 +977,7 @@ fn cmd_parse_mf4(input: PathBuf, output: Option<PathBuf>, opts: ParseOptions) ->
             reader.filter_map(|r| r.ok()),
             opts.signals.as_deref(),
             opts.someip_signals_path.as_deref(),
+            opts.enum_signals_path.as_deref(),
             start_time_ns,
             channel_db.as_ref(),
         )?;
@@ -1025,6 +1043,7 @@ fn cmd_parse_csv_stream(
     output: &Path,
     signals: Option<PathBuf>,
     someip_signals_path: Option<PathBuf>,
+    enum_signals_path: Option<PathBuf>,
     channel_db: Option<&ChannelDb>,
 ) -> Result<()> {
     let t = time::Instant::now();
@@ -1036,6 +1055,7 @@ fn cmd_parse_csv_stream(
         reader.filter_map(|r| r.ok()),
         signals.as_deref(),
         someip_signals_path.as_deref(),
+        enum_signals_path.as_deref(),
         start_ns,
         channel_db,
     )?;
@@ -1105,6 +1125,7 @@ fn main() -> Result<()> {
             repeat,
             threads,
             someip_signals,
+            enum_signals,
             channels,
             quiet,
             pdu_list,
@@ -1116,6 +1137,7 @@ fn main() -> Result<()> {
             ParseOptions {
                 signals,
                 someip_signals_path: someip_signals,
+                enum_signals_path: enum_signals,
                 channels_path: channels,
                 quiet,
                 pdu_list,

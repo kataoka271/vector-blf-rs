@@ -325,6 +325,7 @@ fn csv_signals_header_only() {
         None,
         0,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(count, 0);
@@ -332,7 +333,7 @@ fn csv_signals_header_only() {
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0],
-        "timestamp_ns,absolute_timestamp,channel,message_id,signal_name,value"
+        "timestamp_ns,absolute_timestamp,channel,message_id,signal_name,value,category"
     );
 }
 
@@ -344,7 +345,7 @@ fn csv_signals_can_match() {
     let data = [0x00u8, 0x01, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00];
     let obj = make_can(1_000_000, 1, 0x100, false, Dir::Rx, &data);
     let mut out = Vec::<u8>::new();
-    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None).unwrap();
+    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None, None).unwrap();
     assert_eq!(count, 2);
     let rows = csv_rows(&out);
     assert_eq!(rows.len(), 3);
@@ -363,7 +364,7 @@ fn csv_signals_can_no_match() {
     let db = engine_signal_db();
     let obj = make_can(1_000_000, 1, 0x999, false, Dir::Rx, &[0x01, 0x02]);
     let mut out = Vec::<u8>::new();
-    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None).unwrap();
+    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None, None).unwrap();
     assert_eq!(count, 0);
     assert_eq!(csv_rows(&out).len(), 1); // header only
 }
@@ -378,11 +379,11 @@ fn csv_signals_row_format() {
     // raw=42 → 42*1.0+0.0 = 42
     let obj = make_can(500_000, 3, 0x200, false, Dir::Rx, &[42]);
     let mut out = Vec::<u8>::new();
-    write_csv_signals(&mut out, [obj], &db, None, 0, None).unwrap();
+    write_csv_signals(&mut out, [obj], &db, None, 0, None, None).unwrap();
     let rows = csv_rows(&out);
     assert_eq!(
         rows[1],
-        "500000,1970-01-01T00:00:00.000500000Z,3,0x200,Voltage,42"
+        "500000,1970-01-01T00:00:00.000500000Z,3,0x200,Voltage,42,"
     );
 }
 
@@ -395,7 +396,7 @@ fn csv_signals_canfd_match() {
     data[1] = 0x02;
     let obj = make_canfd(2_000_000, 1, 0x100, &data);
     let mut out = Vec::<u8>::new();
-    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None).unwrap();
+    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None, None).unwrap();
     assert!(count > 0);
     let rows = csv_rows(&out);
     assert!(
@@ -416,7 +417,7 @@ fn csv_signals_canfd64_match() {
     data[1] = 0x04;
     let obj = make_canfd64(3_000_000, 1, 0x100, &data);
     let mut out = Vec::<u8>::new();
-    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None).unwrap();
+    let count = write_csv_signals(&mut out, [obj], &db, None, 0, None, None).unwrap();
     assert!(count > 0);
     let rows = csv_rows(&out);
     assert!(
@@ -438,9 +439,9 @@ fn csv_signals_canfd64_channel_cast_to_u32() {
     };
     let obj = make_canfd64(0, 255, 0x300, &[1]);
     let mut out = Vec::<u8>::new();
-    write_csv_signals(&mut out, [obj], &db, None, 0, None).unwrap();
+    write_csv_signals(&mut out, [obj], &db, None, 0, None, None).unwrap();
     let rows = csv_rows(&out);
-    assert_eq!(rows[1], "0,1970-01-01T00:00:00.000000000Z,255,0x300,Sig,1");
+    assert_eq!(rows[1], "0,1970-01-01T00:00:00.000000000Z,255,0x300,Sig,1,");
 }
 
 #[test]
@@ -466,7 +467,7 @@ fn csv_signals_mixed_ids_only_matching_emitted() {
         ),
     ];
     let mut out = Vec::<u8>::new();
-    let count = write_csv_signals(&mut out, objs, &db, None, 0, None).unwrap();
+    let count = write_csv_signals(&mut out, objs, &db, None, 0, None, None).unwrap();
     // Each 0x100 frame has 2 signals (EngineSpeed + Throttle); 0x999 has none
     assert_eq!(count, 4);
 }

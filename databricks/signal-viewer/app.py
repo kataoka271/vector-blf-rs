@@ -930,7 +930,8 @@ app.clientside_callback(
         var bySource = cache.filter(function(r) { return sourceSet.has(r.signal_source); });
         var seen = {};
         bySource.forEach(function(r) { seen[r.signal_source + r.channel] = true; });
-        var opts = Object.keys(seen).sort().map(function(k) { return { label: k, value: k }; });
+        function chLabel(k) { return k.startsWith('SOMEIP') ? 'ETH' + k.slice(6) : k; }
+        var opts = Object.keys(seen).sort().map(function(k) { return { label: chLabel(k), value: k }; });
         return [opts, opts.map(function(o) { return o.value; })];
     }
     """,
@@ -963,7 +964,9 @@ app.clientside_callback(
 
         function toOpt(r) {
             var key = r.signal_source + r.channel + "::" + r.signal_name;
-            return { label: key, value: key };
+            var src = r.signal_source === 'SOMEIP' ? 'ETH' : r.signal_source;
+            var label = src + r.channel + "::" + r.signal_name;
+            return { label: label, value: key };
         }
 
         var bySource = cache.filter(function(r) { return sourceSet.has(r.signal_source); });

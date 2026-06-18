@@ -82,8 +82,16 @@ if _LOCAL_DEV:
         if "t_min" in stmt:
             return pd.DataFrame({"t_min": [0.0], "t_max": [_DUMMY_DURATION], "t0": [_DUMMY_T0]})
         if "PARTITION BY signal_source, channel, signal_name" in stmt:
+            # params = [src, ch, name, src, ch, name, ...] + optional [t_lo, t_hi]
+            if params:
+                p = list(params)
+                n_triples = len(p) // 3
+                requested = {(str(p[i * 3]), int(p[i * 3 + 1]), str(p[i * 3 + 2])) for i in range(n_triples)}
+                catalog = [(s, c, n) for s, c, n in _DUMMY_CATALOG if (s, c, n) in requested]
+            else:
+                catalog = _DUMMY_CATALOG
             rows = []
-            for src, ch, name in _DUMMY_CATALOG:
+            for src, ch, name in catalog:
                 vals = _dummy_values(src, ch, name)
                 for t, ts_ns, v in zip(_DUMMY_T, _DUMMY_TS_NS, vals):
                     rows.append(
@@ -515,6 +523,14 @@ app.layout = dbc.Container(
     style={"height": "100vh", "backgroundColor": _BG, "fontFamily": "Inter, system-ui, sans-serif"},
     children=[
         dcc.Location(id="url", refresh=False),
+        dbc.Toast(
+            id="replot-toast",
+            header="Re-plot needed",
+            icon="warning",
+            is_open=False,
+            dismissable=True,
+            style={"position": "fixed", "bottom": "20px", "right": "20px", "width": "300px", "zIndex": 9999},
+        ),
         dbc.Row(
             className="h-100 flex-nowrap g-0",
             children=[
@@ -731,10 +747,6 @@ app.layout = dbc.Container(
                                 ],
                                 className="d-flex align-items-center gap-2",
                             ),
-                        ),
-                        html.Div(
-                            id="replot-msg",
-                            style={"fontSize": "12px", "color": "#f0a500", "minHeight": "16px"},
                         ),
                         dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
                         dbc.Button(
@@ -1221,19 +1233,20 @@ def update_time_slider(store, current_value, is_disabled):
 
 
 @callback(
-    Output("replot-msg", "children"),
+    Output("replot-toast", "children"),
+    Output("replot-toast", "is_open"),
     Input("signal-select", "value"),
     Input("signal-data-cache", "data"),
 )
 def update_replot_notice(selected, cache_data):
     if not cache_data or not selected:
-        return ""
+        return "", False
     df = _store_to_df(cache_data)
     cached_keys = set(df["signal_source"] + df["channel"].astype(str) + "::" + df["signal_name"])
     new_count = sum(1 for s in selected if s not in cached_keys)
     if new_count == 0:
-        return ""
-    return f"Re-plot needed: {new_count} new signal(s) not yet fetched."
+        return "", False
+    return f"{new_count} new signal(s) not yet fetched. Click Plot to update.", True
 
 
 @callback(

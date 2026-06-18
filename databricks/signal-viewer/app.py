@@ -781,6 +781,7 @@ app.layout = dbc.Container(
                         dcc.Loading(
                             type="circle",
                             color=_ACCENT,
+                            target_components={"signal-data-cache": "data", "chart": "figure"},
                             children=dcc.Graph(
                                 id="chart",
                                 config={"displayModeBar": True, "scrollZoom": True},
@@ -962,6 +963,14 @@ app.clientside_callback(
 )
 
 
+app.clientside_callback(
+    "function(n) { return true; }",
+    Output("plot-btn", "disabled", allow_duplicate=True),
+    Input("plot-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
 @callback(
     Output("signal-select", "value", allow_duplicate=True),
     Input("select-all-btn", "n_clicks"),
@@ -1071,6 +1080,7 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     Output("grid", "columnDefs"),
     Output("map-chart", "figure"),
     Output("map-section", "style"),
+    Output("plot-btn", "disabled", allow_duplicate=True),
     Input("signal-data-cache", "data"),
     Input("signal-select", "value"),
     Input("layout-mode", "value"),
@@ -1084,8 +1094,10 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
 
+    btn_disabled = False if dash.ctx.triggered_id == "signal-data-cache" else dash.no_update
+
     if cache_data is None:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, map_empty, map_hidden
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, map_empty, map_hidden, btn_disabled
 
     df_all = _store_to_df(cache_data)
 
@@ -1154,7 +1166,7 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
                 pts = len(merged)
                 chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
 
-    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style
+    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style, btn_disabled
 
 
 @callback(

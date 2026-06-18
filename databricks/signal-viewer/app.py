@@ -563,6 +563,20 @@ app.layout = dbc.Container(
                                 value=["CAN", "SOMEIP"],
                             ),
                         ),
+                        _section(
+                            "Channel",
+                            dbc.Checklist(
+                                id="channel-filter",
+                                options=[],
+                                value=[],
+                                labelStyle={"whiteSpace": "nowrap"},
+                                style={
+                                    "fontSize": "11px",
+                                    "maxHeight": "80px",
+                                    "overflowY": "auto",
+                                },
+                            ),
+                        ),
                         dbc.Input(
                             id="signal-search",
                             type="search",
@@ -909,7 +923,26 @@ def refresh_signal_cache(_):
 
 app.clientside_callback(
     """
-    function(sources, cache, search, currentValue) {
+    function(sources, cache) {
+        if (!cache || !sources || sources.length === 0) return [[], []];
+        var sourceSet = new Set(sources);
+        var bySource = cache.filter(function(r) { return sourceSet.has(r.signal_source); });
+        var seen = {};
+        bySource.forEach(function(r) { seen[r.signal_source + r.channel] = true; });
+        var opts = Object.keys(seen).sort().map(function(k) { return { label: k, value: k }; });
+        return [opts, opts.map(function(o) { return o.value; })];
+    }
+    """,
+    Output("channel-filter", "options"),
+    Output("channel-filter", "value"),
+    Input("source-filter", "value"),
+    Input("all-signals-cache", "data"),
+)
+
+
+app.clientside_callback(
+    """
+    function(sources, cache, search, channels, currentValue) {
         var no_update = window.dash_clientside.no_update;
 
         if (cache === null || cache === undefined) {
@@ -933,12 +966,18 @@ app.clientside_callback(
         }
 
         var bySource = cache.filter(function(r) { return sourceSet.has(r.signal_source); });
-        var allOpts = bySource.map(toOpt);
 
-        var filtered = bySource;
+        var channelSet = (channels && channels.length > 0) ? new Set(channels) : null;
+        var byChannel = channelSet
+            ? bySource.filter(function(r) { return channelSet.has(r.signal_source + r.channel); })
+            : bySource;
+
+        var allOpts = byChannel.map(toOpt);
+
+        var filtered = byChannel;
         if (search) {
             var kw = search.toLowerCase();
-            filtered = bySource.filter(function(r) {
+            filtered = byChannel.filter(function(r) {
                 return r.signal_name.toLowerCase().indexOf(kw) !== -1 ||
                        r.signal_source.toLowerCase().indexOf(kw) !== -1;
             });
@@ -971,6 +1010,7 @@ app.clientside_callback(
     Input("source-filter", "value"),
     Input("all-signals-cache", "data"),
     Input("signal-search", "value"),
+    Input("channel-filter", "value"),
     State("signal-select", "value"),
 )
 

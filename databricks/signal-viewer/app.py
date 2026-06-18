@@ -224,7 +224,7 @@ def build_perfetto_trace(df: pd.DataFrame, selected: list[str]) -> bytes:
         try:
             ts = pd.Timestamp(first_ts)
             ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
-            if not pd.isna(ts):
+            if isinstance(ts, pd.Timestamp):
                 realtime_ns = int(ts.timestamp() * 1e9)
         except Exception:
             pass
@@ -892,10 +892,11 @@ def _fetch_global_time_range() -> dict | None:
         t0_raw = df["t0"].iloc[0] if "t0" in df.columns else None
         if t0_raw is not None and pd.isna(t0_raw):
             t0_raw = None
+        t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
         return {
             "min": float(df["t_min"].iloc[0]),
             "max": float(df["t_max"].iloc[0]),
-            "t0": pd.Timestamp(t0_raw).isoformat() if t0_raw is not None else None,
+            "t0": t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None,
         }
     except Exception as exc:
         print(f"[_fetch_global_time_range] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
@@ -1081,7 +1082,8 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
         t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
         if t0_raw is not None and pd.isna(t0_raw):
             t0_raw = None
-        t0_iso = pd.Timestamp(t0_raw).isoformat() if t0_raw is not None else None
+        t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
+        t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
         new_time_range = {
             "min": float(range_df["t_min"].iloc[0]),
             "max": float(range_df["t_max"].iloc[0]),
@@ -1228,10 +1230,11 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
     Output("time-range-slider", "marks"),
     Output("time-range-slider", "value"),
     Output("time-range-slider", "disabled"),
-    Output("time-range-label", "children"),
+    Output("time-range-label", "children", allow_duplicate=True),
     Input("time-range-store", "data"),
     State("time-range-slider", "value"),
     State("time-range-slider", "disabled"),
+    prevent_initial_call="initial_duplicate",
 )
 def update_time_slider(store, current_value, is_disabled):
     if store is None:
@@ -1241,12 +1244,13 @@ def update_time_slider(store, current_value, is_disabled):
     step = max(0.1, duration / 1000)
 
     t0_raw = pd.Timestamp(store["t0"]) if store.get("t0") else None
-    t0 = None if (t0_raw is None or pd.isna(t0_raw)) else t0_raw
+    t0 = t0_raw if isinstance(t0_raw, pd.Timestamp) else None
 
     def _abs_ts(offset_s: float) -> str:
         if t0 is None:
             return _fmt_s(offset_s - t_min)
         ts = t0 + pd.Timedelta(seconds=offset_s - t_min)
+        assert isinstance(ts, pd.Timestamp)
         return ts.strftime("%H:%M:%S")
 
     marks = {}
@@ -1264,12 +1268,50 @@ def update_time_slider(store, current_value, is_disabled):
         low, high = t_min, t_max
 
     if t0 is not None:
-        low_ts = (t0 + pd.Timedelta(seconds=low - t_min)).strftime("%H:%M:%S")
-        high_ts = (t0 + pd.Timedelta(seconds=high - t_min)).strftime("%H:%M:%S")
+        lo_dt = t0 + pd.Timedelta(seconds=low - t_min)
+        hi_dt = t0 + pd.Timedelta(seconds=high - t_min)
+        assert isinstance(lo_dt, pd.Timestamp) and isinstance(hi_dt, pd.Timestamp)
+        low_ts = lo_dt.strftime("%H:%M:%S")
+        high_ts = hi_dt.strftime("%H:%M:%S")
         label = f"{low_ts} – {high_ts}  (duration {_fmt_s(high - low)})"
     else:
         label = f"{_fmt_s(low - t_min)} – {_fmt_s(high - t_min)}  (total {_fmt_s(duration)})"
     return t_min, t_max, step, marks, [low, high], False, label
+
+
+app.clientside_callback(
+    """
+    function(value, store) {
+        if (!value || !store) return window.dash_clientside.no_update;
+        var lo = value[0], hi = value[1];
+        var tMin = store.min;
+        var t0 = store.t0 ? new Date(store.t0) : null;
+
+        function fmtHms(totalSec) {
+            var s = Math.floor(Math.abs(totalSec));
+            return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60]
+                .map(function(v) { return v.toString().padStart(2, '0'); }).join(':');
+        }
+        function fmtTime(offsetS) {
+            if (t0) {
+                var dt = new Date(t0.getTime() + (offsetS - tMin) * 1000);
+                return [dt.getUTCHours(), dt.getUTCMinutes(), dt.getUTCSeconds()]
+                    .map(function(v) { return v.toString().padStart(2, '0'); }).join(':');
+            }
+            return fmtHms(offsetS - tMin);
+        }
+
+        var loStr = fmtTime(lo), hiStr = fmtTime(hi), durStr = fmtHms(hi - lo);
+        if (t0) {
+            return loStr + ' – ' + hiStr + '  (duration ' + durStr + ')';
+        }
+        return loStr + ' – ' + hiStr + '  (total ' + fmtHms(store.max - store.min) + ')';
+    }
+    """,
+    Output("time-range-label", "children"),
+    Input("time-range-slider", "value"),
+    State("time-range-store", "data"),
+)
 
 
 @callback(

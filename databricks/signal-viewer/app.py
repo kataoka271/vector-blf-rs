@@ -3,6 +3,7 @@
 import base64
 import math
 import os
+import re
 import struct
 import traceback
 from typing import Literal
@@ -27,6 +28,17 @@ CATALOG = os.environ.get("BLF_CATALOG", "main")
 SCHEMA = os.environ.get("BLF_SCHEMA", "blf")
 _GOLD_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_gold_signals`"
 
+_KEY_RE = re.compile(r"^([A-Za-z]+)(\d+)::(.+)$")
+
+
+def _parse_key(key: str) -> tuple[str, int, str]:
+    """Parse '{signal_source}{channel}::{signal_name}' into (source, channel, name)."""
+    m = _KEY_RE.match(key)
+    if m:
+        return m.group(1), int(m.group(2)), m.group(3)
+    prefix, name = key.split("::", 1)
+    return prefix, 0, name
+
 
 # Databricks config (skipped in local dev mode)
 cfg = None if _LOCAL_DEV else Config()
@@ -41,22 +53,22 @@ if _LOCAL_DEV:
     _DUMMY_T0 = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
 
     _DUMMY_CATALOG = [
-        ("CAN", "EngineSpeed_rpm"),
-        ("CAN", "VehicleSpeed_kph"),
-        ("CAN", "BatteryVoltage_V"),
-        ("CAN", "SteeringAngle_deg"),
-        ("SOMEIP", "TemperatureSensor_C"),
-        ("SOMEIP", "AmbientLight_lux"),
-        ("CAN", "GPS_Latitude"),
-        ("CAN", "GPS_Longitude"),
+        ("CAN", 1, "EngineSpeed_rpm"),
+        ("CAN", 1, "VehicleSpeed_kph"),
+        ("CAN", 1, "BatteryVoltage_V"),
+        ("CAN", 1, "SteeringAngle_deg"),
+        ("SOMEIP", 0, "TemperatureSensor_C"),
+        ("SOMEIP", 0, "AmbientLight_lux"),
+        ("CAN", 1, "GPS_Latitude"),
+        ("CAN", 1, "GPS_Longitude"),
     ]
 
-    def _dummy_values(src: str, name: str) -> list[float]:
+    def _dummy_values(src: str, channel: int, name: str) -> list[float]:
         if name == "GPS_Latitude":
             return [35.6895 + 0.01 * math.sin(2 * math.pi * t / _DUMMY_DURATION) for t in _DUMMY_T]
         if name == "GPS_Longitude":
             return [139.6917 + 0.01 * math.cos(2 * math.pi * t / _DUMMY_DURATION) for t in _DUMMY_T]
-        seed = hash(f"{src}::{name}") & 0xFFFF
+        seed = hash(f"{src}{channel}::{name}") & 0xFFFF
         freq = 0.05 + (seed % 20) * 0.01
         amp = 10 + (seed % 90)
         offset = (seed % 100) - 50
@@ -65,18 +77,19 @@ if _LOCAL_DEV:
     def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
         print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
         if "DISTINCT" in stmt:
-            rows = [{"signal_name": n, "signal_source": s} for s, n in _DUMMY_CATALOG]
-            return pd.DataFrame(rows).sort_values(["signal_source", "signal_name"]).reset_index(drop=True)
+            rows = [{"signal_name": n, "signal_source": s, "channel": c} for s, c, n in _DUMMY_CATALOG]
+            return pd.DataFrame(rows).sort_values(["signal_source", "channel", "signal_name"]).reset_index(drop=True)
         if "t_min" in stmt:
             return pd.DataFrame({"t_min": [0.0], "t_max": [_DUMMY_DURATION], "t0": [_DUMMY_T0]})
-        if "PARTITION BY signal_source, signal_name" in stmt:
+        if "PARTITION BY signal_source, channel, signal_name" in stmt:
             rows = []
-            for src, name in _DUMMY_CATALOG:
-                vals = _dummy_values(src, name)
+            for src, ch, name in _DUMMY_CATALOG:
+                vals = _dummy_values(src, ch, name)
                 for t, ts_ns, v in zip(_DUMMY_T, _DUMMY_TS_NS, vals):
                     rows.append(
                         {
                             "signal_source": src,
+                            "channel": ch,
                             "signal_name": name,
                             "event_time": _DUMMY_T0 + pd.Timedelta(seconds=t),
                             "timestamp_s": t,
@@ -85,10 +98,9 @@ if _LOCAL_DEV:
                         }
                     )
             return pd.DataFrame(rows)
-        # Single-signal GPS query (ORDER BY timestamp_ns, no PARTITION BY)
-        src = (params or ["CAN", "GPS_Latitude"])[0]
-        name = (params or ["CAN", "GPS_Latitude"])[1]
-        vals = _dummy_values(src, name)
+        # Single-signal fallback (ORDER BY timestamp_ns, no PARTITION BY)
+        _fb = params or ["CAN", 1, "GPS_Latitude"]
+        vals = _dummy_values(str(_fb[0]), int(_fb[1]), str(_fb[2]))
         return pd.DataFrame({"timestamp_ns": _DUMMY_TS_NS, "signal_value": vals})
 
 
@@ -190,7 +202,7 @@ _PF_TYPE_COUNTER, _PF_SEQ_ID = 4, 1
 def build_perfetto_trace(df: pd.DataFrame, selected: list[str]) -> bytes:
     """Convert a signal DataFrame to a Perfetto native trace (.perfetto-trace) binary."""
     selected_set = set(selected)
-    key_col = df["signal_source"] + "::" + df["signal_name"]
+    key_col = df["signal_source"] + df["channel"].astype(str) + "::" + df["signal_name"]
     sub = df[key_col.isin(selected_set)].sort_values("timestamp_ns")
     if sub.empty:
         return b""
@@ -219,14 +231,13 @@ def build_perfetto_trace(df: pd.DataFrame, selected: list[str]) -> bytes:
 
     track_uuid: dict[str, int] = {}
     for i, key in enumerate(selected, start=1):
-        src, name = key.split("::", 1)
-        td = _pf_u64(_PF_TD_UUID, i) + _pf_str(_PF_TD_NAME, f"[{src}] {name}") + _pf_bytes(_PF_TD_COUNTER, b"")
+        td = _pf_u64(_PF_TD_UUID, i) + _pf_str(_PF_TD_NAME, key) + _pf_bytes(_PF_TD_COUNTER, b"")
         pkt = _pf_bytes(_PF_PKT_TRACK_DESCRIPTOR, td) + _pf_u64(_PF_PKT_TRUSTED_SEQ_ID, _PF_SEQ_ID)
         buf += _pf_packet(pkt)
         track_uuid[key] = i
 
     for row in sub.itertuples(index=False):
-        key = f"{row.signal_source}::{row.signal_name}"
+        key = f"{row.signal_source}{row.channel}::{row.signal_name}"
         uuid = track_uuid.get(key)
         if uuid is None:
             continue
@@ -288,13 +299,13 @@ def _empty_fig(msg="") -> go.Figure:
     return fig
 
 
-_Traces = list[tuple[str, str, pd.Series, pd.Series]]
+_Traces = list[tuple[str, int, str, pd.Series, pd.Series]]
 
 
 def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
     fig = go.Figure()
-    for src, name, x, y in traces:
-        fig.add_trace(go.Scattergl(x=x, y=y, mode="lines+markers", line=dict(shape="hv"), name=f"[{src}] {name}"))
+    for src, channel, name, x, y in traces:
+        fig.add_trace(go.Scattergl(x=x, y=y, mode="lines+markers", line=dict(shape="hv"), name=f"{src}{channel}::{name}"))
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor=_BG,
@@ -334,7 +345,7 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
     axes_kw: dict = {}
     annotations = []
 
-    for i, (src, name, x, y) in enumerate(traces):
+    for i, (src, channel, name, x, y) in enumerate(traces):
         bottom = max(0.0, 1.0 - (i + 1) * h - i * spacing)
         top = min(1.0, 1.0 - i * (h + spacing))
         yref = "y" if i == 0 else f"y{i + 1}"
@@ -364,7 +375,7 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
                 y=y,
                 mode="lines+markers",
                 line=dict(shape="hv"),
-                name=f"[{src}] {name}",
+                name=f"{src}{channel}::{name}",
                 xaxis=xref,
                 yaxis=yref,
                 showlegend=False,
@@ -373,7 +384,7 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
         axes_kw[ykey] = {"domain": [bottom, top], **_AXIS_BOX}
         annotations.append(
             {
-                "text": f"[{src}] {name}",
+                "text": f"{src}{channel}::{name}",
                 "xref": "paper",
                 "yref": "paper",
                 "x": 0,
@@ -417,9 +428,9 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
 
 def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
     """Return (row_data, col_defs) for the AgGrid pivot view."""
-    parts = [traces[0][2].reset_index(drop=True).astype(str).rename("time")]
-    for src, name, _, y in traces:
-        parts.append(y.reset_index(drop=True).rename(f"[{src}] {name}"))
+    parts = [traces[0][3].reset_index(drop=True).astype(str).rename("time")]
+    for src, channel, name, _, y in traces:
+        parts.append(y.reset_index(drop=True).rename(f"{src}{channel}::{name}"))
     pivot = pd.concat(parts, axis=1)
 
     signal_cols = [c for c in pivot.columns if c != "time"]
@@ -810,7 +821,7 @@ app.layout = dbc.Container(
 def _fetch_all_signals() -> list[dict] | None:
     try:
         df = _query(
-            f"SELECT DISTINCT signal_name, signal_source FROM {_GOLD_TABLE} ORDER BY signal_source, signal_name"
+            f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE} ORDER BY signal_source, channel, signal_name"
         )
         print(f"[_fetch_all_signals] fetched {len(df)} signal(s)", flush=True)
         return df.to_dict("records")
@@ -877,10 +888,8 @@ app.clientside_callback(
         var sourceSet = new Set(sources);
 
         function toOpt(r) {
-            return {
-                label: "[" + r.signal_source + "] " + r.signal_name,
-                value: r.signal_source + "::" + r.signal_name
-            };
+            var key = r.signal_source + r.channel + "::" + r.signal_name;
+            return { label: key, value: key };
         }
 
         var bySource = cache.filter(function(r) { return sourceSet.has(r.signal_source); });
@@ -963,9 +972,9 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     if not keys:
         return None, dash.no_update, "No signal selected."
 
-    key_pairs = [key.split("::", 1) for key in keys]
-    pair_filter = "(signal_source, signal_name) IN (" + ", ".join(["(?, ?)"] * len(key_pairs)) + ")"
-    pair_params = [part for pair in key_pairs for part in pair]
+    key_triples = [_parse_key(key) for key in keys]
+    pair_filter = "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
+    pair_params = [part for triple in key_triples for part in triple]
 
     time_filter = ""
     time_params: list = []
@@ -995,22 +1004,22 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
 
     stmt = (
         f"WITH bucketed AS ("
-        f"  SELECT signal_source, signal_name, event_time, timestamp_s, timestamp_ns, signal_value,"
+        f"  SELECT signal_source, channel, signal_name, event_time, timestamp_s, timestamp_ns, signal_value,"
         f"    NTILE({int(max_pts)}) OVER ("
-        f"      PARTITION BY signal_source, signal_name ORDER BY timestamp_ns"
+        f"      PARTITION BY signal_source, channel, signal_name ORDER BY timestamp_ns"
         f"    ) AS bucket"
         f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{time_filter}"
         f"), agg AS ("
-        f"  SELECT signal_source, signal_name, bucket,"
+        f"  SELECT signal_source, channel, signal_name, bucket,"
         f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value), signal_value) AS lo,"
         f"    MAX_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value), signal_value) AS hi"
-        f"  FROM bucketed GROUP BY signal_source, signal_name, bucket"
+        f"  FROM bucketed GROUP BY signal_source, channel, signal_name, bucket"
         f") SELECT * FROM ("
-        f"  SELECT signal_source, signal_name, lo.event_time AS event_time, lo.timestamp_s AS timestamp_s,"
+        f"  SELECT signal_source, channel, signal_name, lo.event_time AS event_time, lo.timestamp_s AS timestamp_s,"
         f"    lo.timestamp_ns AS timestamp_ns, lo.signal_value AS signal_value FROM agg"
         f"  UNION ALL"
-        f"  SELECT signal_source, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value FROM agg"
-        f") ORDER BY signal_source, signal_name, event_time, timestamp_ns"
+        f"  SELECT signal_source, channel, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value FROM agg"
+        f") ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
     )
     try:
         df = _query(stmt, pair_params + time_params)
@@ -1061,8 +1070,12 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
     if selected:
         traces: _Traces = []
         for key in selected:
-            src, name = key.split("::", 1)
-            sub = df_all[(df_all["signal_source"] == src) & (df_all["signal_name"] == name)]
+            src, channel, name = _parse_key(key)
+            sub = df_all[
+                (df_all["signal_source"] == src)
+                & (df_all["channel"] == channel)
+                & (df_all["signal_name"] == name)
+            ]
             if sub.empty:
                 continue
             x = (
@@ -1070,7 +1083,7 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
                 if "event_time" in df_all.columns and sub["event_time"].notna().any()
                 else sub["timestamp_s"]
             )
-            traces.append((src, name, x, sub["signal_value"]))
+            traces.append((src, channel, name, x, sub["signal_value"]))
 
         if traces:
             h = int(chart_height or 600)
@@ -1078,7 +1091,7 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
                 _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h, xaxis_mode or "shared")
             )
             row_data, col_defs = _pivot_table(traces)
-            total = sum(len(x) for _, _, x, _ in traces)
+            total = sum(len(x) for _, _, _, x, _ in traces)
             chart_msg = f"{total:,} pts across {len(traces)} signal(s)."
         else:
             chart_msg = "No data for selected signals."
@@ -1088,19 +1101,23 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
     map_fig = map_empty
     map_style = map_hidden
     if lat_key and lon_key and "timestamp_ns" in df_all.columns:
-        lat_src, lat_name = lat_key.split("::", 1)
-        lon_src, lon_name = lon_key.split("::", 1)
+        lat_src, lat_channel, lat_name = _parse_key(lat_key)
+        lon_src, lon_channel, lon_name = _parse_key(lon_key)
         lat_df = (
-            df_all[(df_all["signal_source"] == lat_src) & (df_all["signal_name"] == lat_name)][
-                ["timestamp_ns", "signal_value"]
-            ]
+            df_all[
+                (df_all["signal_source"] == lat_src)
+                & (df_all["channel"] == lat_channel)
+                & (df_all["signal_name"] == lat_name)
+            ][["timestamp_ns", "signal_value"]]
             .rename(columns={"signal_value": "lat"})
             .sort_values("timestamp_ns")
         )
         lon_df = (
-            df_all[(df_all["signal_source"] == lon_src) & (df_all["signal_name"] == lon_name)][
-                ["timestamp_ns", "signal_value"]
-            ]
+            df_all[
+                (df_all["signal_source"] == lon_src)
+                & (df_all["channel"] == lon_channel)
+                & (df_all["signal_name"] == lon_name)
+            ][["timestamp_ns", "signal_value"]]
             .rename(columns={"signal_value": "lon"})
             .sort_values("timestamp_ns")
         )
@@ -1175,7 +1192,7 @@ def update_replot_notice(selected, cache_data):
     if not cache_data or not selected:
         return ""
     df = _store_to_df(cache_data)
-    cached_keys = set(df["signal_source"] + "::" + df["signal_name"])
+    cached_keys = set(df["signal_source"] + df["channel"].astype(str) + "::" + df["signal_name"])
     new_count = sum(1 for s in selected if s not in cached_keys)
     if new_count == 0:
         return ""

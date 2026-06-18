@@ -301,11 +301,32 @@ def _empty_fig(msg="") -> go.Figure:
 
 _Traces = list[tuple[str, int, str, pd.Series, pd.Series]]
 
+_VAL_WIDTH = 12  # fixed character width for right-aligned signal values in hover tooltip
+
+
+def _hover_customdata(y: pd.Series) -> "list[list[str]]":
+    """Return customdata for right-aligned signal value column (monospace, &nbsp; padded)."""
+    return [[f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")] for v in y]
+
 
 def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
     fig = go.Figure()
+    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _ in traces), default=0)
     for src, channel, name, x, y in traces:
-        fig.add_trace(go.Scattergl(x=x, y=y, mode="lines+markers", line=dict(shape="hv"), name=f"{src}{channel}::{name}"))
+        label = f"{src}{channel}::{name}"
+        pad = "&nbsp;" * (max_label - len(label))
+        fig.add_trace(
+            go.Scattergl(
+                x=x,
+                y=y,
+                mode="lines+markers",
+                line=dict(shape="hv"),
+                name=label,
+                showlegend=False,
+                customdata=_hover_customdata(y),
+                hovertemplate=f"{label}{pad} : %{{customdata[0]}}<extra></extra>",
+            )
+        )
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor=_BG,
@@ -313,7 +334,7 @@ def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
         height=height,
         hovermode="x unified",
         xaxis_title="Time",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+        hoverlabel={"font_family": "monospace"},
         margin={"l": 60, "r": 20, "t": 50, "b": 60},
     )
     fig.update_xaxes(
@@ -340,6 +361,7 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
     n = len(traces)
     spacing = max(0.03, 0.20 / n) if xaxis_mode in ("synced", "free") else max(0.02, 0.20 / n)
     h = (1.0 - spacing * max(n - 1, 0)) / n
+    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _ in traces), default=0)
 
     fig = go.Figure()
     axes_kw: dict = {}
@@ -369,16 +391,20 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
         else:
             xref = "x"
 
+        label = f"{src}{channel}::{name}"
+        pad = "&nbsp;" * (max_label - len(label))
         fig.add_trace(
             go.Scattergl(
                 x=x,
                 y=y,
                 mode="lines+markers",
                 line=dict(shape="hv"),
-                name=f"{src}{channel}::{name}",
+                name=label,
                 xaxis=xref,
                 yaxis=yref,
                 showlegend=False,
+                customdata=_hover_customdata(y),
+                hovertemplate=f"{label}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )
         axes_kw[ykey] = {"domain": [bottom, top], **_AXIS_BOX}
@@ -419,6 +445,7 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
         height=max(height, 300 * n),
         hovermode="x unified",
         hoversubplots="axis",
+        hoverlabel={"font_family": "monospace"},
         annotations=annotations,
         margin={"l": 60, "r": 20, "t": 60, "b": 60},
         **axes_kw,
@@ -1072,9 +1099,7 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
         for key in selected:
             src, channel, name = _parse_key(key)
             sub = df_all[
-                (df_all["signal_source"] == src)
-                & (df_all["channel"] == channel)
-                & (df_all["signal_name"] == name)
+                (df_all["signal_source"] == src) & (df_all["channel"] == channel) & (df_all["signal_name"] == name)
             ]
             if sub.empty:
                 continue

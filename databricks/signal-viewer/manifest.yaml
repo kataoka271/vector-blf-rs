@@ -11,3 +11,4 @@ resource_specs:
 
 user_api_scopes:
   - "sql"
+  - "genie"

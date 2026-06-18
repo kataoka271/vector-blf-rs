@@ -1,11 +1,14 @@
 """Signal Viewer — Plotly Dash visualization app for Databricks Apps."""
 
 import base64
+import concurrent.futures
 import math
 import os
 import re
 import struct
+import time as _time
 import traceback
+import uuid as _uuid
 from typing import Literal
 
 import dash
@@ -16,6 +19,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import pyarrow as pa
 from dash import Input, Output, State, callback, dcc, html
+from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 
 from databricks import sql
@@ -39,6 +43,12 @@ def _parse_key(key: str) -> tuple[str, int, str]:
     prefix, name = key.split("::", 1)
     return prefix, 0, name
 
+
+# Genie Space config
+GENIE_SPACE_ID = os.environ.get("GENIE_SPACE_ID", "")
+_genie_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="genie")
+# Maps request_id -> (Future, created_at_epoch)
+_genie_futures: dict[str, tuple[concurrent.futures.Future, float]] = {}
 
 # Databricks config (skipped in local dev mode)
 cfg = None if _LOCAL_DEV else Config()
@@ -515,6 +525,96 @@ def _section(label: str, *children, **kwargs) -> html.Div:
     )
 
 
+def _genie_panel() -> dbc.Col:
+    return dbc.Col(
+        width="auto",
+        style={
+            "width": "340px",
+            "backgroundColor": _PANEL,
+            "borderLeft": f"1px solid {_BORDER}",
+            "display": "flex",
+            "flexDirection": "column",
+            "height": "100vh",
+        },
+        children=dbc.Card(
+            className="h-100 border-0 rounded-0",
+            style={"backgroundColor": _PANEL},
+            children=[
+                dbc.CardHeader(
+                    html.Div(
+                        [
+                            html.Span("Genie AI", style={"fontWeight": "bold", "color": _ACCENT, "fontSize": "14px"}),
+                            dbc.Button(
+                                "New",
+                                id="genie-new-conv-btn",
+                                size="sm",
+                                color="secondary",
+                                outline=True,
+                                style={"fontSize": "11px", "padding": "2px 8px"},
+                            ),
+                        ],
+                        className="d-flex justify-content-between align-items-center",
+                    ),
+                    style={"backgroundColor": _PANEL, "borderBottom": f"1px solid {_BORDER}", "padding": "8px 12px"},
+                ),
+                dbc.CardBody(
+                    style={
+                        "padding": "8px",
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "gap": "8px",
+                        "overflowY": "hidden",
+                    },
+                    children=[
+                        html.Div(
+                            id="genie-chat-log",
+                            className="genie-chat-log",
+                            style={
+                                "flex": "1",
+                                "overflowY": "auto",
+                                "display": "flex",
+                                "flexDirection": "column",
+                                "gap": "6px",
+                                "minHeight": "0",
+                            },
+                        ),
+                        dbc.Textarea(
+                            id="genie-input",
+                            placeholder="シグナル名や現象を自然言語で質問...",
+                            style={
+                                "fontSize": "12px",
+                                "backgroundColor": _BG,
+                                "color": _TEXT,
+                                "border": f"1px solid {_BORDER}",
+                                "resize": "none",
+                            },
+                            rows=3,
+                        ),
+                        dbc.Button("Ask", id="genie-ask-btn", color="info", size="sm", className="w-100"),
+                        dcc.Interval(id="genie-poll-interval", interval=600, n_intervals=0, disabled=True),
+                    ],
+                ),
+                dbc.CardFooter(
+                    html.Div(
+                        id="genie-preview-box",
+                        style={"display": "none"},
+                        children=[
+                            html.Span(
+                                id="genie-preview-summary",
+                                style={"fontSize": "11px", "color": _TEXT, "display": "block", "marginBottom": "6px"},
+                            ),
+                            dbc.Button(
+                                "Apply & Plot", id="genie-apply-btn", color="success", size="sm", className="w-100"
+                            ),
+                        ],
+                    ),
+                    style={"backgroundColor": _PANEL, "borderTop": f"1px solid {_BORDER}", "padding": "8px 12px"},
+                ),
+            ],
+        ),
+    )
+
+
 app = dash.Dash(__name__, title="Signal Viewer", external_stylesheets=[dbc.themes.DARKLY])
 
 app.layout = dbc.Container(
@@ -523,6 +623,10 @@ app.layout = dbc.Container(
     style={"height": "100vh", "backgroundColor": _BG, "fontFamily": "Inter, system-ui, sans-serif"},
     children=[
         dcc.Location(id="url", refresh=False),
+        dcc.Store(id="genie-conversation-store"),
+        dcc.Store(id="genie-request-store"),
+        dcc.Store(id="genie-preview-store"),
+        dcc.Store(id="genie-insight-store"),
         dbc.Toast(
             id="replot-toast",
             header="Re-plot needed",
@@ -762,6 +866,16 @@ app.layout = dbc.Container(
                                 className="d-flex align-items-center gap-2",
                             ),
                         ),
+                        dbc.Button(
+                            "Ask Genie",
+                            id="genie-toggle-btn",
+                            n_clicks=0,
+                            color="secondary",
+                            outline=True,
+                            size="sm",
+                            className="w-100",
+                            style={"display": "block" if GENIE_SPACE_ID else "none"},
+                        ),
                         dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
                         dbc.Button(
                             "Download Perfetto",
@@ -804,6 +918,10 @@ app.layout = dbc.Container(
                     className="d-flex flex-column",
                     style={"height": "100vh", "overflowY": "auto"},
                     children=[
+                        html.Div(
+                            id="genie-insight-banner",
+                            style={"display": "none"},
+                        ),
                         dcc.Loading(
                             type="circle",
                             color=_ACCENT,
@@ -863,10 +981,174 @@ app.layout = dbc.Container(
                         ),
                     ],
                 ),
+                # Genie panel (right side, collapsible)
+                dbc.Collapse(
+                    id="genie-panel-collapse",
+                    is_open=False,
+                    dimension="width",
+                    children=_genie_panel(),
+                ),
             ],
         ),
     ],
 )
+
+
+# ---------------------------------------------------------------------------
+# Genie helpers
+# ---------------------------------------------------------------------------
+
+_RE_SECONDS = re.compile(
+    r"(?:between\s+)?(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\s+(?:to|and|-|–)\s+(\d+(?:\.\d+)?)\s*s",
+    re.IGNORECASE,
+)
+_RE_CLOCK = re.compile(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:to|-|–)\s*(\d{1,2}:\d{2}(?::\d{2})?)")
+_RE_LAST = re.compile(r"last\s+(\d+(?:\.\d+)?)\s*(second|sec|minute|min)s?", re.IGNORECASE)
+
+
+def _genie_query(space_id: str, content: str, conversation_id: str | None, user_token: str) -> dict:
+    """Run a Genie Space query in an executor thread. Returns result dict."""
+    if _LOCAL_DEV:
+        _time.sleep(1.5)
+        mock_text = (
+            f"Based on your query '{content}', I identified signals CAN1::EngineSpeed_rpm "
+            "and CAN1::VehicleSpeed_kph between 50s and 150s."
+        )
+        return {
+            "status": "done",
+            "text": mock_text,
+            "sql_rows": [],
+            "conversation_id": conversation_id or "mock-conv-001",
+        }
+
+    assert cfg is not None
+    try:
+        w = WorkspaceClient(host=cfg.host, token=user_token)
+        if conversation_id:
+            msg = w.genie.create_message_and_wait(space_id, conversation_id, content=content)
+        else:
+            result = w.genie.start_conversation_and_wait(space_id, content=content)
+            msg = result
+            conversation_id = str(msg.conversation_id)
+
+        text = ""
+        sql_rows: list[dict] = []
+        if hasattr(msg, "attachments") and msg.attachments:
+            for att in msg.attachments:
+                if hasattr(att, "text") and att.text:
+                    text += att.text.content or ""
+                if hasattr(att, "query") and att.query:
+                    try:
+                        result_set = w.genie.get_message_query_result_by_attachment(
+                            space_id, str(msg.conversation_id), str(msg.id), str(att.id)
+                        )
+                        if result_set and hasattr(result_set, "statement_response"):
+                            sr = result_set.statement_response
+                            if sr and sr.result and sr.manifest:
+                                cols = [c.name for c in sr.manifest.schema.columns]
+                                sql_rows = [dict(zip(cols, row)) for row in (sr.result.data_array or [])]
+                    except Exception:
+                        pass
+        return {"status": "done", "text": text, "sql_rows": sql_rows, "conversation_id": str(msg.conversation_id)}
+    except Exception as exc:
+        return {"status": "error", "text": str(exc), "sql_rows": [], "conversation_id": conversation_id or ""}
+
+
+def _extract_signals(text: str, sql_rows: list[dict], all_signals: list[dict]) -> list[str]:
+    """Extract signal keys matching known signals from Genie response."""
+    all_keys = {f"{r['signal_source']}{r['channel']}::{r['signal_name']}": r for r in all_signals}
+    all_names = {
+        r["signal_name"].lower(): f"{r['signal_source']}{r['channel']}::{r['signal_name']}" for r in all_signals
+    }
+
+    matched: list[str] = []
+
+    # Priority 1: SQL result rows with signal_name column
+    if sql_rows:
+        for row in sql_rows:
+            sn = row.get("signal_name", "")
+            src = str(row.get("signal_source", ""))
+            ch = str(row.get("channel", ""))
+            full_key = f"{src}{ch}::{sn}"
+            if full_key in all_keys:
+                matched.append(full_key)
+            elif sn.lower() in all_names:
+                matched.append(all_names[sn.lower()])
+        if matched:
+            return list(dict.fromkeys(matched))
+
+    # Priority 2: Exact key in text
+    for key in all_keys:
+        if key in text:
+            matched.append(key)
+    if matched:
+        return list(dict.fromkeys(matched))
+
+    # Priority 3: Case-insensitive signal_name substring
+    text_lower = text.lower()
+    for name_lower, key in all_names.items():
+        if name_lower in text_lower:
+            matched.append(key)
+    return list(dict.fromkeys(matched))
+
+
+def _extract_time_range(text: str, sql_rows: list[dict], time_store: dict | None) -> tuple[float, float] | None:
+    """Extract time range as (t_lo, t_hi) in timestamp_s units."""
+    if not time_store:
+        return None
+    t_min = float(time_store.get("min", 0))
+    t_max = float(time_store.get("max", 0))
+
+    # Priority 1: SQL rows with timestamp columns
+    if sql_rows and sql_rows[0]:
+        ts_candidates = ["min_timestamp_s", "timestamp_s", "t_min"]
+        te_candidates = ["max_timestamp_s", "timestamp_s", "t_max"]
+        ts_col = next((c for c in ts_candidates if c in sql_rows[0]), None)
+        te_col = next((c for c in te_candidates if c in sql_rows[0]), None)
+        if ts_col and te_col:
+            try:
+                lo = min(float(r[ts_col]) for r in sql_rows if r.get(ts_col) is not None)
+                hi = max(float(r[te_col]) for r in sql_rows if r.get(te_col) is not None)
+                if lo < hi and t_min <= lo and hi <= t_max + 1:
+                    return (lo, hi)
+            except (ValueError, TypeError):
+                pass
+
+    # Priority 2: "last N seconds/minutes"
+    m = _RE_LAST.search(text)
+    if m:
+        n = float(m.group(1))
+        factor = 60.0 if "min" in m.group(2).lower() else 1.0
+        duration = n * factor
+        return (max(t_min, t_max - duration), t_max)
+
+    # Priority 3: "50s to 100s"
+    m = _RE_SECONDS.search(text)
+    if m:
+        lo = t_min + float(m.group(1))
+        hi = t_min + float(m.group(2))
+        return (max(t_min, lo), min(t_max, hi))
+
+    # Priority 4: "10:05 to 10:35" clock time
+    m = _RE_CLOCK.search(text)
+    if m and time_store.get("t0"):
+        try:
+            t0 = pd.Timestamp(time_store["t0"])
+
+            def _hms_to_s(hms: str) -> float:
+                parts = hms.split(":")
+                h, mn = int(parts[0]), int(parts[1])
+                s = int(parts[2]) if len(parts) > 2 else 0
+                return h * 3600 + mn * 60 + s
+
+            t0_abs = t0.hour * 3600 + t0.minute * 60 + t0.second
+            lo = t_min + (_hms_to_s(m.group(1)) - t0_abs)
+            hi = t_min + (_hms_to_s(m.group(2)) - t0_abs)
+            return (max(t_min, lo), min(t_max, hi))
+        except Exception:
+            pass
+
+    return None
 
 
 # Callbacks
@@ -1383,6 +1665,222 @@ def toggle_sidebar(n_clicks):
         "<",
         "Collapse sidebar",
     )
+
+
+# ---------------------------------------------------------------------------
+# Genie callbacks
+# ---------------------------------------------------------------------------
+
+
+@callback(
+    Output("genie-panel-collapse", "is_open"),
+    Output("genie-toggle-btn", "children"),
+    Input("genie-toggle-btn", "n_clicks"),
+    State("genie-panel-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_genie_panel(n, is_open):
+    new_state = not (is_open or False)
+    label = "Close Genie" if new_state else "Ask Genie"
+    return new_state, label
+
+
+@callback(
+    Output("genie-conversation-store", "data", allow_duplicate=True),
+    Output("genie-chat-log", "children", allow_duplicate=True),
+    Input("genie-new-conv-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def new_genie_conversation(_):
+    return None, []
+
+
+@callback(
+    Output("genie-request-store", "data"),
+    Output("genie-poll-interval", "disabled"),
+    Output("genie-chat-log", "children"),
+    Output("genie-ask-btn", "disabled"),
+    Input("genie-ask-btn", "n_clicks"),
+    State("genie-input", "value"),
+    State("genie-conversation-store", "data"),
+    State("genie-chat-log", "children"),
+    prevent_initial_call=True,
+)
+def submit_genie_query(n_clicks, question, conv_store, chat_log):
+    if not question or not question.strip():
+        return dash.no_update, True, dash.no_update, False
+    if not GENIE_SPACE_ID and not _LOCAL_DEV:
+        error_bubble = html.Div(
+            "GENIE_SPACE_ID is not configured.",
+            className="genie-bubble genie-ai",
+        )
+        return dash.no_update, True, (chat_log or []) + [error_bubble], False
+
+    user_token = flask.request.headers.get("X-Forwarded-Access-Token", "") if not _LOCAL_DEV else ""
+    conv_id = (conv_store or {}).get("conversation_id")
+    request_id = str(_uuid.uuid4())
+    future = _genie_executor.submit(_genie_query, GENIE_SPACE_ID or "mock", question.strip(), conv_id, user_token)
+    _genie_futures[request_id] = (future, _time.time())
+
+    user_bubble = html.Div(question.strip(), className="genie-bubble genie-user")
+    thinking_bubble = html.Div("Thinking...", id="genie-thinking-bubble", className="genie-bubble genie-ai")
+    new_log = (chat_log or []) + [user_bubble, thinking_bubble]
+    return {"request_id": request_id, "status": "pending"}, False, new_log, True
+
+
+@callback(
+    Output("genie-request-store", "data", allow_duplicate=True),
+    Output("genie-poll-interval", "disabled", allow_duplicate=True),
+    Output("genie-conversation-store", "data"),
+    Output("genie-preview-store", "data"),
+    Output("genie-chat-log", "children", allow_duplicate=True),
+    Output("genie-ask-btn", "disabled", allow_duplicate=True),
+    Input("genie-poll-interval", "n_intervals"),
+    State("genie-request-store", "data"),
+    State("genie-conversation-store", "data"),
+    State("genie-chat-log", "children"),
+    State("all-signals-cache", "data"),
+    State("time-range-store", "data"),
+    prevent_initial_call=True,
+)
+def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store):
+    if not req_store or req_store.get("status") != "pending":
+        return dash.no_update, True, dash.no_update, dash.no_update, dash.no_update, False
+
+    request_id = req_store["request_id"]
+    entry = _genie_futures.get(request_id)
+    if entry is None:
+        return {"request_id": request_id, "status": "done"}, True, dash.no_update, dash.no_update, dash.no_update, False
+
+    future, created_at = entry
+    # Expire after 120 s
+    if not future.done() and _time.time() - created_at < 120:
+        return dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, True
+
+    if not future.done():
+        future.cancel()
+        del _genie_futures[request_id]
+        timeout_bubble = html.Div("Request timed out.", className="genie-bubble genie-ai")
+        log = [b for b in (chat_log or []) if getattr(b, "id", None) != "genie-thinking-bubble"]
+        return (
+            {"request_id": request_id, "status": "done"},
+            True,
+            dash.no_update,
+            dash.no_update,
+            log + [timeout_bubble],
+            False,
+        )
+
+    result = future.result()
+    del _genie_futures[request_id]
+
+    new_conv = {"space_id": GENIE_SPACE_ID, "conversation_id": result["conversation_id"]}
+
+    log = [b for b in (chat_log or []) if getattr(b, "id", None) != "genie-thinking-bubble"]
+    response_text = result["text"] or "(no text response)"
+    ai_bubble = html.Div(response_text, className="genie-bubble genie-ai")
+    log = log + [ai_bubble]
+
+    preview = None
+    if result["status"] == "done":
+        all_signals = all_signals_raw if isinstance(all_signals_raw, list) else []
+        signals = _extract_signals(response_text, result["sql_rows"], all_signals)
+        time_range = _extract_time_range(response_text, result["sql_rows"], time_store)
+        if signals or time_range:
+            preview = {
+                "signals": signals,
+                "t_lo": time_range[0] if time_range else None,
+                "t_hi": time_range[1] if time_range else None,
+                "explanation": response_text,
+            }
+
+    return (
+        {"request_id": request_id, "status": "done"},
+        True,
+        new_conv,
+        preview,
+        log,
+        False,
+    )
+
+
+app.clientside_callback(
+    """
+    function(preview) {
+        if (!preview || (!preview.signals.length && preview.t_lo === null)) {
+            return [{display: "none"}, ""];
+        }
+        var parts = [];
+        if (preview.signals && preview.signals.length) {
+            var shown = preview.signals.slice(0, 3).join(", ");
+            var extra = preview.signals.length > 3 ? " +" + (preview.signals.length - 3) + " more" : "";
+            parts.push(preview.signals.length + " signal(s): " + shown + extra);
+        }
+        if (preview.t_lo !== null && preview.t_lo !== undefined) {
+            parts.push("Time: " + preview.t_lo.toFixed(1) + "s – " + preview.t_hi.toFixed(1) + "s");
+        }
+        return [{display: "block"}, parts.join(" | ")];
+    }
+    """,
+    Output("genie-preview-box", "style"),
+    Output("genie-preview-summary", "children"),
+    Input("genie-preview-store", "data"),
+)
+
+
+app.clientside_callback(
+    """
+    function(insight) {
+        if (!insight) {
+            return {display: "none"};
+        }
+        return {
+            display: "block",
+            padding: "8px 16px",
+            backgroundColor: "#1c3a4a",
+            color: "#7ecfec",
+            fontSize: "12px",
+            borderBottom: "1px solid #2a5060",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word"
+        };
+    }
+    """,
+    Output("genie-insight-banner", "style"),
+    Input("genie-insight-store", "data"),
+)
+
+
+app.clientside_callback(
+    """
+    function(insight) {
+        if (!insight) return "";
+        return "Genie: " + insight;
+    }
+    """,
+    Output("genie-insight-banner", "children"),
+    Input("genie-insight-store", "data"),
+)
+
+
+@callback(
+    Output("signal-select", "value", allow_duplicate=True),
+    Output("time-range-slider", "value", allow_duplicate=True),
+    Output("plot-btn", "n_clicks", allow_duplicate=True),
+    Output("genie-insight-store", "data"),
+    Input("genie-apply-btn", "n_clicks"),
+    State("genie-preview-store", "data"),
+    State("signal-select", "value"),
+    State("time-range-slider", "value"),
+    State("plot-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def apply_genie_preview(n_clicks, preview, current_signals, current_range, plot_n):
+    if not preview:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    new_signals = preview["signals"] if preview.get("signals") else current_signals
+    new_range = [preview["t_lo"], preview["t_hi"]] if preview.get("t_lo") is not None else current_range
+    return new_signals, new_range, (plot_n or 0) + 1, preview.get("explanation")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,33 @@
+.genie-bubble {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 95%;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.genie-user {
+  background-color: #2a2838;
+  color: #ccc;
+  align-self: flex-end;
+  margin-left: auto;
+  border: 1px solid #3a3850;
+}
+
+.genie-ai {
+  background-color: #1c3a4a;
+  color: #7ecfec;
+  align-self: flex-start;
+  border: 1px solid #2a5060;
+}
+
+.genie-chat-log {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+}

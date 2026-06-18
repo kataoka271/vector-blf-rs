@@ -8,3 +8,5 @@ env:
     value: "main"
   - name: BLF_SCHEMA
     value: "blf_dev"
+  - name: GENIE_SPACE_ID
+    value: ""

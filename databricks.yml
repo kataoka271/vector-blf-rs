@@ -91,6 +91,14 @@ variables:
       (extract the id after /warehouses/).
       Set via: databricks bundle deploy --var="warehouse_id=<id>"
 
+  genie_space_id:
+    description: >
+      Databricks Genie Space ID for natural-language signal exploration.
+      Find it in the Databricks workspace URL when viewing the Genie Space:
+      /genie/spaces/<id>
+      Set via: databricks bundle deploy --var="genie_space_id=<id>"
+    default: ""
+
 # ── deployment targets ────────────────────────────────────────────────────────
 
 targets:

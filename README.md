@@ -273,6 +273,49 @@ uv run python app.py
 
 The app reads `BLF_CATALOG` and `BLF_SCHEMA` environment variables (defaults: `main`, `blf_dev`). SQL queries are forwarded with the logged-in user's token via `manifest.yaml` `user_api_scopes`.
 
+### Genie Space setup
+
+The "Ask Genie" panel lets users query signals in natural language via a Databricks AI/BI Genie Space.
+
+**1. Set the Genie Space ID in `app.yaml`:**
+
+```yaml
+env:
+  - name: GENIE_SPACE_ID
+    value: "<your-genie-space-id>"
+```
+
+**2. Grant the app service principal access to the Genie Space.**
+
+The app calls the Genie API as the app's service principal (M2M OAuth). The SP must have at least `CAN_RUN` permission on the Genie Space.
+
+Find the SP's `application_id`:
+
+```bash
+databricks apps get signal-viewer
+# look for "service_principal_id" or "application_id" in the output
+```
+
+Grant permission via CLI:
+
+```bash
+databricks permissions update genie <GENIE_SPACE_ID> \
+  --json '{
+    "access_control_list": [{
+      "service_principal_name": "<application_id>",
+      "permission_level": "CAN_RUN"
+    }]
+  }'
+```
+
+Verify:
+
+```bash
+databricks permissions get genie <GENIE_SPACE_ID>
+```
+
+**3. Redeploy the app** after updating `app.yaml`.
+
 ---
 
 ## Scripts

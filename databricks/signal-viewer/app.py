@@ -1038,7 +1038,7 @@ def _genie_query(space_id: str, content: str, conversation_id: str | None, user_
 
     assert cfg is not None
     try:
-        w = WorkspaceClient(host=cfg.host, token=user_token)
+        w = WorkspaceClient(config=cfg)
         if conversation_id:
             msg = w.genie.create_message_and_wait(space_id, conversation_id, content=content)
         else:

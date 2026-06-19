@@ -31,3 +31,22 @@
   min-height: 0;
   padding: 4px;
 }
+
+#genie-panel-collapse .offcanvas-body {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 8px;
+  overflow: hidden;
+}
+
+#genie-panel-collapse .offcanvas-header {
+  background-color: #1c1a27;
+  border-bottom: 1px solid #2a2838;
+  padding: 8px 12px;
+}
+
+#genie-panel-collapse .offcanvas-title {
+  flex: 1;
+  min-width: 0;
+}

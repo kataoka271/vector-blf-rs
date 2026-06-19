@@ -540,93 +540,67 @@ def _section(label: str, *children, **kwargs) -> html.Div:
     )
 
 
-def _genie_panel() -> dbc.Col:
-    return dbc.Col(
-        width="auto",
-        style={
-            "width": "340px",
-            "backgroundColor": _PANEL,
-            "borderLeft": f"1px solid {_BORDER}",
-            "display": "flex",
-            "flexDirection": "column",
-            "height": "100vh",
-        },
-        children=dbc.Card(
-            className="h-100 border-0 rounded-0",
-            style={"backgroundColor": _PANEL},
-            children=[
-                dbc.CardHeader(
-                    html.Div(
-                        [
-                            html.Span("Genie AI", style={"fontWeight": "bold", "color": _ACCENT, "fontSize": "14px"}),
-                            dbc.Button(
-                                "New",
-                                id="genie-new-conv-btn",
-                                size="sm",
-                                color="secondary",
-                                outline=True,
-                                style={"fontSize": "11px", "padding": "2px 8px"},
-                            ),
-                        ],
-                        className="d-flex justify-content-between align-items-center",
-                    ),
-                    style={"backgroundColor": _PANEL, "borderBottom": f"1px solid {_BORDER}", "padding": "8px 12px"},
-                ),
-                dbc.CardBody(
-                    style={
-                        "padding": "8px",
-                        "display": "flex",
-                        "flexDirection": "column",
-                        "gap": "8px",
-                        "overflowY": "hidden",
-                    },
-                    children=[
-                        html.Div(
-                            id="genie-chat-log",
-                            className="genie-chat-log",
-                            style={
-                                "flex": "1",
-                                "overflowY": "auto",
-                                "display": "flex",
-                                "flexDirection": "column",
-                                "gap": "6px",
-                                "minHeight": "0",
-                            },
-                        ),
-                        dbc.Textarea(
-                            id="genie-input",
-                            placeholder="シグナル名や現象を自然言語で質問...",
-                            style={
-                                "fontSize": "12px",
-                                "backgroundColor": _BG,
-                                "color": _TEXT,
-                                "border": f"1px solid {_BORDER}",
-                                "resize": "none",
-                            },
-                            rows=3,
-                        ),
-                        dbc.Button("Ask", id="genie-ask-btn", color="info", size="sm", className="w-100"),
-                        dcc.Interval(id="genie-poll-interval", interval=600, n_intervals=0, disabled=True),
-                    ],
-                ),
-                dbc.CardFooter(
-                    html.Div(
-                        id="genie-preview-box",
-                        style={"display": "none"},
-                        children=[
-                            html.Span(
-                                id="genie-preview-summary",
-                                style={"fontSize": "11px", "color": _TEXT, "display": "block", "marginBottom": "6px"},
-                            ),
-                            dbc.Button(
-                                "Apply & Plot", id="genie-apply-btn", color="success", size="sm", className="w-100"
-                            ),
-                        ],
-                    ),
-                    style={"backgroundColor": _PANEL, "borderTop": f"1px solid {_BORDER}", "padding": "8px 12px"},
+def _genie_panel() -> dbc.Offcanvas:
+    return dbc.Offcanvas(
+        id="genie-panel-collapse",
+        title=html.Div(
+            [
+                html.Span("Genie AI", style={"fontWeight": "bold", "color": _ACCENT, "fontSize": "14px", "flex": "1"}),
+                dbc.Button(
+                    "New",
+                    id="genie-new-conv-btn",
+                    size="sm",
+                    color="secondary",
+                    outline=True,
+                    style={"fontSize": "11px", "padding": "2px 8px"},
                 ),
             ],
+            style={"display": "flex", "alignItems": "center"},
         ),
+        is_open=False,
+        placement="end",
+        backdrop=False,
+        close_button=False,
+        style={"width": "340px", "backgroundColor": _PANEL, "color": _TEXT},
+        children=[
+            html.Div(
+                id="genie-chat-log",
+                className="genie-chat-log",
+                style={
+                    "flex": "1",
+                    "overflowY": "auto",
+                    "display": "flex",
+                    "flexDirection": "column",
+                    "gap": "6px",
+                    "minHeight": "0",
+                },
+            ),
+            dbc.Textarea(
+                id="genie-input",
+                placeholder="シグナル名や現象を自然言語で質問...",
+                style={
+                    "fontSize": "12px",
+                    "backgroundColor": _BG,
+                    "color": _TEXT,
+                    "border": f"1px solid {_BORDER}",
+                    "resize": "none",
+                },
+                rows=3,
+            ),
+            dbc.Button("Ask", id="genie-ask-btn", color="info", size="sm", className="w-100"),
+            dcc.Interval(id="genie-poll-interval", interval=600, n_intervals=0, disabled=True),
+            html.Div(
+                id="genie-preview-box",
+                style={"display": "none"},
+                children=[
+                    html.Span(
+                        id="genie-preview-summary",
+                        style={"fontSize": "11px", "color": _TEXT, "display": "block", "marginBottom": "6px"},
+                    ),
+                    dbc.Button("Apply & Plot", id="genie-apply-btn", color="success", size="sm", className="w-100"),
+                ],
+            ),
+        ],
     )
 
 
@@ -996,15 +970,9 @@ app.layout = dbc.Container(
                         ),
                     ],
                 ),
-                # Genie panel (right side, collapsible)
-                dbc.Collapse(
-                    id="genie-panel-collapse",
-                    is_open=False,
-                    dimension="width",
-                    children=_genie_panel(),
-                ),
             ],
         ),
+        _genie_panel(),
     ],
 )
 
@@ -1704,11 +1672,13 @@ def toggle_genie_panel(n, is_open):
 @callback(
     Output("genie-conversation-store", "data", allow_duplicate=True),
     Output("genie-chat-log", "children", allow_duplicate=True),
+    Output("genie-preview-store", "data", allow_duplicate=True),
+    Output("genie-input", "value"),
     Input("genie-new-conv-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def new_genie_conversation(_):
-    return None, []
+    return None, [], None, ""
 
 
 @callback(

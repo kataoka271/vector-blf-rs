@@ -68,7 +68,7 @@ def _hover_customdata(y: pd.Series, y_str: "pd.Series | None" = None) -> "list[l
     return [[f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")] for v in y]
 
 
-def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
+def _overlay_fig(traces: _Traces, height: int = 600, min_height: int = 400) -> go.Figure:
     fig = go.Figure()
     max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
     for src, channel, name, x, y, y_str in traces:
@@ -91,7 +91,7 @@ def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
         template="plotly_dark",
         paper_bgcolor=_BG,
         plot_bgcolor=_BG,
-        height=height,
+        height=max(height, min_height),
         hovermode="x unified",
         xaxis_title="Time",
         hoverlabel={"font_family": "monospace"},

@@ -6,7 +6,7 @@ from dash import dcc, html
 
 from ._dash import app
 from .config import CATALOG, GENIE_SPACE_ID, SCHEMA
-from .figures import _ACCENT, _BG, _BORDER, _PANEL, _TEXT, _empty_fig
+from .figures import _ACCENT, _BG, _BORDER, _PANEL, _SIDEBAR_CONTENT_STYLE, _SIDEBAR_STYLE, _TEXT, _empty_fig
 
 # ---------------------------------------------------------------------------
 # Layout helpers
@@ -64,7 +64,7 @@ def _genie_panel() -> dbc.Offcanvas:
             ),
             dbc.Textarea(
                 id="genie-input",
-                placeholder="シグナル名や現象を自然言語で質問...",
+                placeholder="Ask about signals or anomalies...",
                 style={
                     "fontSize": "12px",
                     "backgroundColor": _BG,
@@ -125,19 +125,12 @@ app.layout = dbc.Container(
                     id="sidebar",
                     width="auto",
                     className="d-flex flex-column",
-                    style={
-                        "width": "270px",
-                        "backgroundColor": _PANEL,
-                        "padding": "12px 12px",
-                        "gap": "0",
-                        "color": _TEXT,
-                        "borderRight": f"1px solid {_BORDER}",
-                    },
+                    style=_SIDEBAR_STYLE,
                     children=[
                         html.Div(
                             id="sidebar-content",
                             className="d-flex flex-column",
-                            style={"flex": "1", "overflow": "hidden"},
+                            style=_SIDEBAR_CONTENT_STYLE,
                             children=[
                                 html.Div(
                                     className="d-flex flex-column",
@@ -325,7 +318,7 @@ app.layout = dbc.Container(
                                                 step=100,
                                                 value=200,
                                                 marks={100: "100", 200: "200", 400: "400", 800: "800"},
-                                                tooltip={"placement": "bottom", "always_visible": False},
+                                                tooltip={"placement": "bottom", "always_visible": True},
                                             ),
                                         ),
                                         html.Div(

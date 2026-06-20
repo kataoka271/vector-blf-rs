@@ -1,3 +1,8 @@
+/* signal tag close button */
+.signal-tag-close:hover {
+  color: #fff !important;
+}
+
 /* restyle radio items */
 .radio-group .form-check {
   padding-left: 0;

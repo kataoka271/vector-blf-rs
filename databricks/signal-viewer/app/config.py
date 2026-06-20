@@ -29,5 +29,9 @@ def _parse_key(key: str) -> tuple[str, int, str]:
     m = _KEY_RE.match(key)
     if m:
         return m.group(1), int(m.group(2)), m.group(3)
+    if "::" not in key:
+        print(f"[_parse_key] key {key!r} has no '::' separator", flush=True)
+        return key, 0, ""
     prefix, name = key.split("::", 1)
+    print(f"[_parse_key] key {key!r} has no numeric channel; defaulting to 0", flush=True)
     return prefix, 0, name

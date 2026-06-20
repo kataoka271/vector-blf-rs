@@ -1,5 +1,6 @@
 """Plotly figure builders and shared theme constants."""
 
+import html as _html
 from typing import Literal
 
 import pandas as pd
@@ -16,6 +17,16 @@ _ACCENT = "#7ecfec"
 _TEXT = "#ccc"
 
 _AXIS_BOX = {"showline": True, "mirror": True, "linecolor": _BORDER, "linewidth": 1}
+
+_SIDEBAR_STYLE: dict = {
+    "width": "270px",
+    "backgroundColor": _PANEL,
+    "padding": "12px 12px",
+    "gap": "0",
+    "color": _TEXT,
+    "borderRight": f"1px solid {_BORDER}",
+}
+_SIDEBAR_CONTENT_STYLE: dict = {"flex": "1", "overflow": "hidden"}
 
 # ---------------------------------------------------------------------------
 # Types
@@ -84,7 +95,7 @@ def _overlay_fig(traces: _Traces, height: int = 600, min_height: int = 400) -> g
                 name=label,
                 showlegend=False,
                 customdata=_hover_customdata(y, y_str),
-                hovertemplate=f"{label}{pad} : %{{customdata[0]}}<extra></extra>",
+                hovertemplate=f"{_html.escape(label)}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )
     fig.update_layout(
@@ -164,13 +175,13 @@ def _stacked_fig(
                 yaxis=yref,
                 showlegend=False,
                 customdata=_hover_customdata(y, y_str),
-                hovertemplate=f"{label}{pad} : %{{customdata[0]}}<extra></extra>",
+                hovertemplate=f"{_html.escape(label)}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )
         axes_kw[ykey] = {"domain": [bottom, top], **_AXIS_BOX}
         annotations.append(
             {
-                "text": f"{src}{channel}::{name}",
+                "text": _html.escape(f"{src}{channel}::{name}"),
                 "xref": "paper",
                 "yref": "paper",
                 "x": 0,

@@ -23,6 +23,8 @@ from .db import (
 from .figures import (
     _BORDER,
     _PANEL,
+    _SIDEBAR_CONTENT_STYLE,
+    _SIDEBAR_STYLE,
     _TEXT,
     _empty_fig,
     _map_fig,
@@ -42,9 +44,11 @@ from .perfetto import build_perfetto_trace
 
 
 def _fmt_s(seconds: float) -> str:
-    """Format elapsed seconds as HH:MM:SS."""
-    s = int(abs(seconds))
-    return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+    """Format elapsed seconds as HH:MM:SS.mmm."""
+    total_ms = round(abs(seconds) * 1000)
+    ms = total_ms % 1000
+    s = total_ms // 1000
+    return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}.{ms:03d}"
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +240,7 @@ def render_signal_tags(selected):
                         "×",
                         id={"type": "remove-signal-btn", "index": key},
                         n_clicks=0,
+                        className="signal-tag-close",
                         style={
                             "background": "none",
                             "border": "none",
@@ -412,7 +417,7 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
 
     chart_fig: object = dash.no_update
     chart_msg = ""
-    row_data: object = dash.no_update
+    row_data: list = []
     col_defs: object = dash.no_update
 
     if selected:
@@ -532,8 +537,8 @@ def update_time_slider(store, current_value, is_disabled):
         lo_dt = t0 + pd.Timedelta(seconds=low - t_min)
         hi_dt = t0 + pd.Timedelta(seconds=high - t_min)
         assert isinstance(lo_dt, pd.Timestamp) and isinstance(hi_dt, pd.Timestamp)
-        low_ts = lo_dt.strftime("%H:%M:%S")
-        high_ts = hi_dt.strftime("%H:%M:%S")
+        low_ts = lo_dt.strftime("%H:%M:%S.") + f"{lo_dt.microsecond // 1000:03d}"
+        high_ts = hi_dt.strftime("%H:%M:%S.") + f"{hi_dt.microsecond // 1000:03d}"
         label = f"{low_ts} - {high_ts}  (duration {_fmt_s(high - low)})"
     else:
         label = f"{_fmt_s(low - t_min)} - {_fmt_s(high - t_min)}  (total {_fmt_s(duration)})"
@@ -549,15 +554,19 @@ app.clientside_callback(
         var t0 = store.t0 ? new Date(store.t0) : null;
 
         function fmtHms(totalSec) {
-            var s = Math.floor(Math.abs(totalSec));
+            var totalMs = Math.round(Math.abs(totalSec) * 1000);
+            var ms = totalMs % 1000;
+            var s = Math.floor(totalMs / 1000);
             return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60]
-                .map(function(v) { return v.toString().padStart(2, '0'); }).join(':');
+                .map(function(v) { return v.toString().padStart(2, '0'); }).join(':')
+                + '.' + ms.toString().padStart(3, '0');
         }
         function fmtTime(offsetS) {
             if (t0) {
                 var dt = new Date(t0.getTime() + (offsetS - tMin) * 1000);
                 return [dt.getUTCHours(), dt.getUTCMinutes(), dt.getUTCSeconds()]
-                    .map(function(v) { return v.toString().padStart(2, '0'); }).join(':');
+                    .map(function(v) { return v.toString().padStart(2, '0'); }).join(':')
+                    + '.' + dt.getUTCMilliseconds().toString().padStart(3, '0');
             }
             return fmtHms(offsetS - tMin);
         }
@@ -658,15 +667,8 @@ def toggle_sidebar(collapse_clicks, expand_clicks):
             },
         )
     return (
-        {
-            "width": "270px",
-            "backgroundColor": _PANEL,
-            "padding": "12px 12px",
-            "gap": "0",
-            "color": _TEXT,
-            "borderRight": f"1px solid {_BORDER}",
-        },
-        {"flex": "1", "overflow": "hidden"},
+        _SIDEBAR_STYLE,
+        _SIDEBAR_CONTENT_STYLE,
         {"display": "none"},
     )
 

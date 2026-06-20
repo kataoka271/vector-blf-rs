@@ -6,9 +6,10 @@ import traceback
 import flask
 import pandas as pd
 import pyarrow as pa
+
 from databricks import sql
 
-from .config import USE_USER_TOKEN, _GOLD_TABLE, _LOCAL_DEV, cfg
+from .config import _GOLD_TABLE, _LOCAL_DEV, USE_USER_TOKEN, cfg
 from .dummy import _dummy_query
 
 

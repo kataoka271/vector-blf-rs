@@ -8,9 +8,10 @@ import dash
 import flask
 import pandas as pd
 import plotly.graph_objects as go
+from dash import ALL, Input, Output, State, callback, dcc, html
+
 from ._dash import app
 from .config import _GOLD_TABLE, _LOCAL_DEV, GENIE_SPACE_ID, _parse_key
-from dash import ALL, Input, Output, State, callback, dcc, html
 from .db import (
     _df_to_store,
     _fetch_all_signals,
@@ -571,6 +572,19 @@ app.clientside_callback(
     Output("time-range-label", "children"),
     Input("time-range-slider", "value"),
     State("time-range-store", "data"),
+)
+
+app.clientside_callback(
+    """
+    function(store) {
+        if (!store) return window.dash_clientside.no_update;
+        window._timeRangeStore = { tMin: store.min, t0: store.t0 || null };
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("time-range-store", "data", allow_duplicate=True),
+    Input("time-range-store", "data"),
+    prevent_initial_call=True,
 )
 
 # ---------------------------------------------------------------------------

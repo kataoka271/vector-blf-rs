@@ -348,12 +348,12 @@ app.layout = dbc.Container(
                                 step=1,
                                 value=[0, 1],
                                 marks={},
-                                tooltip={"placement": "bottom", "always_visible": False},
+                                tooltip={"placement": "bottom", "always_visible": False, "transform": "_fmtSliderTime"},
                                 disabled=True,
                             ),
                             html.Div(
                                 id="time-range-label",
-                                style={"fontSize": "11px", "color": "#888", "textAlign": "center", "marginTop": "4px"},
+                                style={"fontSize": "14px", "color": "#888", "textAlign": "center", "marginTop": "4px"},
                             ),
                         ),
                         _section(

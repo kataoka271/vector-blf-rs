@@ -114,7 +114,9 @@ def _overlay_fig(traces: _Traces, height: int = 600) -> go.Figure:
 # the cursor across subplots created by make_subplots (Plotly bug, see
 # https://community.plotly.com/t/hoversubplots-axis-not-working-with-make-subplots/84239).
 # Instead, each trace gets its own y-axis with a computed domain sharing one x-axis.
-def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "shared") -> go.Figure:
+def _stacked_fig(
+    traces: _Traces, height: int = 200, xaxis_mode: _XaxisMode = "shared", min_height: int = 100
+) -> go.Figure:
     n = len(traces)
     spacing = max(0.03, 0.20 / n) if xaxis_mode in ("synced", "free") else max(0.02, 0.20 / n)
     h = (1.0 - spacing * max(n - 1, 0)) / n
@@ -200,7 +202,7 @@ def _stacked_fig(traces: _Traces, height: int = 600, xaxis_mode: _XaxisMode = "s
         template="plotly_dark",
         paper_bgcolor=_BG,
         plot_bgcolor=_BG,
-        height=max(height, 300 * n),
+        height=max(height, min_height) * n,
         hovermode="x unified",
         hoversubplots="axis",
         hoverlabel={"font_family": "monospace"},

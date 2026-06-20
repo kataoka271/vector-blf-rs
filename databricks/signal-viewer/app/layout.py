@@ -276,17 +276,55 @@ app.layout = dbc.Container(
                                 tooltip={"placement": "bottom", "always_visible": False},
                             ),
                         ),
-                        _section(
-                            "Buckets per signal",
-                            dcc.Slider(
-                                id="max-pts",
-                                min=1_000,
-                                max=50_000,
-                                step=1_000,
-                                value=10_000,
-                                marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
-                                tooltip={"placement": "bottom", "always_visible": False},
-                            ),
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        dbc.Label(
+                                            "Buckets per signal",
+                                            size="sm",
+                                            className="fw-semibold text-secondary mb-0",
+                                        ),
+                                        html.Span(
+                                            "?",
+                                            id="buckets-help-icon",
+                                            style={
+                                                "cursor": "pointer",
+                                                "fontSize": "10px",
+                                                "color": "#888",
+                                                "border": "1px solid #888",
+                                                "borderRadius": "50%",
+                                                "width": "14px",
+                                                "height": "14px",
+                                                "display": "inline-flex",
+                                                "alignItems": "center",
+                                                "justifyContent": "center",
+                                                "marginLeft": "5px",
+                                                "verticalAlign": "middle",
+                                                "lineHeight": "1",
+                                                "flexShrink": "0",
+                                            },
+                                        ),
+                                        dbc.Tooltip(
+                                            "Downsampling resolution. Data points are divided into N buckets; "
+                                            "the min and max value within each bucket are plotted, preserving spikes. "
+                                            "Higher values show more detail but increase query time.",
+                                            target="buckets-help-icon",
+                                            placement="right",
+                                        ),
+                                    ],
+                                    className="d-flex align-items-center mb-0",
+                                ),
+                                dcc.Slider(
+                                    id="max-pts",
+                                    min=1_000,
+                                    max=50_000,
+                                    step=1_000,
+                                    value=10_000,
+                                    marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
+                                    tooltip={"placement": "bottom", "always_visible": False},
+                                ),
+                            ]
                         ),
                         _section(
                             "Time range",

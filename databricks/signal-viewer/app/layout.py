@@ -134,6 +134,18 @@ app.layout = dbc.Container(
                         html.Div(f"{CATALOG}.{SCHEMA}.blf_gold_signals", style={"fontSize": "11px", "color": "#888"}),
                         html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
                         _section(
+                            "File",
+                            dcc.Dropdown(
+                                id="filename-filter",
+                                options=[],
+                                value=[],
+                                multi=True,
+                                placeholder="All files...",
+                                clearable=True,
+                                style={"fontSize": "11px"},
+                            ),
+                        ),
+                        _section(
                             "Source",
                             dbc.Checklist(
                                 id="source-filter",
@@ -207,6 +219,7 @@ app.layout = dbc.Container(
                         ),
                         dcc.Store(id="signal-data-cache"),
                         dcc.Store(id="time-range-store"),
+                        dcc.Store(id="filenames-cache"),
                         dcc.Download(id="dl-perfetto"),
                         dcc.Loading(
                             type="dot",

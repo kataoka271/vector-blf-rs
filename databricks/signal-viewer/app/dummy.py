@@ -10,6 +10,11 @@ _DUMMY_T = [i * _DUMMY_DURATION / (_DUMMY_N - 1) for i in range(_DUMMY_N)]
 _DUMMY_TS_NS = [int(t * 1e9) for t in _DUMMY_T]
 _DUMMY_T0 = pd.Timestamp("2024-01-01 00:00:00", tz="UTC")
 
+_DUMMY_FILES = [
+    "dbfs:/Volumes/main/blf_dev/raw/test_logfile.blf",
+    "dbfs:/Volumes/main/blf_dev/raw/bench_large.blf",
+]
+
 _DUMMY_CATALOG = [
     ("CAN", 1, "EngineSpeed_rpm"),
     ("CAN", 1, "VehicleSpeed_kph"),
@@ -36,6 +41,8 @@ def _dummy_values(src: str, channel: int, name: str) -> list[float]:
 
 def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
     print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
+    if "_source_file" in stmt and "DISTINCT" in stmt and "signal_name" not in stmt:
+        return pd.DataFrame({"_source_file": _DUMMY_FILES})
     if "DISTINCT" in stmt:
         rows = [{"signal_name": n, "signal_source": s, "channel": c} for s, c, n in _DUMMY_CATALOG]
         return pd.DataFrame(rows).sort_values(["signal_source", "channel", "signal_name"]).reset_index(drop=True)

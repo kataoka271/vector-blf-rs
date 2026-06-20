@@ -53,10 +53,27 @@ def _store_to_df(data: str) -> pd.DataFrame:
     return pa.ipc.open_stream(base64.b64decode(data)).read_pandas()
 
 
-def _fetch_all_signals() -> list[dict] | None:
+def _fetch_filenames() -> list[str] | None:
     try:
+        df = _query(f"SELECT DISTINCT _source_file FROM {_GOLD_TABLE} ORDER BY _source_file")
+        print(f"[_fetch_filenames] fetched {len(df)} file(s)", flush=True)
+        return df["_source_file"].tolist()
+    except Exception as exc:
+        print(f"[_fetch_filenames] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None
+
+
+def _fetch_all_signals(filenames: list[str] | None = None) -> list[dict] | None:
+    try:
+        where = ""
+        params: list | None = None
+        if filenames:
+            placeholders = ", ".join(["?"] * len(filenames))
+            where = f" WHERE _source_file IN ({placeholders})"
+            params = list(filenames)
         df = _query(
-            f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE} ORDER BY signal_source, channel, signal_name"
+            f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}{where} ORDER BY signal_source, channel, signal_name",
+            params,
         )
         print(f"[_fetch_all_signals] fetched {len(df)} signal(s)", flush=True)
         return df.to_dict("records")

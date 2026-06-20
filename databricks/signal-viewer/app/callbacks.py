@@ -14,6 +14,7 @@ from dash import ALL, Input, Output, State, callback, dcc, html
 from .db import (
     _df_to_store,
     _fetch_all_signals,
+    _fetch_filenames,
     _fetch_global_time_range,
     _query,
     _store_to_df,
@@ -53,20 +54,46 @@ def _fmt_s(seconds: float) -> str:
 @callback(
     Output("all-signals-cache", "data"),
     Output("time-range-store", "data"),
+    Output("filenames-cache", "data"),
     Input("url", "pathname"),
 )
 def prefetch_signals(_):
-    return _fetch_all_signals(), _fetch_global_time_range()
+    return _fetch_all_signals(), _fetch_global_time_range(), _fetch_filenames()
 
 
 @callback(
     Output("all-signals-cache", "data", allow_duplicate=True),
     Output("time-range-store", "data", allow_duplicate=True),
+    Output("filenames-cache", "data", allow_duplicate=True),
     Input("refresh-signals-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def refresh_signal_cache(_):
-    return _fetch_all_signals(), _fetch_global_time_range()
+    return _fetch_all_signals(), _fetch_global_time_range(), _fetch_filenames()
+
+
+app.clientside_callback(
+    """
+    function(filenames) {
+        if (!filenames || filenames.length === 0) return [];
+        return filenames.map(function(f) {
+            var parts = f.split('/');
+            return { label: parts[parts.length - 1], value: f };
+        });
+    }
+    """,
+    Output("filename-filter", "options"),
+    Input("filenames-cache", "data"),
+)
+
+
+@callback(
+    Output("all-signals-cache", "data", allow_duplicate=True),
+    Input("filename-filter", "value"),
+    prevent_initial_call=True,
+)
+def filter_signals_by_file(filenames):
+    return _fetch_all_signals(filenames or None)
 
 
 app.clientside_callback(
@@ -270,9 +297,10 @@ def remove_signal(n_clicks_list, selected):
     State("time-range-store", "data"),
     State("lat-signal", "value"),
     State("lon-signal", "value"),
+    State("filename-filter", "value"),
     prevent_initial_call=True,
 )
-def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key):
+def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames):
     if not sources:
         return None, dash.no_update, "No source selected."
 
@@ -285,6 +313,12 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     pair_filter = "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
     pair_params = [part for triple in key_triples for part in triple]
 
+    file_filter = ""
+    file_params: list = []
+    if filenames:
+        file_filter = " AND _source_file IN (" + ", ".join(["?"] * len(filenames)) + ")"
+        file_params = list(filenames)
+
     time_filter = ""
     time_params: list = []
     if time_range_store is not None and time_range is not None:
@@ -295,10 +329,10 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     new_time_range: dict | object = dash.no_update
     range_stmt = (
         f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 "
-        f"FROM {_GOLD_TABLE} WHERE {pair_filter}"
+        f"FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}"
     )
     try:
-        range_df = _query(range_stmt, list(pair_params))
+        range_df = _query(range_stmt, list(pair_params) + file_params)
         t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
         if t0_raw is not None and pd.isna(t0_raw):
             t0_raw = None
@@ -318,7 +352,7 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
         f"    NTILE({int(max_pts)}) OVER ("
         f"      PARTITION BY signal_source, channel, signal_name ORDER BY timestamp_ns"
         f"    ) AS bucket"
-        f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{time_filter}"
+        f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}{time_filter}"
         f"), agg AS ("
         f"  SELECT signal_source, channel, signal_name, bucket,"
         f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS lo,"
@@ -332,7 +366,7 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
         f") ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
     )
     try:
-        df = _query(stmt, pair_params + time_params)
+        df = _query(stmt, pair_params + file_params + time_params)
     except Exception as exc:
         msg = f"Query error: {exc}"
         print(f"[fetch_data] ERROR: {exc}\n{traceback.format_exc()}", flush=True)

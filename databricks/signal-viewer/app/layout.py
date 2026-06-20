@@ -363,6 +363,7 @@ app.layout = dbc.Container(
                             outline=True,
                             size="sm",
                             className="w-100",
+                            disabled=True,
                         ),
                         html.Div(id="avail-msg", style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"}),
                         html.Div(

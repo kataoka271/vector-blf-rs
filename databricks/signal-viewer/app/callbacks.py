@@ -496,6 +496,14 @@ def update_replot_notice(selected, cache_data):
     return f"{new_count} new signal(s) not yet fetched. Click Plot to update.", True
 
 
+app.clientside_callback(
+    "function(cache, selected) { return !cache || !selected || selected.length === 0; }",
+    Output("download-perfetto-btn", "disabled"),
+    Input("signal-data-cache", "data"),
+    Input("signal-select", "value"),
+)
+
+
 @callback(
     Output("dl-perfetto", "data"),
     Input("download-perfetto-btn", "n_clicks"),

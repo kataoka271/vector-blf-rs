@@ -556,10 +556,13 @@ def toggle_sidebar(n_clicks):
     Output("genie-panel-collapse", "is_open"),
     Output("genie-toggle-btn", "children"),
     Input("genie-toggle-btn", "n_clicks"),
+    Input("genie-close-btn", "n_clicks"),
     State("genie-panel-collapse", "is_open"),
     prevent_initial_call=True,
 )
-def toggle_genie_panel(n, is_open):
+def toggle_genie_panel(n, _close, is_open):
+    if dash.ctx.triggered_id == "genie-close-btn":
+        return False, "Ask Genie"
     new_state = not (is_open or False)
     label = "Close Genie" if new_state else "Ask Genie"
     return new_state, label

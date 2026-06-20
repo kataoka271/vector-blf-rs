@@ -2,9 +2,10 @@
 
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
+from dash import dcc, html
+
 from ._dash import app
 from .config import CATALOG, GENIE_SPACE_ID, SCHEMA
-from dash import dcc, html
 from .figures import _ACCENT, _BG, _BORDER, _PANEL, _TEXT, _empty_fig
 
 # ---------------------------------------------------------------------------
@@ -31,6 +32,14 @@ def _genie_panel() -> dbc.Offcanvas:
                     color="secondary",
                     outline=True,
                     style={"fontSize": "11px", "padding": "2px 8px"},
+                ),
+                dbc.Button(
+                    "×",
+                    id="genie-close-btn",
+                    size="sm",
+                    color="danger",
+                    outline=True,
+                    style={"fontSize": "16px", "padding": "2px 7px", "marginLeft": "4px", "lineHeight": "1"},
                 ),
             ],
             style={"display": "flex", "alignItems": "center"},

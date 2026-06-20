@@ -105,6 +105,10 @@ app.layout = dbc.Container(
         dcc.Store(id="genie-request-store"),
         dcc.Store(id="genie-preview-store"),
         dcc.Store(id="genie-insight-store"),
+        dcc.Store(id="signal-data-cache"),
+        dcc.Store(id="time-range-store"),
+        dcc.Store(id="filenames-cache"),
+        dcc.Download(id="dl-perfetto"),
         dbc.Toast(
             id="replot-toast",
             header="Re-plot needed",
@@ -120,328 +124,392 @@ app.layout = dbc.Container(
                 dbc.Col(
                     id="sidebar",
                     width="auto",
-                    className="d-flex flex-column overflow-auto",
+                    className="d-flex flex-column",
                     style={
                         "width": "270px",
                         "backgroundColor": _PANEL,
                         "padding": "12px 12px",
-                        "gap": "10px",
+                        "gap": "0",
                         "color": _TEXT,
                         "borderRight": f"1px solid {_BORDER}",
                     },
                     children=[
-                        html.H3("Signal Viewer", style={"margin": "0 0 3px", "color": _ACCENT, "fontSize": "16px"}),
-                        html.Div(f"{CATALOG}.{SCHEMA}.blf_gold_signals", style={"fontSize": "11px", "color": "#888"}),
-                        html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
-                        _section(
-                            "File",
-                            dcc.Dropdown(
-                                id="filename-filter",
-                                options=[],
-                                value=[],
-                                multi=True,
-                                placeholder="All files...",
-                                clearable=True,
-                                style={"fontSize": "11px"},
-                            ),
-                        ),
-                        _section(
-                            "Source",
-                            dbc.Checklist(
-                                id="source-filter",
-                                options=[
-                                    {"label": " CAN", "value": "CAN"},
-                                    {"label": " ETH", "value": "ETH"},
-                                    {"label": " SOMEIP", "value": "SOMEIP"},
-                                ],
-                                value=["CAN", "SOMEIP"],
-                            ),
-                        ),
-                        _section(
-                            "Channel",
-                            dbc.Checklist(
-                                id="channel-filter",
-                                options=[],
-                                value=[],
-                                labelStyle={"whiteSpace": "nowrap"},
-                                style={
-                                    "fontSize": "11px",
-                                    "maxHeight": "80px",
-                                    "overflowY": "auto",
-                                },
-                            ),
-                        ),
-                        dbc.Input(
-                            id="signal-search",
-                            type="search",
-                            placeholder="Filter signals...",
-                            size="sm",
-                            style={"fontSize": "12px"},
-                        ),
                         html.Div(
-                            [
-                                dbc.Label("Signals", size="sm", className="fw-semibold text-secondary mb-0 me-2"),
-                                dbc.ButtonGroup(
-                                    [
-                                        dbc.Button(
-                                            "All",
-                                            id="select-all-btn",
+                            id="sidebar-content",
+                            className="d-flex flex-column",
+                            style={"flex": "1", "overflow": "hidden"},
+                            children=[
+                                html.Div(
+                                    className="d-flex flex-column",
+                                    style={"flex": "1", "overflowY": "auto", "gap": "10px", "paddingBottom": "6px"},
+                                    children=[
+                                        html.Div(
+                                            [
+                                                html.H3(
+                                                    "Signal Viewer",
+                                                    style={
+                                                        "margin": "0",
+                                                        "color": _ACCENT,
+                                                        "fontSize": "16px",
+                                                        "flex": "1",
+                                                    },
+                                                ),
+                                                dbc.Button(
+                                                    "<",
+                                                    id="sidebar-toggle",
+                                                    size="sm",
+                                                    color="secondary",
+                                                    outline=True,
+                                                    style={"fontSize": "12px", "padding": "4px 5px", "lineHeight": "1"},
+                                                    title="Collapse sidebar",
+                                                ),
+                                            ],
+                                            style={"display": "flex", "alignItems": "center"},
+                                        ),
+                                        html.Div(
+                                            f"{CATALOG}.{SCHEMA}.blf_gold_signals",
+                                            style={"fontSize": "11px", "color": "#888"},
+                                        ),
+                                        html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
+                                        _section(
+                                            "File",
+                                            dcc.Dropdown(
+                                                id="filename-filter",
+                                                options=[],
+                                                value=[],
+                                                multi=True,
+                                                placeholder="All files...",
+                                                clearable=True,
+                                                style={"fontSize": "11px"},
+                                            ),
+                                        ),
+                                        _section(
+                                            "Source",
+                                            dbc.Checklist(
+                                                id="source-filter",
+                                                options=[
+                                                    {"label": " CAN", "value": "CAN"},
+                                                    {"label": " ETH", "value": "ETH"},
+                                                    {"label": " SOMEIP", "value": "SOMEIP"},
+                                                ],
+                                                value=["CAN", "SOMEIP"],
+                                            ),
+                                        ),
+                                        _section(
+                                            "Channel",
+                                            dbc.Checklist(
+                                                id="channel-filter",
+                                                options=[],
+                                                value=[],
+                                                labelStyle={"whiteSpace": "nowrap"},
+                                                style={
+                                                    "fontSize": "11px",
+                                                    "maxHeight": "80px",
+                                                    "overflowY": "auto",
+                                                },
+                                            ),
+                                        ),
+                                        dbc.Input(
+                                            id="signal-search",
+                                            type="search",
+                                            placeholder="Filter signals...",
                                             size="sm",
-                                            color="secondary",
-                                            outline=True,
-                                            className="py-0",
-                                            style={"fontSize": "11px"},
+                                            style={"fontSize": "12px"},
+                                        ),
+                                        html.Div(
+                                            [
+                                                dbc.Label(
+                                                    "Signals",
+                                                    size="sm",
+                                                    className="fw-semibold text-secondary mb-0 me-2",
+                                                ),
+                                                dbc.ButtonGroup(
+                                                    [
+                                                        dbc.Button(
+                                                            "All",
+                                                            id="select-all-btn",
+                                                            size="sm",
+                                                            color="secondary",
+                                                            outline=True,
+                                                            className="py-0",
+                                                            style={"fontSize": "11px"},
+                                                        ),
+                                                        dbc.Button(
+                                                            "None",
+                                                            id="clear-all-btn",
+                                                            size="sm",
+                                                            color="secondary",
+                                                            outline=True,
+                                                            className="py-0",
+                                                            style={"fontSize": "11px"},
+                                                        ),
+                                                    ],
+                                                    size="sm",
+                                                ),
+                                                dbc.Button(
+                                                    "↻",
+                                                    id="refresh-signals-btn",
+                                                    size="sm",
+                                                    color="secondary",
+                                                    outline=True,
+                                                    className="py-0 ms-1",
+                                                    style={"fontSize": "11px"},
+                                                    title="Refresh signal list from warehouse",
+                                                ),
+                                            ],
+                                            className="d-flex align-items-center mb-1",
+                                        ),
+                                        dcc.Loading(
+                                            type="dot",
+                                            color=_ACCENT,
+                                            target_components={"all-signals-cache": "data"},
+                                            children=[
+                                                dcc.Store(id="all-signals-cache"),
+                                                dbc.Checklist(
+                                                    id="signal-select",
+                                                    options=[],
+                                                    value=[],
+                                                    labelStyle={"whiteSpace": "nowrap"},
+                                                    style={
+                                                        "fontSize": "11px",
+                                                        "maxHeight": "260px",
+                                                        "overflowY": "auto",
+                                                        "overflowX": "auto",
+                                                        "border": f"1px solid {_BORDER}",
+                                                        "borderRadius": "4px",
+                                                        "padding": "6px 8px",
+                                                    },
+                                                ),
+                                            ],
+                                        ),
+                                        _section(
+                                            "Layout",
+                                            dbc.RadioItems(
+                                                id="layout-mode",
+                                                options=[
+                                                    {"label": "Overlay", "value": "overlay"},
+                                                    {"label": "Stacked", "value": "stacked"},
+                                                ],
+                                                value="stacked",
+                                                className="btn-group d-flex",
+                                                inputClassName="btn-check",
+                                                labelClassName="btn btn-outline-secondary btn-sm text-center flex-fill",
+                                                labelCheckedClassName="active",
+                                            ),
+                                            className="radio-group",
+                                        ),
+                                        _section(
+                                            "X axis (stacked)",
+                                            dbc.RadioItems(
+                                                id="xaxis-mode",
+                                                options=[
+                                                    {"label": "Shared", "value": "shared"},
+                                                    {"label": "Synced", "value": "synced"},
+                                                    {"label": "Free", "value": "free"},
+                                                ],
+                                                value="shared",
+                                                className="btn-group d-flex",
+                                                inputClassName="btn-check",
+                                                labelClassName="btn btn-outline-secondary btn-sm text-center flex-fill",
+                                                labelCheckedClassName="active",
+                                            ),
+                                            id="xaxis-section",
+                                            className="radio-group",
+                                        ),
+                                        _section(
+                                            "Chart height (px)",
+                                            dcc.Slider(
+                                                id="chart-height",
+                                                min=100,
+                                                max=800,
+                                                step=100,
+                                                value=200,
+                                                marks={100: "100", 200: "200", 400: "400", 800: "800"},
+                                                tooltip={"placement": "bottom", "always_visible": False},
+                                            ),
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Div(
+                                                    [
+                                                        dbc.Label(
+                                                            "Buckets per signal",
+                                                            size="sm",
+                                                            className="fw-semibold text-secondary mb-0",
+                                                        ),
+                                                        html.Span(
+                                                            "?",
+                                                            id="buckets-help-icon",
+                                                            style={
+                                                                "cursor": "pointer",
+                                                                "fontSize": "10px",
+                                                                "color": "#888",
+                                                                "border": "1px solid #888",
+                                                                "borderRadius": "50%",
+                                                                "width": "14px",
+                                                                "height": "14px",
+                                                                "display": "inline-flex",
+                                                                "alignItems": "center",
+                                                                "justifyContent": "center",
+                                                                "marginLeft": "5px",
+                                                                "verticalAlign": "middle",
+                                                                "lineHeight": "1",
+                                                                "flexShrink": "0",
+                                                            },
+                                                        ),
+                                                        dbc.Tooltip(
+                                                            "Downsampling resolution. Data points are divided into N buckets; "
+                                                            "the min and max value within each bucket are plotted, preserving spikes. "
+                                                            "Higher values show more detail but increase query time.",
+                                                            target="buckets-help-icon",
+                                                            placement="right",
+                                                        ),
+                                                    ],
+                                                    className="d-flex align-items-center mb-0",
+                                                ),
+                                                dcc.Slider(
+                                                    id="max-pts",
+                                                    min=1_000,
+                                                    max=50_000,
+                                                    step=1_000,
+                                                    value=10_000,
+                                                    marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
+                                                    tooltip={"placement": "bottom", "always_visible": False},
+                                                ),
+                                            ]
+                                        ),
+                                        _section(
+                                            "Time range",
+                                            dcc.RangeSlider(
+                                                id="time-range-slider",
+                                                min=0,
+                                                max=1,
+                                                step=1,
+                                                value=[0, 1],
+                                                marks={},
+                                                tooltip={
+                                                    "placement": "bottom",
+                                                    "always_visible": False,
+                                                    "transform": "_fmtSliderTime",
+                                                },
+                                                disabled=True,
+                                            ),
+                                            html.Div(
+                                                id="time-range-label",
+                                                style={
+                                                    "fontSize": "11px",
+                                                    "color": "#888",
+                                                    "textAlign": "center",
+                                                    "marginTop": "4px",
+                                                },
+                                            ),
+                                        ),
+                                        _section(
+                                            "Map",
+                                            html.Div(
+                                                [
+                                                    dbc.Label(
+                                                        "Lat",
+                                                        size="sm",
+                                                        className="text-secondary mb-0",
+                                                        style={"minWidth": "28px", "flex": "0"},
+                                                    ),
+                                                    dcc.Dropdown(
+                                                        id="lat-signal",
+                                                        options=[],
+                                                        placeholder="latitude signal...",
+                                                        clearable=True,
+                                                        style={"fontSize": "12px", "flex": "1"},
+                                                    ),
+                                                ],
+                                                className="d-flex align-items-center gap-2 mb-1",
+                                            ),
+                                            html.Div(
+                                                [
+                                                    dbc.Label(
+                                                        "Lon",
+                                                        size="sm",
+                                                        className="text-secondary mb-0",
+                                                        style={"minWidth": "28px", "flex": "0"},
+                                                    ),
+                                                    dcc.Dropdown(
+                                                        id="lon-signal",
+                                                        options=[],
+                                                        placeholder="longitude signal...",
+                                                        clearable=True,
+                                                        style={"fontSize": "12px", "flex": "1"},
+                                                    ),
+                                                ],
+                                                className="d-flex align-items-center gap-2",
+                                            ),
                                         ),
                                         dbc.Button(
-                                            "None",
-                                            id="clear-all-btn",
-                                            size="sm",
+                                            "Download Perfetto",
+                                            id="download-perfetto-btn",
+                                            n_clicks=0,
                                             color="secondary",
                                             outline=True,
-                                            className="py-0",
-                                            style={"fontSize": "11px"},
+                                            size="sm",
+                                            className="w-100",
+                                            disabled=True,
                                         ),
                                     ],
-                                    size="sm",
                                 ),
-                                dbc.Button(
-                                    "↻",
-                                    id="refresh-signals-btn",
-                                    size="sm",
-                                    color="secondary",
-                                    outline=True,
-                                    className="py-0 ms-1",
-                                    style={"fontSize": "11px"},
-                                    title="Refresh signal list from warehouse",
-                                ),
-                            ],
-                            className="d-flex align-items-center mb-1",
-                        ),
-                        dcc.Store(id="signal-data-cache"),
-                        dcc.Store(id="time-range-store"),
-                        dcc.Store(id="filenames-cache"),
-                        dcc.Download(id="dl-perfetto"),
-                        dcc.Loading(
-                            type="dot",
-                            color=_ACCENT,
-                            target_components={"all-signals-cache": "data"},
-                            children=[
-                                dcc.Store(id="all-signals-cache"),
-                                dbc.Checklist(
-                                    id="signal-select",
-                                    options=[],
-                                    value=[],
-                                    labelStyle={"whiteSpace": "nowrap"},
-                                    style={
-                                        "fontSize": "11px",
-                                        "maxHeight": "260px",
-                                        "overflowY": "auto",
-                                        "overflowX": "auto",
-                                        "border": f"1px solid {_BORDER}",
-                                        "borderRadius": "4px",
-                                        "padding": "6px 8px",
-                                    },
-                                ),
-                            ],
-                        ),
-                        _section(
-                            "Layout",
-                            dbc.RadioItems(
-                                id="layout-mode",
-                                options=[
-                                    {"label": "Overlay", "value": "overlay"},
-                                    {"label": "Stacked", "value": "stacked"},
-                                ],
-                                value="stacked",
-                                className="btn-group d-flex",
-                                inputClassName="btn-check",
-                                labelClassName="btn btn-outline-secondary btn-sm text-center flex-fill",
-                                labelCheckedClassName="active",
-                            ),
-                            className="radio-group",
-                        ),
-                        _section(
-                            "X axis (stacked)",
-                            dbc.RadioItems(
-                                id="xaxis-mode",
-                                options=[
-                                    {"label": "Shared", "value": "shared"},
-                                    {"label": "Synced", "value": "synced"},
-                                    {"label": "Free", "value": "free"},
-                                ],
-                                value="shared",
-                                className="btn-group d-flex",
-                                inputClassName="btn-check",
-                                labelClassName="btn btn-outline-secondary btn-sm text-center flex-fill",
-                                labelCheckedClassName="active",
-                            ),
-                            className="radio-group",
-                        ),
-                        _section(
-                            "Chart height (px)",
-                            dcc.Slider(
-                                id="chart-height",
-                                min=100,
-                                max=800,
-                                step=100,
-                                value=200,
-                                marks={100: "100", 200: "200", 400: "400", 800: "800"},
-                                tooltip={"placement": "bottom", "always_visible": False},
-                            ),
-                        ),
-                        html.Div(
-                            [
                                 html.Div(
-                                    [
-                                        dbc.Label(
-                                            "Buckets per signal",
+                                    className="d-flex flex-column",
+                                    style={
+                                        "gap": "6px",
+                                        "paddingTop": "10px",
+                                        "borderTop": f"1px solid {_BORDER}",
+                                    },
+                                    children=[
+                                        dbc.Button(
+                                            "Ask Genie",
+                                            id="genie-toggle-btn",
+                                            n_clicks=0,
+                                            color="secondary",
+                                            outline=True,
                                             size="sm",
-                                            className="fw-semibold text-secondary mb-0",
+                                            className="w-100",
+                                            style={"display": "block" if GENIE_SPACE_ID else "none"},
                                         ),
-                                        html.Span(
-                                            "?",
-                                            id="buckets-help-icon",
+                                        dbc.Button(
+                                            "Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"
+                                        ),
+                                        html.Div(
+                                            id="avail-msg",
+                                            style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"},
+                                        ),
+                                        html.Div(
+                                            id="plot-msg",
                                             style={
-                                                "cursor": "pointer",
-                                                "fontSize": "10px",
-                                                "color": "#888",
-                                                "border": "1px solid #888",
-                                                "borderRadius": "50%",
-                                                "width": "14px",
-                                                "height": "14px",
-                                                "display": "inline-flex",
-                                                "alignItems": "center",
-                                                "justifyContent": "center",
-                                                "marginLeft": "5px",
-                                                "verticalAlign": "middle",
-                                                "lineHeight": "1",
-                                                "flexShrink": "0",
+                                                "fontSize": "12px",
+                                                "color": "#ccc",
+                                                "wordBreak": "break-word",
+                                                "minHeight": "16px",
                                             },
                                         ),
-                                        dbc.Tooltip(
-                                            "Downsampling resolution. Data points are divided into N buckets; "
-                                            "the min and max value within each bucket are plotted, preserving spikes. "
-                                            "Higher values show more detail but increase query time.",
-                                            target="buckets-help-icon",
-                                            placement="right",
-                                        ),
                                     ],
-                                    className="d-flex align-items-center mb-0",
                                 ),
-                                dcc.Slider(
-                                    id="max-pts",
-                                    min=1_000,
-                                    max=50_000,
-                                    step=1_000,
-                                    value=10_000,
-                                    marks={1_000: "1k", 10_000: "10k", 50_000: "50k"},
-                                    tooltip={"placement": "bottom", "always_visible": False},
-                                ),
-                            ]
-                        ),
-                        _section(
-                            "Time range",
-                            dcc.RangeSlider(
-                                id="time-range-slider",
-                                min=0,
-                                max=1,
-                                step=1,
-                                value=[0, 1],
-                                marks={},
-                                tooltip={"placement": "bottom", "always_visible": False, "transform": "_fmtSliderTime"},
-                                disabled=True,
-                            ),
-                            html.Div(
-                                id="time-range-label",
-                                style={"fontSize": "14px", "color": "#888", "textAlign": "center", "marginTop": "4px"},
-                            ),
-                        ),
-                        _section(
-                            "Map",
-                            html.Div(
-                                [
-                                    dbc.Label(
-                                        "Lat",
-                                        size="sm",
-                                        className="text-secondary mb-0",
-                                        style={"minWidth": "28px", "flex": "0"},
-                                    ),
-                                    dcc.Dropdown(
-                                        id="lat-signal",
-                                        options=[],
-                                        placeholder="latitude signal...",
-                                        clearable=True,
-                                        style={"fontSize": "12px", "flex": "1"},
-                                    ),
-                                ],
-                                className="d-flex align-items-center gap-2 mb-1",
-                            ),
-                            html.Div(
-                                [
-                                    dbc.Label(
-                                        "Lon",
-                                        size="sm",
-                                        className="text-secondary mb-0",
-                                        style={"minWidth": "28px", "flex": "0"},
-                                    ),
-                                    dcc.Dropdown(
-                                        id="lon-signal",
-                                        options=[],
-                                        placeholder="longitude signal...",
-                                        clearable=True,
-                                        style={"fontSize": "12px", "flex": "1"},
-                                    ),
-                                ],
-                                className="d-flex align-items-center gap-2",
-                            ),
-                        ),
-                        dbc.Button(
-                            "Ask Genie",
-                            id="genie-toggle-btn",
-                            n_clicks=0,
-                            color="secondary",
-                            outline=True,
-                            size="sm",
-                            className="w-100",
-                            style={"display": "block" if GENIE_SPACE_ID else "none"},
-                        ),
-                        dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
-                        dbc.Button(
-                            "Download Perfetto",
-                            id="download-perfetto-btn",
-                            n_clicks=0,
-                            color="secondary",
-                            outline=True,
-                            size="sm",
-                            className="w-100",
-                            disabled=True,
-                        ),
-                        html.Div(id="avail-msg", style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"}),
-                        html.Div(
-                            id="plot-msg",
-                            style={
-                                "fontSize": "12px",
-                                "color": "#ccc",
-                                "wordBreak": "break-word",
-                                "minHeight": "16px",
-                            },
+                            ],
                         ),
                     ],
                 ),
-                # Sidebar toggle strip
+                # Sidebar expand strip (visible only when sidebar is collapsed)
                 dbc.Col(
+                    id="sidebar-expand-strip",
                     width="auto",
                     children=dbc.Button(
-                        "<",
-                        id="sidebar-toggle",
+                        ">",
+                        id="sidebar-expand-btn",
                         size="sm",
                         color="secondary",
                         outline=True,
                         style={"fontSize": "12px", "padding": "4px 5px", "lineHeight": "1"},
-                        title="Collapse sidebar",
+                        title="Expand sidebar",
                     ),
                     style={
-                        "display": "flex",
+                        "display": "none",
                         "alignItems": "flex-start",
                         "padding": "8px 2px",
                         "backgroundColor": _PANEL,

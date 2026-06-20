@@ -636,36 +636,46 @@ def download_perfetto(_, cache_data, selected):
 
 @callback(
     Output("sidebar", "style"),
-    Output("sidebar-toggle", "children"),
-    Output("sidebar-toggle", "title"),
+    Output("sidebar-content", "style"),
+    Output("sidebar-expand-strip", "style"),
     Input("sidebar-toggle", "n_clicks"),
+    Input("sidebar-expand-btn", "n_clicks"),
     prevent_initial_call=True,
 )
-def toggle_sidebar(n_clicks):
-    collapsed = (n_clicks or 0) % 2 == 1
+def toggle_sidebar(collapse_clicks, expand_clicks):
+    total = (collapse_clicks or 0) + (expand_clicks or 0)
+    collapsed = total % 2 == 1
     if collapsed:
         return (
+            {"width": "0", "minWidth": "0", "overflow": "hidden", "padding": "0"},
+            {"display": "none"},
             {
-                "width": "0",
-                "minWidth": "0",
-                "overflow": "hidden",
-                "padding": "0",
+                "display": "flex",
+                "alignItems": "flex-start",
+                "padding": "8px 2px",
+                "backgroundColor": _PANEL,
+                "borderRight": f"1px solid {_BORDER}",
             },
-            ">",
-            "Expand sidebar",
         )
     return (
         {
             "width": "270px",
             "backgroundColor": _PANEL,
             "padding": "12px 12px",
-            "gap": "10px",
+            "gap": "0",
             "color": _TEXT,
             "borderRight": f"1px solid {_BORDER}",
         },
-        "<",
-        "Collapse sidebar",
+        {"flex": "1", "overflow": "hidden"},
+        {"display": "none"},
     )
+
+
+app.clientside_callback(
+    "function(layout) { return layout === 'overlay' ? {display: 'none'} : {}; }",
+    Output("xaxis-section", "style"),
+    Input("layout-mode", "value"),
+)
 
 
 # ---------------------------------------------------------------------------

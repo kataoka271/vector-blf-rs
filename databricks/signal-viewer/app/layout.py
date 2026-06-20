@@ -62,6 +62,17 @@ def _genie_panel() -> dbc.Offcanvas:
                     "minHeight": "0",
                 },
             ),
+            html.Div(
+                id="genie-preview-box",
+                style={"display": "none"},
+                children=[
+                    html.Span(
+                        id="genie-preview-summary",
+                        style={"fontSize": "11px", "color": _TEXT, "display": "block", "marginBottom": "6px"},
+                    ),
+                    dbc.Button("Apply & Plot", id="genie-apply-btn", color="success", size="sm", className="w-100"),
+                ],
+            ),
             dbc.Textarea(
                 id="genie-input",
                 placeholder="Ask about signals or anomalies...",
@@ -76,17 +87,6 @@ def _genie_panel() -> dbc.Offcanvas:
             ),
             dbc.Button("Ask", id="genie-ask-btn", color="info", size="sm", className="w-100"),
             dcc.Interval(id="genie-poll-interval", interval=600, n_intervals=0, disabled=True),
-            html.Div(
-                id="genie-preview-box",
-                style={"display": "none"},
-                children=[
-                    html.Span(
-                        id="genie-preview-summary",
-                        style={"fontSize": "11px", "color": _TEXT, "display": "block", "marginBottom": "6px"},
-                    ),
-                    dbc.Button("Apply & Plot", id="genie-apply-btn", color="success", size="sm", className="w-100"),
-                ],
-            ),
         ],
     )
 

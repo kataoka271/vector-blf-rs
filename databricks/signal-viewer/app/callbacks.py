@@ -719,6 +719,7 @@ def new_genie_conversation(_):
     Output("genie-poll-interval", "disabled"),
     Output("genie-chat-log", "children"),
     Output("genie-ask-btn", "disabled"),
+    Output("genie-input", "value", allow_duplicate=True),
     Input("genie-ask-btn", "n_clicks"),
     State("genie-input", "value"),
     State("genie-conversation-store", "data"),
@@ -727,13 +728,13 @@ def new_genie_conversation(_):
 )
 def submit_genie_query(n_clicks, question, conv_store, chat_log):
     if not question or not question.strip():
-        return dash.no_update, True, dash.no_update, False
+        return dash.no_update, True, dash.no_update, False, dash.no_update
     if not GENIE_SPACE_ID and not _LOCAL_DEV:
         error_bubble = html.Div(
             "GENIE_SPACE_ID is not configured.",
             className="genie-bubble genie-ai",
         )
-        return dash.no_update, True, (chat_log or []) + [error_bubble], False
+        return dash.no_update, True, (chat_log or []) + [error_bubble], False, dash.no_update
 
     user_token = flask.request.headers.get("X-Forwarded-Access-Token", "") if not _LOCAL_DEV else ""
     if user_token:
@@ -746,7 +747,7 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log):
     user_bubble = html.Div(question.strip(), className="genie-bubble genie-user")
     thinking_bubble = html.Div("Thinking...", id="genie-thinking-bubble", className="genie-bubble genie-ai")
     new_log = (chat_log or []) + [user_bubble, thinking_bubble]
-    return {"request_id": request_id, "status": "pending"}, False, new_log, True
+    return {"request_id": request_id, "status": "pending"}, False, new_log, True, ""
 
 
 @callback(
@@ -889,6 +890,7 @@ app.clientside_callback(
     Output("time-range-slider", "value", allow_duplicate=True),
     Output("plot-btn", "n_clicks", allow_duplicate=True),
     Output("genie-insight-store", "data"),
+    Output("genie-preview-store", "data", allow_duplicate=True),
     Input("genie-apply-btn", "n_clicks"),
     State("genie-preview-store", "data"),
     State("signal-select", "value"),
@@ -898,7 +900,7 @@ app.clientside_callback(
 )
 def apply_genie_preview(n_clicks, preview, current_signals, current_range, plot_n):
     if not preview:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
     new_signals = preview["signals"] if preview.get("signals") else current_signals
     new_range = [preview["t_lo"], preview["t_hi"]] if preview.get("t_lo") is not None else current_range
-    return new_signals, new_range, (plot_n or 0) + 1, preview.get("explanation")
+    return new_signals, new_range, (plot_n or 0) + 1, preview.get("explanation"), None

@@ -33,6 +33,7 @@ _SIDEBAR_CONTENT_STYLE: dict = {"flex": "1", "overflow": "hidden"}
 # ---------------------------------------------------------------------------
 
 _Traces = list[tuple[str, int, str, pd.Series, pd.Series, "pd.Series | None"]]
+_Anomalies = list[dict]  # list of {"x": float | str, "label": str}
 _XaxisMode = Literal["shared", "synced", "free"]
 
 _VAL_WIDTH = 12  # fixed character width for right-aligned signal values in hover tooltip
@@ -79,7 +80,9 @@ def _hover_customdata(y: pd.Series, y_str: "pd.Series | None" = None) -> "list[l
     return [[f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")] for v in y]
 
 
-def _overlay_fig(traces: _Traces, height: int = 600, min_height: int = 400) -> go.Figure:
+def _overlay_fig(
+    traces: _Traces, height: int = 600, min_height: int = 400, anomalies: "_Anomalies | None" = None
+) -> go.Figure:
     fig = go.Figure()
     max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
     for src, channel, name, x, y, y_str in traces:
@@ -98,6 +101,18 @@ def _overlay_fig(traces: _Traces, height: int = 600, min_height: int = 400) -> g
                 hovertemplate=f"{_html.escape(label)}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )
+    if anomalies:
+        for anom in anomalies:
+            fig.add_vline(
+                x=anom["x"],
+                line_color="#ff4444",
+                line_dash="dash",
+                line_width=1.5,
+                annotation_text=anom["label"],
+                annotation_font_color="#ff4444",
+                annotation_font_size=10,
+                annotation_position="top right",
+            )
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor=_BG,
@@ -126,7 +141,11 @@ def _overlay_fig(traces: _Traces, height: int = 600, min_height: int = 400) -> g
 # https://community.plotly.com/t/hoversubplots-axis-not-working-with-make-subplots/84239).
 # Instead, each trace gets its own y-axis with a computed domain sharing one x-axis.
 def _stacked_fig(
-    traces: _Traces, height: int = 200, xaxis_mode: _XaxisMode = "shared", min_height: int = 100
+    traces: _Traces,
+    height: int = 200,
+    xaxis_mode: _XaxisMode = "shared",
+    min_height: int = 100,
+    anomalies: "_Anomalies | None" = None,
 ) -> go.Figure:
     n = len(traces)
     spacing = max(0.03, 0.20 / n) if xaxis_mode in ("synced", "free") else max(0.02, 0.20 / n)
@@ -209,6 +228,18 @@ def _stacked_fig(
             "spikethickness": 1,
         }
 
+    if anomalies:
+        for anom in anomalies:
+            fig.add_vline(
+                x=anom["x"],
+                line_color="#ff4444",
+                line_dash="dash",
+                line_width=1.5,
+                annotation_text=anom["label"],
+                annotation_font_color="#ff4444",
+                annotation_font_size=10,
+                annotation_position="top right",
+            )
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor=_BG,
@@ -244,6 +275,33 @@ def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
         for c in signal_cols
     ]
     return pivot.to_dict("records"), col_defs
+
+
+def build_anomaly_vlines(
+    anomalies_raw: "_Anomalies | None",
+    traces: _Traces,
+    time_store: dict | None,
+) -> "_Anomalies | None":
+    """Convert anomaly timestamp_s values to the x-axis unit used by the figure traces."""
+    if not anomalies_raw or not traces:
+        return None
+    first_x = traces[0][3]
+    use_datetime = pd.api.types.is_datetime64_any_dtype(first_x)
+    t0_iso = (time_store or {}).get("t0")
+    t_min = float((time_store or {}).get("min", 0))
+    t0 = pd.Timestamp(t0_iso) if t0_iso else None
+    result: _Anomalies = []
+    for anom in anomalies_raw:
+        try:
+            ts = float(anom["timestamp_s"])
+        except (ValueError, TypeError):
+            continue
+        if use_datetime and t0 is not None:
+            x_val: object = (t0 + pd.Timedelta(seconds=ts - t_min)).isoformat()
+        else:
+            x_val = ts
+        result.append({"x": x_val, "label": anom.get("label", "Anomaly")})
+    return result or None
 
 
 def _map_fig(lat: pd.Series, lon: pd.Series) -> go.Figure:

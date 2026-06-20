@@ -1,8 +1,9 @@
-"""Genie AI integration: async query runner and response parsers."""
+"""Genie AI integration: async query runner and app-action interpreter."""
 
 import concurrent.futures
 import re
 import time as _time
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -11,6 +12,8 @@ from .config import _LOCAL_DEV, cfg
 _genie_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="genie")
 # Maps request_id -> (Future, created_at_epoch)
 _genie_futures: dict[str, tuple[concurrent.futures.Future, float]] = {}
+
+_ANOMALY_WINDOW_SEC = 30.0  # auto time-window half-width around anomaly timestamps
 
 _RE_SECONDS = re.compile(
     r"(?:between\s+)?(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\s+(?:to|and|-|--)\s+(\d+(?:\.\d+)?)\s*s",
@@ -108,6 +111,45 @@ def _extract_signals(text: str, sql_rows: list[dict], all_signals: list[dict]) -
     return list(dict.fromkeys(matched))
 
 
+def _extract_anomalies(sql_rows: list[dict]) -> list[dict]:
+    """Extract point anomaly events from Genie SQL rows.
+
+    Recognises rows that have a single timestamp column (timestamp_s or
+    anomaly_timestamp_s) but NOT a min/max range pair (already consumed by
+    _extract_time_range).  Returns a list of
+    {"timestamp_s": float, "label": str, "signal_key": str | None}.
+    signal_key is set when signal_name/signal_source/channel columns are present.
+    """
+    if not sql_rows:
+        return []
+    first = sql_rows[0]
+    if "min_timestamp_s" in first or "max_timestamp_s" in first:
+        return []
+    ts_col = next((c for c in ["anomaly_timestamp_s", "timestamp_s"] if c in first), None)
+    if ts_col is None:
+        return []
+    label_col = next((c for c in ["anomaly_type", "label", "type", "description"] if c in first), None)
+    has_signal_cols = "signal_name" in first and "signal_source" in first and "channel" in first
+    result = []
+    for row in sql_rows:
+        try:
+            ts = float(row[ts_col])
+        except (ValueError, TypeError):
+            continue
+        anom_type = str(row[label_col]) if label_col and row.get(label_col) else "Anomaly"
+        signal_key: str | None = None
+        if has_signal_cols and row.get("signal_name"):
+            sn = str(row["signal_name"])
+            src = str(row["signal_source"])
+            ch = str(row["channel"])
+            signal_key = f"{src}{ch}::{sn}"
+            label = f"{sn}: {anom_type}"
+        else:
+            label = anom_type
+        result.append({"timestamp_s": ts, "label": label, "signal_key": signal_key})
+    return result
+
+
 def _extract_time_range(text: str, sql_rows: list[dict], time_store: dict | None) -> tuple[float, float] | None:
     """Extract time range as (t_lo, t_hi) in timestamp_s units."""
     if not time_store:
@@ -165,3 +207,78 @@ def _extract_time_range(text: str, sql_rows: list[dict], time_store: dict | None
             pass
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# App-action model
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GeniePreview:
+    """App state delta produced by interpreting a Genie response.
+
+    Each field is optional -- None / empty list means "no change".
+    """
+
+    signals: list[str] = field(default_factory=list)
+    anomalous_signals: list[str] = field(default_factory=list)
+    t_lo: float | None = None
+    t_hi: float | None = None
+    explanation: str = ""
+    anomalies: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "signals": self.signals,
+            "anomalous_signals": self.anomalous_signals,
+            "t_lo": self.t_lo,
+            "t_hi": self.t_hi,
+            "explanation": self.explanation,
+            "anomalies": self.anomalies,
+        }
+
+
+def interpret_genie_response(
+    result: dict,
+    all_signals: list[dict],
+    time_store: dict | None,
+) -> "GeniePreview | None":
+    """Map a Genie API result to a set of app actions.
+
+    Extracts signals, time range, and anomaly markers from the response, applies
+    automatic time-windowing around anomalies when no explicit range is given, and
+    returns a GeniePreview describing the intended state change.  Returns None when
+    the response contains nothing actionable.
+    """
+    if result["status"] != "done":
+        return None
+
+    text = result["text"] or ""
+    sql_rows = result["sql_rows"]
+
+    signals = _extract_signals(text, sql_rows, all_signals)
+    time_range = _extract_time_range(text, sql_rows, time_store)
+    anomalies = _extract_anomalies(sql_rows)
+    anomalous_signals = [a["signal_key"] for a in anomalies if a.get("signal_key")]
+
+    if time_range is None and anomalies and time_store:
+        t_min = float(time_store.get("min", 0))
+        t_max = float(time_store.get("max", 0))
+        anom_ts = [a["timestamp_s"] for a in anomalies]
+        lo = max(t_min, min(anom_ts) - _ANOMALY_WINDOW_SEC)
+        hi = min(t_max, max(anom_ts) + _ANOMALY_WINDOW_SEC)
+        if lo < hi:
+            time_range = (lo, hi)
+
+    if not signals and time_range is None and not anomalies:
+        return None
+
+    return GeniePreview(
+        signals=signals,
+        anomalous_signals=anomalous_signals,
+        t_lo=time_range[0] if time_range else None,
+        t_hi=time_range[1] if time_range else None,
+        explanation=text,
+        anomalies=anomalies,
+    )

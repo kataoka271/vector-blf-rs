@@ -33,13 +33,13 @@ from .figures import (
     _pivot_table,
     _stacked_fig,
     _XaxisMode,
+    build_anomaly_vlines,
 )
 from .genie import (
-    _extract_signals,
-    _extract_time_range,
     _genie_executor,
     _genie_futures,
     _genie_query,
+    interpret_genie_response,
 )
 from .perfetto import build_perfetto_trace
 
@@ -224,15 +224,18 @@ def toggle_all(select_clicks, clear_clicks, options):
 @callback(
     Output("signal-tags", "children"),
     Input("signal-select", "value"),
+    State("genie-anomalous-signals-store", "data"),
 )
-def render_signal_tags(selected):
+def render_signal_tags(selected, anomalous_signals):
     if not selected:
         return []
+    anomalous_set = set(anomalous_signals or [])
     tags = []
     for key in selected:
         src, channel, name = _parse_key(key)
         display_src = "ETH" if src == "SOMEIP" else src
         label = f"{display_src}{channel}::{name}"
+        is_anomalous = key in anomalous_set
         tags.append(
             html.Span(
                 [
@@ -245,7 +248,7 @@ def render_signal_tags(selected):
                         style={
                             "background": "none",
                             "border": "none",
-                            "color": "#888",
+                            "color": "#ff8888" if is_anomalous else "#888",
                             "cursor": "pointer",
                             "fontSize": "14px",
                             "lineHeight": "1",
@@ -259,11 +262,11 @@ def render_signal_tags(selected):
                     "alignItems": "center",
                     "gap": "2px",
                     "backgroundColor": _PANEL,
-                    "border": f"1px solid {_BORDER}",
+                    "border": "1px solid #ff4444" if is_anomalous else f"1px solid {_BORDER}",
                     "borderRadius": "12px",
                     "padding": "2px 8px 2px 10px",
                     "fontSize": "11px",
-                    "color": _TEXT,
+                    "color": "#ff8888" if is_anomalous else _TEXT,
                     "whiteSpace": "nowrap",
                 },
             )
@@ -403,9 +406,13 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     Input("xaxis-mode", "value"),
     State("lat-signal", "value"),
     State("lon-signal", "value"),
+    State("genie-anomaly-store", "data"),
+    State("time-range-store", "data"),
     prevent_initial_call=True,
 )
-def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisMode, lat_key, lon_key):
+def render_chart(
+    cache_data, selected, layout, chart_height, xaxis_mode: _XaxisMode, lat_key, lon_key, anomalies_raw, time_store
+):
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
 
@@ -440,8 +447,11 @@ def render_chart(cache_data, selected, layout, chart_height, xaxis_mode: _XaxisM
 
         if traces:
             h = int(chart_height or 600)
+            vlines = build_anomaly_vlines(anomalies_raw, traces, time_store)
             chart_fig = (
-                _overlay_fig(traces, h) if layout == "overlay" else _stacked_fig(traces, h, xaxis_mode or "shared")
+                _overlay_fig(traces, h, anomalies=vlines)
+                if layout == "overlay"
+                else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines)
             )
             row_data, col_defs = _pivot_table(traces)
             total = sum(len(x) for _, _, _, x, _, _ in traces)
@@ -706,12 +716,14 @@ def toggle_genie_panel(n, _close, is_open):
     Output("genie-conversation-store", "data", allow_duplicate=True),
     Output("genie-chat-log", "children", allow_duplicate=True),
     Output("genie-preview-store", "data", allow_duplicate=True),
+    Output("genie-anomaly-store", "data", allow_duplicate=True),
+    Output("genie-anomalous-signals-store", "data", allow_duplicate=True),
     Output("genie-input", "value"),
     Input("genie-new-conv-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def new_genie_conversation(_):
-    return None, [], None, ""
+    return None, [], None, None, None, ""
 
 
 @callback(
@@ -803,18 +815,9 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
     ai_bubble = html.Div(response_text, className="genie-bubble genie-ai")
     log = log + [ai_bubble]
 
-    preview = None
-    if result["status"] == "done":
-        all_signals = all_signals_raw if isinstance(all_signals_raw, list) else []
-        signals = _extract_signals(response_text, result["sql_rows"], all_signals)
-        time_range = _extract_time_range(response_text, result["sql_rows"], time_store)
-        if signals or time_range:
-            preview = {
-                "signals": signals,
-                "t_lo": time_range[0] if time_range else None,
-                "t_hi": time_range[1] if time_range else None,
-                "explanation": response_text,
-            }
+    all_signals = all_signals_raw if isinstance(all_signals_raw, list) else []
+    preview_obj = interpret_genie_response(result, all_signals, time_store)
+    preview = preview_obj.to_dict() if preview_obj is not None else None
 
     return (
         {"request_id": request_id, "status": "done"},
@@ -891,6 +894,8 @@ app.clientside_callback(
     Output("plot-btn", "n_clicks", allow_duplicate=True),
     Output("genie-insight-store", "data"),
     Output("genie-preview-store", "data", allow_duplicate=True),
+    Output("genie-anomaly-store", "data"),
+    Output("genie-anomalous-signals-store", "data"),
     Input("genie-apply-btn", "n_clicks"),
     State("genie-preview-store", "data"),
     State("signal-select", "value"),
@@ -900,7 +905,23 @@ app.clientside_callback(
 )
 def apply_genie_preview(n_clicks, preview, current_signals, current_range, plot_n):
     if not preview:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
     new_signals = preview["signals"] if preview.get("signals") else current_signals
     new_range = [preview["t_lo"], preview["t_hi"]] if preview.get("t_lo") is not None else current_range
-    return new_signals, new_range, (plot_n or 0) + 1, preview.get("explanation"), None
+    return (
+        new_signals,
+        new_range,
+        (plot_n or 0) + 1,
+        preview.get("explanation"),
+        None,
+        preview.get("anomalies"),
+        preview.get("anomalous_signals"),
+    )

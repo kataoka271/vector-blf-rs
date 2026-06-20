@@ -17,6 +17,7 @@ from .db import (
     _fetch_all_signals,
     _fetch_filenames,
     _fetch_global_time_range,
+    _log_token_info,
     _query,
     _store_to_df,
 )
@@ -735,6 +736,8 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log):
         return dash.no_update, True, (chat_log or []) + [error_bubble], False
 
     user_token = flask.request.headers.get("X-Forwarded-Access-Token", "") if not _LOCAL_DEV else ""
+    if user_token:
+        _log_token_info(user_token)
     conv_id = (conv_store or {}).get("conversation_id")
     request_id = str(_uuid.uuid4())
     future = _genie_executor.submit(_genie_query, GENIE_SPACE_ID or "mock", question.strip(), conv_id, user_token)

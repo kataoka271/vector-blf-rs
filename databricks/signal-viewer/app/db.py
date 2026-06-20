@@ -1,6 +1,8 @@
 """Database query helpers and DataFrame serialization."""
 
 import base64
+import datetime
+import json
 import traceback
 
 import flask
@@ -11,6 +13,36 @@ from databricks import sql
 
 from .config import _GOLD_TABLE, _LOCAL_DEV, USE_USER_TOKEN, cfg
 from .dummy import _dummy_query
+
+
+def _log_token_info(token: str) -> None:
+    """Log non-sensitive metadata from the X-Forwarded-Access-Token."""
+    parts = token.split(".")
+    if len(parts) == 3:
+        # JWT: decode the payload (no signature verification needed for logging)
+        try:
+            padding = 4 - len(parts[1]) % 4
+            payload_bytes = base64.urlsafe_b64decode(parts[1] + "=" * padding)
+            claims = json.loads(payload_bytes)
+            sub = claims.get("sub", "")
+            iss = claims.get("iss", "")
+            scope = claims.get("scope", "")
+            exp_raw = claims.get("exp")
+            exp_str = (
+                datetime.datetime.fromtimestamp(exp_raw, tz=datetime.timezone.utc).isoformat()
+                if isinstance(exp_raw, (int, float))
+                else str(exp_raw)
+            )
+            print(
+                f"[token] type=JWT sub={sub!r} iss={iss!r} scope={scope!r} exp={exp_str}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"[token] type=JWT (payload decode failed: {exc})", flush=True)
+    else:
+        # Non-JWT token: log only a short prefix
+        prefix = token[:8] + "..." if len(token) > 8 else token
+        print(f"[token] type=opaque prefix={prefix!r} len={len(token)}", flush=True)
 
 
 def _run_query(stmt: str, params: list | dict | None, user_token: str | None = None) -> pd.DataFrame:
@@ -37,6 +69,7 @@ def _query(stmt: str, params=None) -> pd.DataFrame:
     user_token = flask.request.headers.get("X-Forwarded-Access-Token")
     if not user_token:
         raise RuntimeError("Missing X-Forwarded-Access-Token header.")
+    _log_token_info(user_token)
     return _run_query(stmt, params, user_token=user_token if USE_USER_TOKEN else None)
 
 

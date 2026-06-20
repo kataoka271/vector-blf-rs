@@ -13,6 +13,11 @@ resources:
           sql_warehouse:
             id: ${var.warehouse_id}
             permission: CAN_USE
+        - name: genie-space
+          genie_space:
+            name: "vehicle network signal analysis"
+            space_id: ${var.genie_space_id}
+            permission: CAN_RUN
       # NOTE: DABs grants SQL warehouse CAN_USE automatically, but Unity Catalog
       # table access must be granted separately to the app service principal.
       # After first deploy, find the SP's application_id via:

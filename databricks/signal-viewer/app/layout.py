@@ -444,6 +444,16 @@ app.layout = dbc.Container(
                             id="genie-insight-banner",
                             style={"display": "none"},
                         ),
+                        html.Div(
+                            id="signal-tags",
+                            style={
+                                "display": "flex",
+                                "flexWrap": "wrap",
+                                "gap": "6px",
+                                "padding": "6px 16px",
+                                "flexShrink": "0",
+                            },
+                        ),
                         dcc.Loading(
                             type="circle",
                             color=_ACCENT,

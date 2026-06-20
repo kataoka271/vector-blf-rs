@@ -10,7 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from ._dash import app
 from .config import _GOLD_TABLE, _LOCAL_DEV, GENIE_SPACE_ID, _parse_key
-from dash import Input, Output, State, callback, dcc, html
+from dash import ALL, Input, Output, State, callback, dcc, html
 from .db import (
     _df_to_store,
     _fetch_all_signals,
@@ -186,6 +186,71 @@ def toggle_all(select_clicks, clear_clicks, options):
     if triggered == "select-all-btn":
         return [o["value"] for o in options]
     return []
+
+
+@callback(
+    Output("signal-tags", "children"),
+    Input("signal-select", "value"),
+)
+def render_signal_tags(selected):
+    if not selected:
+        return []
+    tags = []
+    for key in selected:
+        src, channel, name = _parse_key(key)
+        display_src = "ETH" if src == "SOMEIP" else src
+        label = f"{display_src}{channel}::{name}"
+        tags.append(
+            html.Span(
+                [
+                    label,
+                    html.Button(
+                        "×",
+                        id={"type": "remove-signal-btn", "index": key},
+                        n_clicks=0,
+                        style={
+                            "background": "none",
+                            "border": "none",
+                            "color": "#888",
+                            "cursor": "pointer",
+                            "fontSize": "14px",
+                            "lineHeight": "1",
+                            "padding": "0 2px",
+                            "marginLeft": "2px",
+                        },
+                    ),
+                ],
+                style={
+                    "display": "inline-flex",
+                    "alignItems": "center",
+                    "gap": "2px",
+                    "backgroundColor": _PANEL,
+                    "border": f"1px solid {_BORDER}",
+                    "borderRadius": "12px",
+                    "padding": "2px 8px 2px 10px",
+                    "fontSize": "11px",
+                    "color": _TEXT,
+                    "whiteSpace": "nowrap",
+                },
+            )
+        )
+    return tags
+
+
+@callback(
+    Output("signal-select", "value", allow_duplicate=True),
+    Input({"type": "remove-signal-btn", "index": ALL}, "n_clicks"),
+    State("signal-select", "value"),
+    prevent_initial_call=True,
+)
+def remove_signal(n_clicks_list, selected):
+    if not any(n_clicks_list):
+        return dash.no_update
+    triggered = dash.ctx.triggered_id
+    if not isinstance(triggered, dict):
+        return dash.no_update
+    key_to_remove = triggered["index"]
+    return [s for s in (selected or []) if s != key_to_remove]
 
 
 # ---------------------------------------------------------------------------

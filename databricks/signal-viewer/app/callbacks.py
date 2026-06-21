@@ -5,6 +5,7 @@ import traceback
 import uuid as _uuid
 
 import dash
+import dash_bootstrap_components as dbc
 import flask
 import pandas as pd
 import plotly.graph_objects as go
@@ -759,7 +760,7 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log):
     user_bubble = html.Div(question.strip(), className="genie-bubble genie-user")
     thinking_bubble = html.Div("Thinking...", id="genie-thinking-bubble", className="genie-bubble genie-ai")
     new_log = (chat_log or []) + [user_bubble, thinking_bubble]
-    return {"request_id": request_id, "status": "pending"}, False, new_log, True, ""
+    return {"request_id": request_id, "status": "pending", "question": question.strip()}, False, new_log, True, ""
 
 
 @callback(
@@ -769,27 +770,37 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log):
     Output("genie-preview-store", "data"),
     Output("genie-chat-log", "children", allow_duplicate=True),
     Output("genie-ask-btn", "disabled", allow_duplicate=True),
+    Output("genie-history-store", "data", allow_duplicate=True),
     Input("genie-poll-interval", "n_intervals"),
     State("genie-request-store", "data"),
     State("genie-conversation-store", "data"),
     State("genie-chat-log", "children"),
     State("all-signals-cache", "data"),
     State("time-range-store", "data"),
+    State("genie-history-store", "data"),
     prevent_initial_call=True,
 )
-def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store):
+def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw):
     if not req_store or req_store.get("status") != "pending":
-        return dash.no_update, True, dash.no_update, dash.no_update, dash.no_update, False
+        return dash.no_update, True, dash.no_update, dash.no_update, dash.no_update, False, dash.no_update
 
     request_id = req_store["request_id"]
     entry = _genie_futures.get(request_id)
     if entry is None:
-        return {"request_id": request_id, "status": "done"}, True, dash.no_update, dash.no_update, dash.no_update, False
+        return (
+            {"request_id": request_id, "status": "done"},
+            True,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            False,
+            dash.no_update,
+        )
 
     future, created_at = entry
     # Expire after 120 s
     if not future.done() and _time.time() - created_at < 120:
-        return dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, True
+        return dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, True, dash.no_update
 
     if not future.done():
         future.cancel()
@@ -803,6 +814,7 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
             dash.no_update,
             log + [timeout_bubble],
             False,
+            dash.no_update,
         )
 
     result = future.result()
@@ -819,6 +831,10 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
     preview_obj = interpret_genie_response(result, all_signals, time_store)
     preview = preview_obj.to_dict() if preview_obj is not None else None
 
+    question = req_store.get("question", "")
+    history = list(history_raw or [])
+    history.append({"question": question, "answer": response_text})
+
     return (
         {"request_id": request_id, "status": "done"},
         True,
@@ -826,6 +842,7 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
         preview,
         log,
         False,
+        history,
     )
 
 
@@ -925,3 +942,46 @@ def apply_genie_preview(n_clicks, preview, current_signals, current_range, plot_
         preview.get("anomalies"),
         preview.get("anomalous_signals"),
     )
+
+
+@callback(
+    Output("genie-history-accordion", "children"),
+    Output("genie-history-panel", "style"),
+    Output("genie-history-count", "children"),
+    Input("genie-history-store", "data"),
+)
+def render_genie_history(history):
+    if not history:
+        return [], {"display": "none", "flexShrink": "0"}, ""
+    items = []
+    for i, entry in enumerate(reversed(history)):
+        q = entry.get("question", "")
+        a = entry.get("answer", "")
+        q_short = q[:50] + "..." if len(q) > 50 else q
+        items.append(
+            dbc.AccordionItem(
+                html.Div(
+                    a,
+                    style={"fontSize": "11px", "color": _TEXT, "whiteSpace": "pre-wrap", "wordBreak": "break-word"},
+                ),
+                title=html.Span(q_short, style={"fontSize": "11px", "color": "#aaa"}),
+                item_id=f"h{len(history) - 1 - i}",
+            )
+        )
+    return items, {"flexShrink": "0"}, f"({len(history)})"
+
+
+app.clientside_callback(
+    "function(n, is_open) { return n ? !is_open : is_open; }",
+    Output("genie-history-collapse", "is_open"),
+    Input("genie-history-header", "n_clicks"),
+    State("genie-history-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+
+
+app.clientside_callback(
+    "function(is_open) { return is_open ? '▲' : '▼'; }",
+    Output("genie-history-arrow", "children"),
+    Input("genie-history-collapse", "is_open"),
+)

@@ -63,6 +63,52 @@ def _genie_panel() -> dbc.Offcanvas:
                 },
             ),
             html.Div(
+                id="genie-history-panel",
+                style={"display": "none", "flexShrink": "0"},
+                children=[
+                    html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
+                    html.Div(
+                        [
+                            html.Span(
+                                "History",
+                                style={"fontSize": "12px", "color": "#888", "flex": "1"},
+                            ),
+                            html.Span(
+                                id="genie-history-count",
+                                style={"fontSize": "11px", "color": "#666"},
+                            ),
+                            html.Span(
+                                id="genie-history-arrow",
+                                children="▼",
+                                style={"fontSize": "10px", "color": "#666"},
+                            ),
+                        ],
+                        id="genie-history-header",
+                        n_clicks=0,
+                        style={
+                            "display": "flex",
+                            "alignItems": "center",
+                            "cursor": "pointer",
+                            "padding": "4px 0",
+                            "userSelect": "none",
+                            "gap": "6px",
+                        },
+                    ),
+                    dbc.Collapse(
+                        id="genie-history-collapse",
+                        is_open=False,
+                        children=dbc.Accordion(
+                            id="genie-history-accordion",
+                            start_collapsed=True,
+                            flush=True,
+                            always_open=False,
+                            children=[],
+                            className="genie-history-accordion",
+                        ),
+                    ),
+                ],
+            ),
+            html.Div(
                 id="genie-preview-box",
                 style={"display": "none"},
                 children=[
@@ -107,6 +153,7 @@ app.layout = dbc.Container(
         dcc.Store(id="genie-insight-store"),
         dcc.Store(id="genie-anomaly-markers-store"),
         dcc.Store(id="genie-flagged-signals-store"),
+        dcc.Store(id="genie-history-store"),
         dcc.Store(id="signal-data-cache"),
         dcc.Store(id="time-range-store"),
         dcc.Store(id="filenames-cache"),

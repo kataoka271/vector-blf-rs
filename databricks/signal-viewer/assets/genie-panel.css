@@ -50,3 +50,43 @@
   flex: 1;
   min-width: 0;
 }
+
+/* History accordion dark-theme overrides */
+.genie-history-accordion .accordion-item {
+  background-color: #13111a;
+  border-color: #2a2838;
+  color: #ccc;
+}
+
+.genie-history-accordion .accordion-button {
+  background-color: #1c1a27;
+  color: #aaa;
+  font-size: 11px;
+  padding: 6px 10px;
+  box-shadow: none;
+}
+
+.genie-history-accordion .accordion-button:not(.collapsed) {
+  background-color: #1c1a27;
+  color: #7ecfec;
+  box-shadow: none;
+}
+
+.genie-history-accordion .accordion-button::after {
+  filter: invert(0.7);
+}
+
+.genie-history-accordion .accordion-body {
+  background-color: #13111a;
+  color: #ccc;
+  font-size: 11px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.genie-history-accordion .accordion-collapse {
+  border-color: #2a2838;
+}

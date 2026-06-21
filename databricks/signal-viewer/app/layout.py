@@ -566,6 +566,28 @@ app.layout = dbc.Container(
                         html.Div(
                             id="genie-insight-banner",
                             style={"display": "none"},
+                            children=[
+                                html.Span(
+                                    id="genie-insight-text",
+                                    style={"flex": "1", "whiteSpace": "pre-wrap", "wordBreak": "break-word"},
+                                ),
+                                html.Button(
+                                    "×",
+                                    id="genie-insight-close-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "background": "none",
+                                        "border": "none",
+                                        "color": "#7ecfec",
+                                        "cursor": "pointer",
+                                        "fontSize": "16px",
+                                        "lineHeight": "1",
+                                        "padding": "0 4px",
+                                        "flexShrink": "0",
+                                        "alignSelf": "flex-start",
+                                    },
+                                ),
+                            ],
                         ),
                         html.Div(
                             id="signal-tags",

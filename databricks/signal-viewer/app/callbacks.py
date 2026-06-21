@@ -877,14 +877,14 @@ app.clientside_callback(
             return {display: "none"};
         }
         return {
-            display: "block",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "8px",
             padding: "8px 16px",
             backgroundColor: "#1c3a4a",
             color: "#7ecfec",
             fontSize: "12px",
             borderBottom: "1px solid #2a5060",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word"
         };
     }
     """,
@@ -900,8 +900,16 @@ app.clientside_callback(
         return "Genie: " + insight;
     }
     """,
-    Output("genie-insight-banner", "children"),
+    Output("genie-insight-text", "children"),
     Input("genie-insight-store", "data"),
+)
+
+
+app.clientside_callback(
+    "function(n) { return null; }",
+    Output("genie-insight-store", "data", allow_duplicate=True),
+    Input("genie-insight-close-btn", "n_clicks"),
+    prevent_initial_call=True,
 )
 
 

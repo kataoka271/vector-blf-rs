@@ -224,7 +224,7 @@ def toggle_all(select_clicks, clear_clicks, options):
 @callback(
     Output("signal-tags", "children"),
     Input("signal-select", "value"),
-    State("genie-anomalous-signals-store", "data"),
+    State("genie-flagged-signals-store", "data"),
 )
 def render_signal_tags(selected, anomalous_signals):
     if not selected:
@@ -406,7 +406,7 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     Input("xaxis-mode", "value"),
     State("lat-signal", "value"),
     State("lon-signal", "value"),
-    State("genie-anomaly-store", "data"),
+    State("genie-anomaly-markers-store", "data"),
     State("time-range-store", "data"),
     prevent_initial_call=True,
 )
@@ -716,8 +716,8 @@ def toggle_genie_panel(n, _close, is_open):
     Output("genie-conversation-store", "data", allow_duplicate=True),
     Output("genie-chat-log", "children", allow_duplicate=True),
     Output("genie-preview-store", "data", allow_duplicate=True),
-    Output("genie-anomaly-store", "data", allow_duplicate=True),
-    Output("genie-anomalous-signals-store", "data", allow_duplicate=True),
+    Output("genie-anomaly-markers-store", "data", allow_duplicate=True),
+    Output("genie-flagged-signals-store", "data", allow_duplicate=True),
     Output("genie-input", "value"),
     Input("genie-new-conv-btn", "n_clicks"),
     prevent_initial_call=True,
@@ -894,8 +894,8 @@ app.clientside_callback(
     Output("plot-btn", "n_clicks", allow_duplicate=True),
     Output("genie-insight-store", "data"),
     Output("genie-preview-store", "data", allow_duplicate=True),
-    Output("genie-anomaly-store", "data"),
-    Output("genie-anomalous-signals-store", "data"),
+    Output("genie-anomaly-markers-store", "data"),
+    Output("genie-flagged-signals-store", "data"),
     Input("genie-apply-btn", "n_clicks"),
     State("genie-preview-store", "data"),
     State("signal-select", "value"),

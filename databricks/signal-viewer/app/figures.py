@@ -260,7 +260,8 @@ def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
     parts = [traces[0][3].reset_index(drop=True).astype(str).rename("time")]
     categorical_cols: set[str] = set()
     for src, channel, name, _, y, y_str in traces:
-        col_name = f"{src}{channel}::{name}"
+        display_src = "ETH" if src == "SOMEIP" else src
+        col_name = f"{display_src}{channel}::{name}"
         col = (y_str if y_str is not None else y).reset_index(drop=True)
         parts.append(col.rename(col_name))
         if y_str is not None:

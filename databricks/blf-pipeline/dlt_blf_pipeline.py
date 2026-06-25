@@ -43,6 +43,17 @@ Setup
        blf.enum_signals_path   /Volumes/mycat/myschema/enum_values.csv        (optional)
        blf.container_long_header false                (optional, default: false)
 
+   Signal definitions can also be loaded from Unity Catalog tables instead of CSV files.
+   When a table parameter is set it takes precedence over the corresponding path parameter.
+   The table is materialized to a temporary CSV on DBFS at pipeline startup so that
+   executors can access it via the shared /dbfs/ FUSE mount.
+
+       blf.signals_table        main.blf_dev.can_signals      (optional; overrides signals_path)
+       blf.someip_signals_table main.blf_dev.someip_signals   (optional; overrides someip_signals_path)
+       blf.enum_signals_table   main.blf_dev.enum_values      (optional; overrides enum_signals_path)
+
+   Expected table schemas match the CSV formats documented above (same column names).
+
    CAN signal CSV format (header required):
        message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
        0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
@@ -106,6 +117,9 @@ SIGNALS_PATH = spark.conf.get("blf.signals_path", "")
 SOMEIP_SIGNALS_PATH = spark.conf.get("blf.someip_signals_path", "")
 ENUM_SIGNALS_PATH = spark.conf.get("blf.enum_signals_path", "")
 CONTAINER_LONG_HEADER: bool = spark.conf.get("blf.container_long_header", "false").lower() == "true"
+SIGNALS_TABLE = spark.conf.get("blf.signals_table", "")
+SOMEIP_SIGNALS_TABLE = spark.conf.get("blf.someip_signals_table", "")
+ENUM_SIGNALS_TABLE = spark.conf.get("blf.enum_signals_table", "")
 
 # ── bronze output schema (flat rows emitted by _parse_blf_batch) ──────────────
 
@@ -224,6 +238,42 @@ def _local_path(spark_path: str) -> str:
     if spark_path.startswith("dbfs:/"):
         return "/dbfs/" + spark_path[len("dbfs:/") :]
     return spark_path  # already a local path
+
+
+# ── signal table materialization ──────────────────────────────────────────────
+
+# Staging directory on DBFS: shared between driver and executors via /dbfs/ FUSE.
+_SIGNAL_STAGING = "/dbfs/tmp/vector_blf_signal_staging"
+
+
+def _materialize_signal_table(table_name: str, local_csv_path: str) -> None:
+    """Read a Unity Catalog table and write it as a CSV for executor access.
+
+    Uses toPandas() so the CSV lands as a single file (no part-* splitting).
+    The /dbfs/ path is accessible on all cluster nodes.
+    """
+    import os
+
+    os.makedirs(os.path.dirname(local_csv_path), exist_ok=True)
+    spark.table(table_name).toPandas().to_csv(local_csv_path, index=False)
+    print(f"[blf_pipeline] materialized table {table_name!r} -> {local_csv_path!r}", flush=True)
+
+
+# Resolve effective signal paths: table sources take precedence over file paths.
+if SIGNALS_TABLE:
+    _can_csv = f"{_SIGNAL_STAGING}/can_signals.csv"
+    _materialize_signal_table(SIGNALS_TABLE, _can_csv)
+    SIGNALS_PATH = _can_csv
+
+if SOMEIP_SIGNALS_TABLE:
+    _someip_csv = f"{_SIGNAL_STAGING}/someip_signals.csv"
+    _materialize_signal_table(SOMEIP_SIGNALS_TABLE, _someip_csv)
+    SOMEIP_SIGNALS_PATH = _someip_csv
+
+if ENUM_SIGNALS_TABLE:
+    _enum_csv = f"{_SIGNAL_STAGING}/enum_signals.csv"
+    _materialize_signal_table(ENUM_SIGNALS_TABLE, _enum_csv)
+    ENUM_SIGNALS_PATH = _enum_csv
 
 
 # ── parsing worker (mapInPandas) ──────────────────────────────────────────────

@@ -30,8 +30,10 @@ databricks = [
 dev = [
     "autosar-data>=0.10.1",
     "maturin>=1.13.3",
+    "msoffcrypto-tool>=5.0.0",
     "openpyxl>=3.1.5",
     "pandas>=2.0",
+    "pandera>=0.19.0",
     "pytest>=8.0",
     "python-can>=4.5.0",
     "ruff>=0.15.14",
@@ -46,3 +48,6 @@ reportMissingImports = "warning"
 
 [tool.pytest.ini_options]
 testpaths = ["databricks"]
+
+[tool.ty.environment]
+root = ["./src", "./databricks", "./scripts"]

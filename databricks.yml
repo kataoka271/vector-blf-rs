@@ -35,6 +35,7 @@ bundle:
 include:
   - databricks/blf-pipeline/blf_ingestion.pipeline.yml
   - databricks/signal-viewer/signal_viewer.app.yml
+  - databricks/signal-importer/signal_importer.job.yml
 
 # ── artifact: maturin wheel ───────────────────────────────────────────────────
 
@@ -98,6 +99,40 @@ variables:
       /genie/spaces/<id>
       Set via: databricks bundle deploy --var="genie_space_id=<id>"
     default: ""
+
+  excel_source_path:
+    description: >
+      UC Volume path to the Excel signal definition file.
+      Used by the signal_importer job.
+      Example: /Volumes/main/blf_dev/signals/signals.xlsx
+    default: ""
+
+  excel_sheet:
+    description: Sheet name or 0-based index in the Excel file (default: 0).
+    default: "0"
+
+  excel_header_row:
+    description: 0-based row index that contains column headers (default: 0).
+    default: "0"
+
+  signal_import_mode:
+    description: '"can" or "someip" (default: can).'
+    default: "can"
+
+  signal_column_map_json:
+    description: >
+      JSON encoding of the COLUMN_MAP dict mapping signal fields to Excel
+      column headers or 0-based indices.
+      Example: '{"message_id":"CAN ID","signal_name":"Signal Name","start_byte":5}'
+    default: "{}"
+
+  excel_secret_scope:
+    description: Databricks secret scope that holds the Excel file password.
+    default: "blf"
+
+  excel_secret_key:
+    description: Key within the secret scope for the Excel file password.
+    default: "excel_password"
 
 # ── deployment targets ────────────────────────────────────────────────────────
 

@@ -298,7 +298,9 @@ def build_anomaly_vlines(
         except (ValueError, TypeError):
             continue
         if use_datetime and t0 is not None:
-            x_val: object = (t0 + pd.Timedelta(seconds=ts - t_min)).isoformat()
+            t1 = t0 + pd.Timedelta(seconds=ts - t_min)
+            assert isinstance(t1, pd.Timestamp)
+            x_val = t1.isoformat()
         else:
             x_val = ts
         result.append({"x": x_val, "label": anom.get("label", "Anomaly")})

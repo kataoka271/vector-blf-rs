@@ -188,10 +188,7 @@ def normalize_nullable_float(raw: object, field: str) -> Optional[float]:
 def _is_empty_series(s: pd.Series) -> pd.Series:
     """Vectorized is_empty check across an entire column."""
     null_mask = s.isna()
-    non_null = ~null_mask
-    sentinel_mask = pd.Series(False, index=s.index)
-    if non_null.any():
-        sentinel_mask[non_null] = s[non_null].astype(str).str.strip().str.lower().isin(_NA_SENTINELS | {""})
+    sentinel_mask = s.fillna("").astype(str).str.strip().str.lower().isin(_NA_SENTINELS | {""})
     return null_mask | sentinel_mask
 
 

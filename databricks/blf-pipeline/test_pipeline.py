@@ -1,11 +1,11 @@
 """Tests for dlt_blf_pipeline — pure-Python helpers and mapInPandas workers.
 
-Pure-function tests (no vector_blf needed):
-  _local_path, _eth_parse_*, _someip_*, _uds_parse_payload,
-  _isotp_sf_payload, _isotp_ff_info, _doip_*, pandas UDFs
+Rust-API tests (require `uv run maturin develop --features python`):
+  parse_eth_payload_signals, parse_someip_udp, parse_uds,
+  IsoTpReassembler, parse_doip_diag, pandas UDFs
 
-Integration tests (requires `uv run maturin develop --features python`):
-  _parse_blf_batch, _parse_blf_uds_batch, _decode_signals, _decode_someip_signals
+Integration tests (require `uv run maturin develop --features python`):
+  _parse_blf_batch, _decode_signals, _decode_someip_signals
 """
 
 import importlib.util
@@ -16,8 +16,8 @@ import dlt_blf_pipeline as pipeline
 import pandas as pd
 import pytest
 
-DATA_DIR = Path(__file__).parent.parent / "data"
-ASSETS_DIR = Path(__file__).parent.parent / "assets"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
+ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
 
 _needs_vector_blf = pytest.mark.skipif(
     not importlib.util.find_spec("vector_blf"),
@@ -99,336 +99,438 @@ def test_local_path_plain():
     assert pipeline._local_path("/tmp/file.blf") == "/tmp/file.blf"
 
 
-# ── _eth_parse_tcp ────────────────────────────────────────────────────────────
+# ── parse_eth_payload_signals (vector_blf) ───────────────────────────────────
 
 
-def test_eth_parse_tcp_fields():
-    data = _tcp(8080, 443, b"\x00" * 4)
-    out: list = []
-    pipeline._eth_parse_tcp(data, out)
-    by_name = {s["signal_name"]: s["signal_value"] for s in out}
-    assert by_name["tcp.src_port"] == 8080.0
-    assert by_name["tcp.dst_port"] == 443.0
-    assert "tcp.flags" in by_name
+@_needs_vector_blf
+def test_parse_eth_signals_tcp() -> None:
+    import vector_blf
+
+    pkt = _ipv4(6, "10.0.0.1", "10.0.0.2", _tcp(8080, 443, b"\x00" * 4))
+    sigs = vector_blf.parse_eth_payload_signals(0x0800, pkt)
+    by_val = {s["signal_name"]: s["signal_value"] for s in sigs}
+    assert by_val["tcp.src_port"] == 8080.0
+    assert by_val["tcp.dst_port"] == 443.0
+    assert "tcp.flags" in by_val
 
 
-def test_eth_parse_tcp_too_short():
-    out: list = []
-    pipeline._eth_parse_tcp(b"\x00" * 10, out)
-    assert out == []
+@_needs_vector_blf
+def test_parse_eth_signals_tcp_too_short() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_eth_payload_signals(0x0800, b"\x45" * 10) == []
 
 
-# ── _eth_parse_udp ────────────────────────────────────────────────────────────
+@_needs_vector_blf
+def test_parse_eth_signals_udp() -> None:
+    import vector_blf
+
+    pkt = _ipv4(17, "192.168.1.1", "10.0.0.2", _udp(5000, 5001, b"\xab" * 12))
+    sigs = vector_blf.parse_eth_payload_signals(0x0800, pkt)
+    by_val = {s["signal_name"]: s["signal_value"] for s in sigs}
+    assert by_val["udp.src_port"] == 5000.0
+    assert by_val["udp.dst_port"] == 5001.0
+    assert by_val["udp.payload_bytes"] == 12.0
 
 
-def test_eth_parse_udp_fields():
-    data = _udp(5000, 5001, b"\xab" * 12)
-    out: list = []
-    pipeline._eth_parse_udp(data, out)
-    by_name = {s["signal_name"]: s["signal_value"] for s in out}
-    assert by_name["udp.src_port"] == 5000.0
-    assert by_name["udp.dst_port"] == 5001.0
-    assert by_name["udp.payload_bytes"] == 12.0
+@_needs_vector_blf
+def test_parse_eth_signals_udp_too_short() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_eth_payload_signals(0x0800, b"\x45" * 10) == []
 
 
-def test_eth_parse_udp_too_short():
-    out: list = []
-    pipeline._eth_parse_udp(b"\x00" * 4, out)
-    assert out == []
+@_needs_vector_blf
+def test_parse_eth_signals_ipv4_fields() -> None:
+    import vector_blf
 
-
-# ── _eth_parse_ipv4 ───────────────────────────────────────────────────────────
-
-
-def test_eth_parse_ipv4_with_udp():
     pkt = _ipv4(17, "192.168.1.1", "10.0.0.2", _udp(1234, 5678, b"\x00" * 4))
-    out: list = []
-    pipeline._eth_parse_ipv4(pkt, out)
-    by_name_val = {s["signal_name"]: s["signal_value"] for s in out}
-    by_name_str = {s["signal_name"]: s["signal_str"] for s in out}
-    assert by_name_val["ip.protocol"] == 17.0
-    assert by_name_val["ip.ttl"] == 64.0
-    assert by_name_str["ip.src"] == "192.168.1.1"
-    assert by_name_str["ip.dst"] == "10.0.0.2"
-    assert by_name_val["udp.src_port"] == 1234.0
-    assert by_name_val["udp.dst_port"] == 5678.0
+    sigs = vector_blf.parse_eth_payload_signals(0x0800, pkt)
+    by_val = {s["signal_name"]: s["signal_value"] for s in sigs}
+    by_str = {s["signal_name"]: s["signal_str"] for s in sigs}
+    assert by_val["ip.protocol"] == 17.0
+    assert by_val["ip.ttl"] == 64.0
+    assert by_str["ip.src"] == "192.168.1.1"
+    assert by_str["ip.dst"] == "10.0.0.2"
+    assert by_val["udp.src_port"] == 1234.0
+    assert by_val["udp.dst_port"] == 5678.0
 
 
-def test_eth_parse_ipv4_with_tcp():
+@_needs_vector_blf
+def test_parse_eth_signals_ipv4_with_tcp() -> None:
+    import vector_blf
+
     pkt = _ipv4(6, "10.0.0.1", "10.0.0.2", _tcp(443, 12345, b"\x00" * 4))
-    out: list = []
-    pipeline._eth_parse_ipv4(pkt, out)
-    names = {s["signal_name"] for s in out}
+    names = {s["signal_name"] for s in vector_blf.parse_eth_payload_signals(0x0800, pkt)}
     assert "tcp.src_port" in names
     assert "ip.protocol" in names
 
 
-def test_eth_parse_ipv4_too_short():
-    out: list = []
-    pipeline._eth_parse_ipv4(b"\x45" * 10, out)
-    assert out == []
+@_needs_vector_blf
+def test_parse_eth_signals_ipv4_too_short() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_eth_payload_signals(0x0800, b"\x45" * 10) == []
 
 
-# ── _eth_parse_ipv6 ───────────────────────────────────────────────────────────
+@_needs_vector_blf
+def test_parse_eth_signals_ipv6_with_udp() -> None:
+    import vector_blf
 
-
-def test_eth_parse_ipv6_with_udp():
     src = b"\x20\x01\x0d\xb8" + b"\x00" * 12
     dst = b"\x20\x01\x0d\xb8" + b"\x00" * 11 + b"\x01"
     pkt = _ipv6(17, src, dst, _udp(9000, 9001, b"\x00" * 8))
-    out: list = []
-    pipeline._eth_parse_ipv6(pkt, out)
-    by_name = {s["signal_name"]: s["signal_value"] for s in out}
-    assert by_name["ip.protocol"] == 17.0
-    assert by_name["ip.hop_limit"] == 64.0
-    assert by_name["udp.src_port"] == 9000.0
+    sigs = vector_blf.parse_eth_payload_signals(0x86DD, pkt)
+    by_val = {s["signal_name"]: s["signal_value"] for s in sigs}
+    assert by_val["ip.protocol"] == 17.0
+    assert by_val["ip.hop_limit"] == 64.0
+    assert by_val["udp.src_port"] == 9000.0
 
 
-def test_eth_parse_ipv6_too_short():
-    out: list = []
-    pipeline._eth_parse_ipv6(b"\x00" * 30, out)
-    assert out == []
+@_needs_vector_blf
+def test_parse_eth_signals_ipv6_too_short() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_eth_payload_signals(0x86DD, b"\x00" * 30) == []
 
 
-# ── _someip_strip_ipv4_udp ────────────────────────────────────────────────────
+@_needs_vector_blf
+def test_parse_eth_signals_unknown_ethertype() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_eth_payload_signals(0x9999, b"\x00" * 28) == []
 
 
-def test_someip_strip_ipv4_udp_valid():
-    body = b"\xde\xad\xbe\xef"
-    pkt = _ipv4(17, "192.168.0.1", "224.0.0.1", _udp(30509, 30509, body))
-    result = pipeline._someip_strip_ipv4_udp(pkt)
-    assert result is not None
-    src_ip, dst_ip, src_port, dst_port, payload = result
-    assert src_ip == "192.168.0.1"
-    assert dst_ip == "224.0.0.1"
-    assert src_port == 30509
-    assert payload == body
+# ── parse_someip_udp (vector_blf) ────────────────────────────────────────────
 
 
-def test_someip_strip_ipv4_udp_not_udp():
-    pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(80, 443, b"\x00" * 4))
-    assert pipeline._someip_strip_ipv4_udp(pkt) is None
+@_needs_vector_blf
+def test_parse_someip_udp_valid_ipv4() -> None:
+    import vector_blf
 
-
-def test_someip_strip_ipv4_udp_too_short():
-    assert pipeline._someip_strip_ipv4_udp(b"\x00" * 10) is None
-
-
-def test_someip_strip_ipv6_udp_valid():
-    body = b"\xbe\xef"
-    pkt = _ipv6(17, b"\x00" * 16, b"\xff\x02" + b"\x00" * 14, _udp(30490, 30490, body))
-    result = pipeline._someip_strip_ipv6_udp(pkt)
-    assert result is not None
-    _, _, src_port, dst_port, payload = result
-    assert src_port == 30490
-    assert payload == body
-
-
-# ── _someip_parse_header ──────────────────────────────────────────────────────
-
-
-def test_someip_parse_header_valid():
     app = b"\x01\x02\x03\x04"
-    hdr = _someip(0x0064, 0x0001, app_payload=app, msg_type=0x02)
-    result = pipeline._someip_parse_header(hdr)
-    assert result is not None
-    assert result["service_id"] == 0x0064
-    assert result["method_id"] == 0x0001
-    assert result["protocol_version"] == 0x01
-    assert result["msg_type"] == 0x02
-    assert result["app_payload"] == app
+    pkt = _ipv4(17, "192.168.0.1", "224.0.0.1", _udp(30509, 30509, _someip(0x0064, 0x0001, app, msg_type=0x02)))
+    rows = vector_blf.parse_someip_udp(0x0800, pkt)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["someip_service_id"] == 0x0064
+    assert row["someip_method_id"] == 0x0001
+    assert row["someip_protocol_version"] == 0x01
+    assert row["someip_msg_type"] == 0x02
+    assert row["payload"] == app
+    assert row["src_ip"] == "192.168.0.1"
 
 
-def test_someip_parse_header_too_short():
-    assert pipeline._someip_parse_header(b"\x00" * 10) is None
+@_needs_vector_blf
+def test_parse_someip_udp_not_udp() -> None:
+    import vector_blf
+
+    pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(80, 443, b"\x00" * 4))
+    assert vector_blf.parse_someip_udp(0x0800, pkt) == []
 
 
-def test_someip_parse_header_wrong_protocol_version():
+@_needs_vector_blf
+def test_parse_someip_udp_too_short() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_someip_udp(0x0800, b"\x00" * 10) == []
+
+
+@_needs_vector_blf
+def test_parse_someip_udp_ipv6_valid() -> None:
+    import vector_blf
+
+    body = b"\xbe\xef"
+    pkt = _ipv6(17, b"\x00" * 16, b"\xff\x02" + b"\x00" * 14, _udp(30490, 30490, _someip(0x0064, 0x0001, body)))
+    rows = vector_blf.parse_someip_udp(0x86DD, pkt)
+    assert len(rows) == 1
+    assert rows[0]["someip_service_id"] == 0x0064
+
+
+@_needs_vector_blf
+def test_parse_someip_udp_sd_skipped() -> None:
+    import vector_blf
+
+    pkt = _ipv4(17, "1.2.3.4", "5.6.7.8", _udp(30490, 30490, _someip(0xFFFF, 0x8100)))
+    assert vector_blf.parse_someip_udp(0x0800, pkt) == []
+
+
+@_needs_vector_blf
+def test_parse_someip_udp_wrong_protocol_version() -> None:
+    import vector_blf
+
     hdr = bytearray(_someip(0x0064, 0x0001))
-    hdr[12] = 0x02
-    assert pipeline._someip_parse_header(bytes(hdr)) is None
+    hdr[12] = 0x02  # change protocol version from 0x01 to 0x02
+    pkt = _ipv4(17, "1.2.3.4", "5.6.7.8", _udp(30509, 30509, bytes(hdr)))
+    assert vector_blf.parse_someip_udp(0x0800, pkt) == []
 
 
-def test_someip_parse_header_sd_service_skipped():
-    assert pipeline._someip_parse_header(_someip(0xFFFF, 0x8100)) is None
+@_needs_vector_blf
+def test_parse_someip_udp_invalid_msg_type() -> None:
+    import vector_blf
 
-
-def test_someip_parse_header_invalid_msg_type():
     hdr = bytearray(_someip(0x0064, 0x0001))
-    hdr[14] = 0x03
-    assert pipeline._someip_parse_header(bytes(hdr)) is None
+    hdr[14] = 0x03  # invalid message type
+    pkt = _ipv4(17, "1.2.3.4", "5.6.7.8", _udp(30509, 30509, bytes(hdr)))
+    assert vector_blf.parse_someip_udp(0x0800, pkt) == []
 
 
-def test_someip_parse_header_length_below_minimum():
+@_needs_vector_blf
+def test_parse_someip_udp_length_below_minimum() -> None:
+    import vector_blf
+
     hdr = bytearray(_someip(0x0064, 0x0001))
     struct.pack_into(">I", hdr, 4, 4)  # length field < 8
-    assert pipeline._someip_parse_header(bytes(hdr)) is None
+    pkt = _ipv4(17, "1.2.3.4", "5.6.7.8", _udp(30509, 30509, bytes(hdr)))
+    assert vector_blf.parse_someip_udp(0x0800, pkt) == []
 
 
-# ── _uds_parse_payload ────────────────────────────────────────────────────────
+@_needs_vector_blf
+def test_parse_someip_udp_container_two_pdus() -> None:
+    import vector_blf
+
+    app = b"\xde\xad"
+    udp_body = _someip(0x0064, 0x0001, app) + _someip(0x0064, 0x0002, app)
+    pkt = _ipv4(17, "10.0.0.1", "10.0.0.2", _udp(30509, 30509, udp_body))
+    rows = vector_blf.parse_someip_udp(0x0800, pkt)
+    assert len(rows) == 2
+    assert rows[0]["someip_method_id"] == 0x0001
+    assert rows[1]["someip_method_id"] == 0x0002
 
 
-def test_uds_parse_request():
-    result = pipeline._uds_parse_payload(bytes([0x22, 0xF1, 0x90]))
+# ── parse_uds (vector_blf) ────────────────────────────────────────────────────
+
+
+@_needs_vector_blf
+def test_parse_uds_request() -> None:
+    import vector_blf
+
+    result = vector_blf.parse_uds(bytes([0x22, 0xF1, 0x90]))
     assert result is not None
-    assert result["uds_type"] == "Request"
-    assert result["service_id"] == 0x22
-    assert result["service_name"] == "ReadDataByIdentifier"
-    assert result["nrc"] is None
-    assert result["data"] == bytes([0xF1, 0x90])
+    uds_type, service_id, service_name, nrc, nrc_name, data = result
+    assert uds_type == "Request"
+    assert service_id == 0x22
+    assert service_name == "ReadDataByIdentifier"
+    assert nrc is None
+    assert bytes(data) == bytes([0xF1, 0x90])
 
 
-def test_uds_parse_positive_response():
-    result = pipeline._uds_parse_payload(bytes([0x62, 0xF1, 0x90, 0xAB, 0xCD]))
+@_needs_vector_blf
+def test_parse_uds_positive_response() -> None:
+    import vector_blf
+
+    result = vector_blf.parse_uds(bytes([0x62, 0xF1, 0x90, 0xAB, 0xCD]))
     assert result is not None
-    assert result["uds_type"] == "PositiveResponse"
-    assert result["service_id"] == 0x22
-    assert result["data"] == bytes([0xF1, 0x90, 0xAB, 0xCD])
+    uds_type, service_id, service_name, nrc, nrc_name, data = result
+    assert uds_type == "PositiveResponse"
+    assert service_id == 0x22
+    assert bytes(data) == bytes([0xF1, 0x90, 0xAB, 0xCD])
 
 
-def test_uds_parse_negative_response():
-    result = pipeline._uds_parse_payload(bytes([0x7F, 0x22, 0x31]))
+@_needs_vector_blf
+def test_parse_uds_negative_response() -> None:
+    import vector_blf
+
+    result = vector_blf.parse_uds(bytes([0x7F, 0x22, 0x31]))
     assert result is not None
-    assert result["uds_type"] == "NegativeResponse"
-    assert result["service_id"] == 0x22
-    assert result["nrc"] == 0x31
-    assert result["nrc_name"] == "RequestOutOfRange"
+    uds_type, service_id, service_name, nrc, nrc_name, data = result
+    assert uds_type == "NegativeResponse"
+    assert service_id == 0x22
+    assert nrc == 0x31
+    assert nrc_name == "RequestOutOfRange"
 
 
-def test_uds_parse_negative_response_too_short():
-    assert pipeline._uds_parse_payload(bytes([0x7F, 0x22])) is None
+@_needs_vector_blf
+def test_parse_uds_negative_response_too_short() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_uds(bytes([0x7F, 0x22])) is None
 
 
-def test_uds_parse_empty():
-    assert pipeline._uds_parse_payload(b"") is None
+@_needs_vector_blf
+def test_parse_uds_empty() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_uds(b"") is None
 
 
-def test_uds_parse_unknown_service():
-    result = pipeline._uds_parse_payload(bytes([0xAA, 0x00]))
+@_needs_vector_blf
+def test_parse_uds_unknown_service() -> None:
+    import vector_blf
+
+    result = vector_blf.parse_uds(bytes([0xAA, 0x00]))
     assert result is not None
-    assert result["uds_type"] == "Request"
-    assert result["service_name"] == "Unknown_0xAA"
+    uds_type, service_id, service_name, nrc, nrc_name, data = result
+    assert uds_type == "Request"
+    assert service_name == "Unknown_0xAA"
 
 
-# ── _isotp_sf_payload ─────────────────────────────────────────────────────────
+# ── IsoTpReassembler (vector_blf) ─────────────────────────────────────────────
 
 
-def test_isotp_sf_normal():
-    assert pipeline._isotp_sf_payload(bytes([0x03, 0x22, 0xF1, 0x90])) == bytes([0x22, 0xF1, 0x90])
+@_needs_vector_blf
+def test_isotp_reassembler_single_frame() -> None:
+    import vector_blf
 
-
-def test_isotp_sf_extended_canfd():
-    # Extended SF: first byte 0x00, length in second byte
-    data = bytes([0x00, 0x03, 0x22, 0xF1, 0x90])
-    assert pipeline._isotp_sf_payload(data) == bytes([0x22, 0xF1, 0x90])
-
-
-def test_isotp_sf_wrong_nibble():
-    assert pipeline._isotp_sf_payload(bytes([0x10, 0x03, 0x22])) is None
-
-
-def test_isotp_sf_empty():
-    assert pipeline._isotp_sf_payload(b"") is None
-
-
-def test_isotp_sf_truncated_payload():
-    # SF claims len=5 but only 2 payload bytes provided
-    assert pipeline._isotp_sf_payload(bytes([0x05, 0x22, 0xF1])) is None
-
-
-# ── _isotp_ff_info ────────────────────────────────────────────────────────────
-
-
-def test_isotp_ff_normal():
-    data = bytes([0x10, 0x0A, 0x22, 0xF1, 0x90])
-    result = pipeline._isotp_ff_info(data)
+    result = vector_blf.IsoTpReassembler().push(bytes([0x03, 0x22, 0xF1, 0x90]))
     assert result is not None
-    total_len, initial = result
-    assert total_len == 10
-    assert initial == bytes([0x22, 0xF1, 0x90])
+    uds_type, service_id, service_name, nrc, nrc_name, data = result
+    assert uds_type == "Request"
+    assert service_id == 0x22
+    assert bytes(data) == bytes([0xF1, 0x90])
 
 
-def test_isotp_ff_extended_canfd():
+@_needs_vector_blf
+def test_isotp_reassembler_sf_extended_canfd() -> None:
+    import vector_blf
+
+    # Extended SF for CAN FD: first byte 0x00, length in second byte
+    result = vector_blf.IsoTpReassembler().push(bytes([0x00, 0x03, 0x22, 0xF1, 0x90]))
+    assert result is not None
+    uds_type, _, _, _, _, data = result
+    assert uds_type == "Request"
+    assert bytes(data) == bytes([0xF1, 0x90])
+
+
+@_needs_vector_blf
+def test_isotp_reassembler_first_frame_returns_none() -> None:
+    import vector_blf
+
+    # FF: total_len=10, initial payload=[0x22, 0xF1, 0x90]
+    assert vector_blf.IsoTpReassembler().push(bytes([0x10, 0x0A, 0x22, 0xF1, 0x90])) is None
+
+
+@_needs_vector_blf
+def test_isotp_reassembler_ff_extended_canfd_returns_none() -> None:
+    import vector_blf
+
+    # Extended FF for CAN FD: bytes [0x10, 0x00] + 32-bit total_len + initial_data
     data = bytes([0x10, 0x00]) + struct.pack(">I", 1000) + bytes([0x22, 0xF1, 0x90])
-    result = pipeline._isotp_ff_info(data)
+    assert vector_blf.IsoTpReassembler().push(data) is None
+
+
+@_needs_vector_blf
+def test_isotp_reassembler_empty() -> None:
+    import vector_blf
+
+    assert vector_blf.IsoTpReassembler().push(b"") is None
+
+
+@_needs_vector_blf
+def test_isotp_reassembler_truncated_single_frame() -> None:
+    import vector_blf
+
+    # SF claims len=5 but only 2 payload bytes provided
+    assert vector_blf.IsoTpReassembler().push(bytes([0x05, 0x22, 0xF1])) is None
+
+
+@_needs_vector_blf
+def test_isotp_reassembler_consecutive_without_first_frame() -> None:
+    import vector_blf
+
+    # CF with no preceding FF — should return None
+    assert vector_blf.IsoTpReassembler().push(bytes([0x21, 0x22, 0xF1])) is None
+
+
+@_needs_vector_blf
+def test_isotp_reassembler_ff_too_short() -> None:
+    import vector_blf
+
+    assert vector_blf.IsoTpReassembler().push(bytes([0x10])) is None
+
+
+@_needs_vector_blf
+def test_isotp_reassembler_multiframe() -> None:
+    import vector_blf
+
+    # FF: total_len=9, initial=[0x62, 0xF1, 0x90, 0xAB, 0xCD, 0xEF] (6 bytes)
+    ff = bytes([0x10, 0x09, 0x62, 0xF1, 0x90, 0xAB, 0xCD, 0xEF])
+    # CF: seq=1, remaining=[0x01, 0x02, 0x03]
+    cf = bytes([0x21, 0x01, 0x02, 0x03])
+    r = vector_blf.IsoTpReassembler()
+    assert r.push(ff) is None
+    result = r.push(cf)
     assert result is not None
-    total_len, initial = result
-    assert total_len == 1000
-    assert initial == bytes([0x22, 0xF1, 0x90])
+    uds_type, service_id, service_name, nrc, nrc_name, data = result
+    assert uds_type == "PositiveResponse"
+    assert service_id == 0x22
+    assert bytes(data) == bytes([0xF1, 0x90, 0xAB, 0xCD, 0xEF, 0x01, 0x02, 0x03])
 
 
-def test_isotp_ff_wrong_nibble():
-    assert pipeline._isotp_ff_info(bytes([0x20, 0x10, 0x22])) is None
+# ── parse_doip_diag (vector_blf) ──────────────────────────────────────────────
 
 
-def test_isotp_ff_too_short():
-    assert pipeline._isotp_ff_info(bytes([0x10])) is None
+@_needs_vector_blf
+def test_parse_doip_diag_single_message() -> None:
+    import vector_blf
 
-
-# ── _doip_strip_tcp ───────────────────────────────────────────────────────────
-
-
-def test_doip_strip_tcp_ipv4():
-    body = b"\xde\xad\xbe\xef"
-    pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(12345, pipeline._DOIP_PORT, body))
-    result = pipeline._doip_strip_tcp(pipeline._ETHERTYPE_IPV4, pkt)
-    assert result is not None
-    src_port, dst_port, payload = result
-    assert src_port == 12345
-    assert dst_port == pipeline._DOIP_PORT
-    assert payload == body
-
-
-def test_doip_strip_tcp_ipv4_not_tcp():
-    pkt = _ipv4(17, "1.2.3.4", "5.6.7.8", _udp(1234, 5678, b"\x00" * 4))
-    assert pipeline._doip_strip_tcp(pipeline._ETHERTYPE_IPV4, pkt) is None
-
-
-def test_doip_strip_tcp_unknown_ethertype():
-    assert pipeline._doip_strip_tcp(0x0806, b"\x00" * 28) is None
-
-
-# ── _doip_diag_messages ───────────────────────────────────────────────────────
-
-
-def test_doip_diag_single_message():
     uds = bytes([0x22, 0xF1, 0x90])
-    messages = list(pipeline._doip_diag_messages(_doip_diag(0x0E80, 0x0010, uds)))
+    pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(12345, 13400, _doip_diag(0x0E80, 0x0010, uds)))
+    messages = vector_blf.parse_doip_diag(0x0800, pkt)
     assert len(messages) == 1
     src, tgt, payload = messages[0]
     assert src == 0x0E80
     assert tgt == 0x0010
-    assert payload == uds
+    assert bytes(payload) == uds
 
 
-def test_doip_diag_two_back_to_back():
+@_needs_vector_blf
+def test_parse_doip_diag_two_back_to_back() -> None:
+    import vector_blf
+
     uds1 = bytes([0x22, 0xF1, 0x90])
     uds2 = bytes([0x7F, 0x22, 0x31])
-    frame = _doip_diag(0x0E80, 0x0010, uds1) + _doip_diag(0x0010, 0x0E80, uds2)
-    messages = list(pipeline._doip_diag_messages(frame))
+    tcp_body = _doip_diag(0x0E80, 0x0010, uds1) + _doip_diag(0x0010, 0x0E80, uds2)
+    pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(12345, 13400, tcp_body))
+    messages = vector_blf.parse_doip_diag(0x0800, pkt)
     assert len(messages) == 2
-    assert messages[0][2] == uds1
-    assert messages[1][2] == uds2
+    assert bytes(messages[0][2]) == uds1
+    assert bytes(messages[1][2]) == uds2
 
 
-def test_doip_diag_bad_version_check():
-    # bytes[0] XOR bytes[1] != 0xFF => invalid
-    assert list(pipeline._doip_diag_messages(bytes([0x01, 0x01]) + b"\x00" * 6)) == []
+@_needs_vector_blf
+def test_parse_doip_diag_not_tcp() -> None:
+    import vector_blf
+
+    pkt = _ipv4(17, "1.2.3.4", "5.6.7.8", _udp(1234, 5678, b"\x00" * 4))
+    assert vector_blf.parse_doip_diag(0x0800, pkt) == []
 
 
-def test_doip_diag_non_diag_payload_type_skipped():
+@_needs_vector_blf
+def test_parse_doip_diag_unknown_ethertype() -> None:
+    import vector_blf
+
+    assert vector_blf.parse_doip_diag(0x0806, b"\x00" * 28) == []
+
+
+@_needs_vector_blf
+def test_parse_doip_diag_bad_version_check() -> None:
+    import vector_blf
+
+    # DoIP version byte XOR inverse byte != 0xFF => invalid
+    bad_doip = bytes([0x01, 0x01]) + b"\x00" * 6
+    pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(12345, 13400, bad_doip))
+    assert vector_blf.parse_doip_diag(0x0800, pkt) == []
+
+
+@_needs_vector_blf
+def test_parse_doip_diag_non_diag_payload_type_skipped() -> None:
+    import vector_blf
+
     # payload_type 0x0005 != 0x8001 — not a DiagMessage, should be skipped
     content = struct.pack(">HH", 0x0001, 0x0002) + b"\x22"
     frame = bytes([0x02, 0xFD]) + struct.pack(">HI", 0x0005, len(content)) + content
-    assert list(pipeline._doip_diag_messages(frame)) == []
+    pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(12345, 13400, frame))
+    assert vector_blf.parse_doip_diag(0x0800, pkt) == []
 
 
 # ── _parse_eth_payload pandas UDF ─────────────────────────────────────────────
 
 
+@_needs_vector_blf
 def test_parse_eth_payload_ipv4_udp():
     pkt = _ipv4(17, "192.168.1.100", "10.20.30.40", _udp(1234, 5678, b"\x00" * 8))
-    result = pipeline._parse_eth_payload(pd.Series([pipeline._ETHERTYPE_IPV4]), pd.Series([pkt]))
+    result = pipeline._parse_eth_payload(pd.Series([0x0800]), pd.Series([pkt]))
     sigs = result.iloc[0]
     by_val = {s["signal_name"]: s["signal_value"] for s in sigs}
     by_str = {s["signal_name"]: s["signal_str"] for s in sigs}
@@ -439,21 +541,24 @@ def test_parse_eth_payload_ipv4_udp():
     assert by_val["udp.payload_bytes"] == 8.0
 
 
+@_needs_vector_blf
 def test_parse_eth_payload_ipv6_udp():
     src = b"\x20\x01\x0d\xb8" + b"\x00" * 12
     dst = b"\xff\x02" + b"\x00" * 14
     pkt = _ipv6(17, src, dst, _udp(9000, 9001, b"\x00" * 4))
-    result = pipeline._parse_eth_payload(pd.Series([pipeline._ETHERTYPE_IPV6]), pd.Series([pkt]))
+    result = pipeline._parse_eth_payload(pd.Series([0x86DD]), pd.Series([pkt]))
     names = {s["signal_name"] for s in result.iloc[0]}
     assert "ip.src" in names
     assert "udp.src_port" in names
 
 
+@_needs_vector_blf
 def test_parse_eth_payload_none_data():
-    result = pipeline._parse_eth_payload(pd.Series([pipeline._ETHERTYPE_IPV4]), pd.Series([None]))
+    result = pipeline._parse_eth_payload(pd.Series([0x0800]), pd.Series([None]))
     assert result.iloc[0] == []
 
 
+@_needs_vector_blf
 def test_parse_eth_payload_unknown_ethertype():
     result = pipeline._parse_eth_payload(pd.Series([0x0806]), pd.Series([b"\x00" * 28]))
     assert result.iloc[0] == []
@@ -462,10 +567,11 @@ def test_parse_eth_payload_unknown_ethertype():
 # ── _parse_someip pandas UDF ──────────────────────────────────────────────────
 
 
+@_needs_vector_blf
 def test_parse_someip_valid():
     app = b"\x01\x02\x03\x04"
     pkt = _ipv4(17, "192.168.1.1", "239.0.0.1", _udp(30509, 30509, _someip(0x0064, 0x0001, app, msg_type=0x02)))
-    result = pipeline._parse_someip(pd.Series([pipeline._ETHERTYPE_IPV4]), pd.Series([pkt]))
+    result = pipeline._parse_someip(pd.Series([0x0800]), pd.Series([pkt]))
     rows = result.iloc[0]
     assert len(rows) == 1
     row = rows[0]
@@ -476,28 +582,31 @@ def test_parse_someip_valid():
     assert row["src_ip"] == "192.168.1.1"
 
 
+@_needs_vector_blf
 def test_parse_someip_container_two_pdus():
     # Two SOME/IP PDUs back-to-back in one UDP payload (AUTOSAR Container PDU Transport)
     app = b"\xde\xad"
     udp_body = _someip(0x0064, 0x0001, app) + _someip(0x0064, 0x0002, app)
     pkt = _ipv4(17, "10.0.0.1", "10.0.0.2", _udp(30509, 30509, udp_body))
-    result = pipeline._parse_someip(pd.Series([pipeline._ETHERTYPE_IPV4]), pd.Series([pkt]))
+    result = pipeline._parse_someip(pd.Series([0x0800]), pd.Series([pkt]))
     rows = result.iloc[0]
     assert len(rows) == 2
     assert rows[0]["someip_method_id"] == 0x0001
     assert rows[1]["someip_method_id"] == 0x0002
 
 
+@_needs_vector_blf
 def test_parse_someip_sd_skipped():
     pkt = _ipv4(17, "0.0.0.0", "255.255.255.255", _udp(30490, 30490, _someip(0xFFFF, 0x8100)))
-    result = pipeline._parse_someip(pd.Series([pipeline._ETHERTYPE_IPV4]), pd.Series([pkt]))
+    result = pipeline._parse_someip(pd.Series([0x0800]), pd.Series([pkt]))
     assert result.iloc[0] == []
 
 
+@_needs_vector_blf
 def test_parse_someip_tcp_not_parsed():
     # SOME/IP is only extracted from UDP; TCP frames yield empty rows
     pkt = _ipv4(6, "1.2.3.4", "5.6.7.8", _tcp(30509, 30509, _someip(0x0064, 0x0001)))
-    result = pipeline._parse_someip(pd.Series([pipeline._ETHERTYPE_IPV4]), pd.Series([pkt]))
+    result = pipeline._parse_someip(pd.Series([0x0800]), pd.Series([pkt]))
     assert result.iloc[0] == []
 
 
@@ -542,23 +651,6 @@ def test_parse_blf_batch_missing_file_does_not_raise() -> None:
     )
     frames = list(pipeline._parse_blf_batch(iter([batch_df])))
     assert frames == []
-
-
-# ── _parse_blf_uds_batch integration tests ────────────────────────────────────
-
-
-@_needs_vector_blf
-def test_parse_blf_uds_batch_runs_without_error() -> None:
-    path = str(DATA_DIR / "test_logfile.blf")
-    batch_df = pd.DataFrame({"_source_file": [path], "_file_mtime": [None]})
-    frames = list(pipeline._parse_blf_uds_batch(iter([batch_df])))
-    # test_logfile.blf contains raw CAN — ISO-TP reassembly may yield 0 UDS PDUs,
-    # but the worker must complete without raising.
-    if frames:
-        df = pd.concat(frames, ignore_index=True)
-        required = {"_source_file", "_ingested_at", "timestamp_ns", "transport", "uds_type", "service_id"}
-        assert required.issubset(set(df.columns))
-        assert df["transport"].isin(["CAN", "DOIP"]).all()
 
 
 # ── _decode_signals integration tests ────────────────────────────────────────

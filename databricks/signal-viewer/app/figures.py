@@ -38,6 +38,25 @@ _XaxisMode = Literal["shared", "synced", "free"]
 
 _VAL_WIDTH = 12  # fixed character width for right-aligned signal values in hover tooltip
 
+
+def _scale_traces(traces: _Traces) -> _Traces:
+    """Scale each numeric trace to [-1, 1]: y' = (y - mid) / max(|y_max|, |y_min|)."""
+    result = []
+    for src, channel, name, x, y, y_str in traces:
+        if y_str is not None:
+            result.append((src, channel, name, x, y, y_str))
+            continue
+        y_min = float(y.min())
+        y_max = float(y.max())
+        denom = max(abs(y_max), abs(y_min))
+        if denom == 0:
+            result.append((src, channel, name, x, y, y_str))
+            continue
+        mid = (y_max + y_min) / 2.0
+        result.append((src, channel, name, x, (y - mid) / denom, y_str))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------

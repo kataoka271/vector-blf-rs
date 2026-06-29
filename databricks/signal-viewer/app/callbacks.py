@@ -406,6 +406,7 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     Input("layout-mode", "value"),
     Input("chart-height", "value"),
     Input("xaxis-mode", "value"),
+    Input("overlay-mode", "value"),
     State("lat-signal", "value"),
     State("lon-signal", "value"),
     State("genie-anomaly-markers-store", "data"),
@@ -413,7 +414,16 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     prevent_initial_call=True,
 )
 def render_chart(
-    cache_data, selected, layout, chart_height, xaxis_mode: _XaxisMode, lat_key, lon_key, anomalies_raw, time_store
+    cache_data,
+    selected,
+    layout,
+    chart_height,
+    xaxis_mode: _XaxisMode,
+    overlay_mode,
+    lat_key,
+    lon_key,
+    anomalies_raw,
+    time_store,
 ):
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
@@ -450,8 +460,14 @@ def render_chart(
         if traces:
             h = int(chart_height or 600)
             vlines = build_anomaly_vlines(anomalies_raw, traces, time_store)
+            normalize = layout == "overlay" and overlay_mode != "nominal"
             chart_fig = (
-                _overlay_fig(_scale_traces(traces), h, anomalies=vlines, original_traces=traces)
+                _overlay_fig(
+                    _scale_traces(traces) if normalize else traces,
+                    h,
+                    anomalies=vlines,
+                    original_traces=traces if normalize else None,
+                )
                 if layout == "overlay"
                 else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines)
             )
@@ -689,6 +705,12 @@ def toggle_sidebar(collapse_clicks, expand_clicks):
 app.clientside_callback(
     "function(layout) { return layout === 'overlay' ? {display: 'none'} : {}; }",
     Output("xaxis-section", "style"),
+    Input("layout-mode", "value"),
+)
+
+app.clientside_callback(
+    "function(layout) { return layout === 'overlay' ? {} : {display: 'none'}; }",
+    Output("overlay-section", "style"),
     Input("layout-mode", "value"),
 )
 

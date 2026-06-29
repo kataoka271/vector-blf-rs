@@ -341,6 +341,24 @@ app.layout = dbc.Container(
                                             className="radio-group",
                                         ),
                                         _section(
+                                            "Y scale (overlay)",
+                                            dbc.RadioItems(
+                                                id="overlay-mode",
+                                                options=[
+                                                    {"label": "Normalized", "value": "normalized"},
+                                                    {"label": "Nominal", "value": "nominal"},
+                                                ],
+                                                value="normalized",
+                                                className="btn-group d-flex",
+                                                inputClassName="btn-check",
+                                                labelClassName="btn btn-outline-secondary btn-sm text-center flex-fill",
+                                                labelCheckedClassName="active",
+                                            ),
+                                            id="overlay-section",
+                                            className="radio-group",
+                                            style={"display": "none"},
+                                        ),
+                                        _section(
                                             "X axis (stacked)",
                                             dbc.RadioItems(
                                                 id="xaxis-mode",

@@ -100,14 +100,19 @@ def _hover_customdata(y: pd.Series, y_str: "pd.Series | None" = None) -> "list[l
 
 
 def _overlay_fig(
-    traces: _Traces, height: int = 600, min_height: int = 400, anomalies: "_Anomalies | None" = None
+    traces: _Traces,
+    height: int = 600,
+    min_height: int = 400,
+    anomalies: "_Anomalies | None" = None,
+    original_traces: "_Traces | None" = None,
 ) -> go.Figure:
     fig = go.Figure()
     max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
-    for src, channel, name, x, y, y_str in traces:
+    for i, (src, channel, name, x, y, y_str) in enumerate(traces):
         label = f"{src}{channel}::{name}"
         pad = "&nbsp;" * (max_label - len(label))
         y_plot = y_str if y_str is not None else y
+        y_hover, y_hover_str = (original_traces[i][4], original_traces[i][5]) if original_traces else (y, y_str)
         fig.add_trace(
             go.Scattergl(
                 x=x,
@@ -116,7 +121,7 @@ def _overlay_fig(
                 line=dict(shape="hv"),
                 name=label,
                 showlegend=False,
-                customdata=_hover_customdata(y, y_str),
+                customdata=_hover_customdata(y_hover, y_hover_str),
                 hovertemplate=f"{_html.escape(label)}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )

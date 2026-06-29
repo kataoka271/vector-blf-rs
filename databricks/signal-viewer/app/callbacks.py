@@ -451,7 +451,7 @@ def render_chart(
             h = int(chart_height or 600)
             vlines = build_anomaly_vlines(anomalies_raw, traces, time_store)
             chart_fig = (
-                _overlay_fig(_scale_traces(traces), h, anomalies=vlines)
+                _overlay_fig(_scale_traces(traces), h, anomalies=vlines, original_traces=traces)
                 if layout == "overlay"
                 else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines)
             )

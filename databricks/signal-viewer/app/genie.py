@@ -25,6 +25,7 @@ _RE_LAST = re.compile(r"last\s+(\d+(?:\.\d+)?)\s*(second|sec|minute|min)s?", re.
 
 def _genie_query(space_id: str, content: str, conversation_id: str | None, user_token: str) -> dict:
     """Run a Genie Space query in an executor thread. Returns result dict."""
+    print(f"[_genie_query] start space_id={space_id} conversation_id={conversation_id}", flush=True)
     if _LOCAL_DEV:
         _time.sleep(1.5)
         mock_text = (
@@ -68,8 +69,10 @@ def _genie_query(space_id: str, content: str, conversation_id: str | None, user_
                                 sql_rows = [dict(zip(cols, row)) for row in (sr.result.data_array or [])]
                     except Exception:
                         pass
+        print(f"[_genie_query] done status=done conversation_id={msg.conversation_id}", flush=True)
         return {"status": "done", "text": text, "sql_rows": sql_rows, "conversation_id": str(msg.conversation_id)}
     except Exception as exc:
+        print(f"[_genie_query] error: {exc}", flush=True)
         return {"status": "error", "text": str(exc), "sql_rows": [], "conversation_id": conversation_id or ""}
 
 

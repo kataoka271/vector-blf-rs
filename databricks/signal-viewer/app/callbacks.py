@@ -720,6 +720,13 @@ app.clientside_callback(
 # ---------------------------------------------------------------------------
 
 
+def _get_component_id(b: object) -> object:
+    """Return the id of a Dash component whether it is a Python object or a serialized dict."""
+    if isinstance(b, dict):
+        return b.get("props", {}).get("id")
+    return getattr(b, "id", None)
+
+
 @callback(
     Output("genie-panel-collapse", "is_open"),
     Output("genie-toggle-btn", "children"),
@@ -804,6 +811,10 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log):
     prevent_initial_call=True,
 )
 def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw):
+    print(
+        f"[poll_genie_result] called n_intervals={n_intervals} status={req_store.get('status') if req_store else None}",
+        flush=True,
+    )
     if not req_store or req_store.get("status") != "pending":
         return dash.no_update, True, dash.no_update, dash.no_update, dash.no_update, False, dash.no_update
 
@@ -829,7 +840,7 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
         future.cancel()
         del _genie_futures[request_id]
         timeout_bubble = html.Div("Request timed out.", className="genie-bubble genie-ai")
-        log = [b for b in (chat_log or []) if getattr(b, "id", None) != "genie-thinking-bubble"]
+        log = [b for b in (chat_log or []) if _get_component_id(b) != "genie-thinking-bubble"]
         return (
             {"request_id": request_id, "status": "done"},
             True,
@@ -845,7 +856,7 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
 
     new_conv = {"space_id": GENIE_SPACE_ID, "conversation_id": result["conversation_id"]}
 
-    log = [b for b in (chat_log or []) if getattr(b, "id", None) != "genie-thinking-bubble"]
+    log = [b for b in (chat_log or []) if _get_component_id(b) != "genie-thinking-bubble"]
     response_text = result["text"] or "(no text response)"
     ai_bubble = html.Div(response_text, className="genie-bubble genie-ai")
     log = log + [ai_bubble]

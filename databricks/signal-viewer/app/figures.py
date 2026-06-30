@@ -40,7 +40,7 @@ _VAL_WIDTH = 12  # fixed character width for right-aligned signal values in hove
 
 
 def _scale_traces(traces: _Traces) -> _Traces:
-    """Scale each numeric trace to [-1, 1]: y' = (y - mid) / max(|y_max|, |y_min|)."""
+    """Scale each numeric trace to [-1, 1]: y' = (y - mid) / half_range."""
     result = []
     for src, channel, name, x, y, y_str in traces:
         if y_str is not None:
@@ -48,12 +48,12 @@ def _scale_traces(traces: _Traces) -> _Traces:
             continue
         y_min = float(y.min())
         y_max = float(y.max())
-        denom = max(abs(y_max), abs(y_min))
-        if denom == 0:
+        if y_max == y_min:
             result.append((src, channel, name, x, y, y_str))
             continue
         mid = (y_max + y_min) / 2.0
-        result.append((src, channel, name, x, (y - mid) / denom, y_str))
+        half_range = (y_max - y_min) / 2.0
+        result.append((src, channel, name, x, (y - mid) / half_range, y_str))
     return result
 
 

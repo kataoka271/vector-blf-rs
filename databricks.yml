@@ -91,6 +91,7 @@ variables:
       Find it in the Databricks workspace under SQL Warehouses -> Connection details -> HTTP path
       (extract the id after /warehouses/).
       Set via: databricks bundle deploy --var="warehouse_id=<id>"
+    default: ""
 
   genie_space_id:
     description: >

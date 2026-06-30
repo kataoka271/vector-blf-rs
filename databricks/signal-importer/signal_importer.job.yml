@@ -17,22 +17,12 @@ resources:
               - "--secret-key=${var.excel_secret_key}"
               - "--target-catalog=${var.target_catalog}"
               - "--target-schema=${var.target_schema}"
-          libraries:
-            # Co-upload the shared conversion module so executors can import it.
-            - file:
-                path: ../../scripts/signal_conversion.py
-            - pypi:
-                package: msoffcrypto-tool>=5.0.0
-            - pypi:
-                package: openpyxl>=3.1.5
-          job_cluster_key: signal_importer_cluster
+          environment_key: default
 
-      job_clusters:
-        - job_cluster_key: signal_importer_cluster
-          new_cluster:
-            spark_version: 15.4.x-scala2.12
-            node_type_id: i3.xlarge
-            num_workers: 0
-            spark_conf:
-              # Single-node: conversion is pure-Python pandas, no distributed compute needed.
-              spark.master: "local[*, 4]"
+      environments:
+        - environment_key: default
+          spec:
+            client: "2"
+            dependencies:
+              - msoffcrypto-tool>=5.0.0
+              - openpyxl>=3.1.5

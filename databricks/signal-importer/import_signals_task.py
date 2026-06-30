@@ -36,8 +36,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Union
+
+# signal_conversion.py lives in scripts/ two levels above this file in the workspace.
+# DABs syncs the entire bundle, so the relative path is stable across targets.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
 
 import pandas as pd
 from signal_conversion import (

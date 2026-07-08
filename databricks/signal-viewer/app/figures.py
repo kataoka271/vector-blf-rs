@@ -331,7 +331,16 @@ def build_anomaly_vlines(
     return result or None
 
 
+def _normalize_lat_lon(lat: pd.Series, lon: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Wrap lat into [-90, 90] and lon into [-180, 180)."""
+    lon = (lon + 180) % 360 - 180
+    lat = (lat + 90) % 360 - 90
+    lat = lat.mask(lat > 90, 180 - lat)
+    return lat, lon
+
+
 def _map_fig(lat: pd.Series, lon: pd.Series) -> go.Figure:
+    lat, lon = _normalize_lat_lon(lat, lon)
     center_lat = float(lat.mean())
     center_lon = float(lon.mean())
     fig = go.Figure(

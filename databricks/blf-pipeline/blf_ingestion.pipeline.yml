@@ -12,9 +12,12 @@ resources:
         blf.source_path:         ${var.blf_source_path}
         blf.target_catalog:      ${var.target_catalog}
         blf.target_schema:       ${var.target_schema}
-        blf.signals_path:        ${var.signals_path}
-        blf.someip_signals_path: ${var.someip_signals_path}
-        blf.enum_signals_path:   ${var.enum_signals_path}
+        blf.signals_path:         ${var.signals_path}
+        blf.someip_signals_path:  ${var.someip_signals_path}
+        blf.enum_signals_path:    ${var.enum_signals_path}
+        blf.signals_table:        ${var.signals_table}
+        blf.someip_signals_table: ${var.someip_signals_table}
+        blf.enum_signals_table:   ${var.enum_signals_table}
 
       libraries:
         # DLT pipeline definition (path relative to this file)

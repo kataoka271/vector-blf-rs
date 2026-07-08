@@ -8,25 +8,28 @@ Also ships **Python bindings** via PyO3 + maturin as the `vector_blf` package.
 
 ## Features
 
-- Parse BLF files: CAN, CAN-FD, CAN-FD64, Ethernet, EthernetEx
+- Parse BLF/MF4/MDF files: CAN, CAN-FD, CAN-FD64, Ethernet, EthernetEx, MF4 scalar signals
 - Support for BLF files without LogContainer wrappers (direct mode)
 - Parallel decompression of log containers (`--threads N`)
 - BLF → BLF copy with optional repetition
 - BLF/MF4 → CSV export (raw messages or with signal decoding; includes `absolute_timestamp` column)
 - BLF/MF4 → MF4 export for CAN, CAN-FD, Ethernet, and scalar signals
+- BLF/MF4 → Perfetto native trace export (`.perfetto-trace`) — signals as counter tracks, viewable in [ui.perfetto.dev](https://ui.perfetto.dev)
 - CAN signal decoding via a DBC-like CSV signal database (`--can-signals`)
+- Enum/categorical value decoding via a CSV mapping raw values to category strings (`--enum-signals`)
 - I-PDU container frame demultiplexing (CAN-FD IPduM)
 - Channel number → name mapping via a CSV (`--channels`)
 - Per-PDU occurrence summary (`--pdu-list`)
 - ISO-TP reassembly, UDS, DoIP, SOME/IP parsing
-- Python bindings exposing a simple iterator API
+- `check` auto-detects CAN, SOME/IP, or enum signal CSVs from their header row
+- Python bindings exposing a simple iterator API, a column-oriented batch reader, and in-memory `from_rows` signal-DB constructors (bypassing CSV)
 
 ---
 
 ## CLI
 
 ```
-vector-blf-rs parse <input.blf|.mf4|.mdf> [output.blf|.csv|.mf4|.mdf] [--can-signals FILE] [--someip-signals FILE] [--channels FILE] [--repeat N] [--threads N] [--pdu-list] [-q]
+vector-blf-rs parse <input.blf|.mf4|.mdf> [output.blf|.csv|.mf4|.mdf|.perfetto-trace] [--can-signals FILE] [--someip-signals FILE] [--enum-signals FILE] [--channels FILE] [--repeat N] [--threads N] [--pdu-list] [-q]
 vector-blf-rs convert <input.dbc|.arxml> <output.csv> [--overlay FILE]
 vector-blf-rs check <signals.csv>
 ```
@@ -59,13 +62,21 @@ vector-blf-rs parse data/test_logfile.blf out.csv \
 # Print per-PDU occurrence summary (requires --can-signals)
 vector-blf-rs parse data/test_logfile.blf --can-signals assets/can_signals.csv --pdu-list
 
+# Export to CSV with enum/categorical value decoding
+vector-blf-rs parse data/test_logfile.blf out.csv \
+  --can-signals assets/can_signals.csv \
+  --enum-signals assets/enum_signals.csv
+
+# Export to a Perfetto native trace (signals as counter tracks; view at ui.perfetto.dev)
+vector-blf-rs parse data/test_logfile.blf out.perfetto-trace --can-signals assets/can_signals.csv
+
 # Convert a DBC file to signal CSV
 vector-blf-rs convert network.dbc signals.csv
 
 # Convert an ARXML file with an overlay CSV
 vector-blf-rs convert network.arxml signals.csv --overlay overlay.csv
 
-# Validate a signal CSV
+# Validate a signal CSV (auto-detects CAN, SOME/IP, or enum format from the header)
 vector-blf-rs check assets/can_signals.csv
 ```
 
@@ -81,6 +92,20 @@ Ethernet,1,ETH_BACKBONE
 ```
 
 `type` is case-insensitive: `CAN` or `Ethernet`. `channel` is a decimal integer.
+
+### Enum/categorical value CSV
+
+Map a signal's raw decoded value to a human-readable category string (header required):
+
+```
+signal_name,raw_value,category
+GearPosition,0,Neutral
+GearPosition,1,First
+IgnitionStatus,0,Off
+IgnitionStatus,1,On
+```
+
+`raw_value` is the raw bit-extracted integer **before** scale/offset is applied; accepts hex (`0x...`) or decimal. Pass with `--enum-signals` alongside `--can-signals`/`--someip-signals`.
 
 ---
 
@@ -119,6 +144,7 @@ for obj in vector_blf.Reader("path/to/file.blf"):
 | Class / Function | Fields / Signature |
 |---|---|
 | `Reader(path, types=None)` | Iterator of `BaseObject` for `.blf`, `.mf4`, `.mdf` files; `types` filters in Rust (e.g. `["Can", "CanFd", "Mf4Signal"]`) |
+| `Reader.start_time_ns()` | Recording start time as nanoseconds since the Unix epoch (BLF file header / MF4 HD block); `0` if absent |
 | `Reader.read_batch(n=50000)` | Returns a column-oriented `dict` ready for `pd.DataFrame`, or `None` at EOF |
 | `BaseObject` | `timestamp_ns: int`, `message: Can \| CanFd \| CanFd64 \| Ethernet \| EthernetEx \| Mf4Signal \| None` |
 | `Can` | `channel`, `id`, `is_ext_id`, `dir`, `rtr`, `dlc`, `data` |
@@ -126,15 +152,18 @@ for obj in vector_blf.Reader("path/to/file.blf"):
 | `CanFd64` | same as `CanFd` but `channel` is `int` (u8) |
 | `Ethernet` / `EthernetEx` | `channel`, `dir`, `src_addr`, `dst_addr`, `ether_type`, `data` |
 | `Mf4Signal` | `group`, `name`, `value`, `unit` |
-| `CanSignalDb(path)` | `.decode(message_id, data)`, `.is_container(message_id)`, `.decode_container(message_id, data, long_header=False)`, `.extract_container_pdus(message_id, data, long_header=False)`, `.decode_pdu(can_id, pdu_id, data)` |
-| `SomeIpSignalDb(path)` | `.decode(service_id, method_id, payload)` |
+| `CanSignalDb(path, enum_path=None)` | `.decode(message_id, data)`, `.is_container(message_id)`, `.decode_container(message_id, data, long_header=False)`, `.extract_container_pdus(message_id, data, long_header=False)`, `.decode_pdu(can_id, pdu_id, data)` |
+| `CanSignalDb.from_rows(rows, enum_rows=None)` | Static constructor from in-memory `(message_id, signal_name, start_byte, start_bit, bit_length, byte_order, is_signed, scale, offset, pdu_id)` tuples, bypassing CSV |
+| `SomeIpSignalDb(path, enum_path=None)` | `.decode(service_id, method_id, payload)` |
+| `SomeIpSignalDb.from_rows(rows, enum_rows=None)` | Static constructor from in-memory `(service_id, method_id, signal_name, start_byte, start_bit, bit_length, byte_order, is_signed, scale, offset)` tuples, bypassing CSV |
+| `ChannelDb(path)` | `.name(type, channel)` — maps `(type, channel_number)` to a channel name, or `None` |
 | `IsoTpReassembler()` | `.push(data)` — stateful ISO-TP reassembler; returns `(uds_type, service_id, service_name, nrc, nrc_name, data)` or `None` |
 | `parse_uds(data)` | Parse a raw UDS payload; returns `(uds_type, service_id, service_name, nrc, nrc_name, data)` or `None` |
 | `parse_someip_udp(ether_type, eth_payload)` | Parse SOME/IP messages from an Ethernet frame payload (IPv4/IPv6, UDP, container PDUs); returns list of dicts |
 | `parse_doip_diag(ether_type, eth_payload)` | Parse DoIP DiagMessages; returns `[(src_addr, target_addr, uds_payload)]` |
-| `parse_eth_payload_signals(ether_type, eth_payload)` | Extract IP/TCP/UDP header fields as named signals; returns list of dicts |
+| `parse_eth_payload_signals(ether_type, eth_payload)` | Extract IP/TCP/UDP (and ARP/IGMP) header fields as named signals; returns list of dicts |
 
-`dir` is a raw `int` (0 = Tx, 1 = Rx, 2 = TxRq). `Message::Other` variants (unsupported object types) appear as `None`.
+`dir` is a raw `int` (0 = Tx, 1 = Rx, 2 = TxRq). `Message::Other` variants (unsupported object types) appear as `None`. `CanSignalDb.decode` / `SomeIpSignalDb.decode` return `(signal_name, value, category)` tuples, where `category` is a string when an enum mapping was supplied (via `enum_path` / `enum_rows`) and matches the raw value, otherwise `None`.
 
 ---
 
@@ -216,7 +245,13 @@ Then update the `artifacts.vector_blf.build` line in `databricks.yml` to match.
 | `blf.target_schema` | `blf` | Unity Catalog output schema |
 | `blf.signals_path` | `""` | Volume path to CAN signal CSV; if empty, `blf_silver_can_signals` and `blf_silver_can_container_pdus` are empty |
 | `blf.someip_signals_path` | `""` | Volume path to SOME/IP signal CSV; if empty, `blf_silver_someip_signals` is empty |
+| `blf.enum_signals_path` | `""` | Volume path to enum value mapping CSV (optional); decoded signals carry a `signal_str` category column when set |
+| `blf.signals_table` | `""` | Unity Catalog table (`catalog.schema.table`) with CAN signal definitions; overrides `blf.signals_path` when set |
+| `blf.someip_signals_table` | `""` | Unity Catalog table with SOME/IP signal definitions; overrides `blf.someip_signals_path` when set |
+| `blf.enum_signals_table` | `""` | Unity Catalog table with enum value mappings; overrides `blf.enum_signals_path` when set |
 | `blf.container_long_header` | `false` | Set to `true` for IPduM container frames with a long (32-bit) PDU header |
+
+Table-sourced signal/enum definitions are collected on the driver at pipeline startup and shipped to executors via a Spark broadcast variable — no CSV staging round-trip. Set the bundle variables via `databricks bundle deploy --var="signals_table=main.blf_dev.can_signals"` (etc.).
 
 CAN signal CSV format (header required):
 

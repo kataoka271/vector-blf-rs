@@ -85,6 +85,27 @@ variables:
       When set, decoded CAN and SOME/IP signals carry a signal_str column with the category name.
     default: ""
 
+  signals_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) with CAN signal definitions (optional).
+      Same columns as the signals_path CSV. Takes precedence over signals_path when set.
+      Set via: databricks bundle deploy --var="signals_table=main.blf_dev.can_signals"
+    default: ""
+
+  someip_signals_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) with SOME/IP signal definitions (optional).
+      Same columns as the someip_signals_path CSV. Takes precedence over someip_signals_path when set.
+      Set via: databricks bundle deploy --var="someip_signals_table=main.blf_dev.someip_signals"
+    default: ""
+
+  enum_signals_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) with enum value mappings (optional).
+      Same columns as the enum_signals_path CSV. Takes precedence over enum_signals_path when set.
+      Set via: databricks bundle deploy --var="enum_signals_table=main.blf_dev.enum_values"
+    default: ""
+
   warehouse_id:
     description: >
       SQL warehouse ID for the BLF signal viewer app.

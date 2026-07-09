@@ -242,8 +242,15 @@ def _local_path(spark_path: str) -> str:
 
 # ── signal table materialization ──────────────────────────────────────────────
 
-# Staging directory on DBFS: shared between driver and executors via /dbfs/ FUSE.
-_SIGNAL_STAGING = "/dbfs/tmp/vector_blf_signal_staging"
+# Staging directory on a Unity Catalog Volume: mounted at /Volumes/... on
+# both driver and executors, unlike the (policy-disabled) DBFS root.
+# The DBFS root and the local driver filesystem (dbfs:/tmp/..., file://...,
+# and bare relative paths, which Spark resolves against DBFS by default) are
+# all rejected on this workspace's serverless compute -- confirmed both by
+# testing (UnsupportedOperationException / SecurityException) and by
+# Databricks docs, which deprecate the DBFS root and disallow local-fs
+# staging on serverless in favor of Unity Catalog Volumes.
+_SIGNAL_STAGING = f"/Volumes/{TARGET_CATALOG}/{TARGET_SCHEMA}/signals/_staging"
 
 
 def _materialize_signal_table(table_name: str, local_csv_path: str) -> None:
@@ -251,16 +258,13 @@ def _materialize_signal_table(table_name: str, local_csv_path: str) -> None:
 
     The CSV is written by an executor task (coalesce(1) keeps it a single
     part file), so the driver never materializes the full table in memory.
-    The part file is then renamed to local_csv_path via the /dbfs/ FUSE
-    mount, which is accessible on all cluster nodes.
     """
     import glob
     import os
     import shutil
 
     stage_local = local_csv_path + "._stage"
-    stage_uri = "dbfs:/" + stage_local[len("/dbfs/") :]
-    (spark.table(table_name).coalesce(1).write.mode("overwrite").option("header", True).csv(stage_uri))
+    (spark.table(table_name).coalesce(1).write.mode("overwrite").option("header", True).csv(stage_local))
     parts = glob.glob(os.path.join(stage_local, "part-*.csv"))
     if os.path.exists(local_csv_path):
         os.remove(local_csv_path)

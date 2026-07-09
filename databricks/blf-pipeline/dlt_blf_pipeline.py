@@ -249,13 +249,28 @@ _SIGNAL_STAGING = "/dbfs/tmp/vector_blf_signal_staging"
 def _materialize_signal_table(table_name: str, local_csv_path: str) -> None:
     """Read a Unity Catalog table and write it as a CSV for executor access.
 
-    Uses toPandas() so the CSV lands as a single file (no part-* splitting).
-    The /dbfs/ path is accessible on all cluster nodes.
+    The CSV is written by an executor task (coalesce(1) keeps it a single
+    part file), so the driver never materializes the full table in memory.
+    The part file is then renamed to local_csv_path via the /dbfs/ FUSE
+    mount, which is accessible on all cluster nodes.
     """
+    import glob
     import os
+    import shutil
 
-    os.makedirs(os.path.dirname(local_csv_path), exist_ok=True)
-    spark.table(table_name).toPandas().to_csv(local_csv_path, index=False)
+    stage_local = local_csv_path + "._stage"
+    stage_uri = "dbfs:/" + stage_local[len("/dbfs/") :]
+    (spark.table(table_name).coalesce(1).write.mode("overwrite").option("header", True).csv(stage_uri))
+    parts = glob.glob(os.path.join(stage_local, "part-*.csv"))
+    if os.path.exists(local_csv_path):
+        os.remove(local_csv_path)
+    if parts:
+        shutil.move(parts[0], local_csv_path)
+    else:
+        # An empty table can yield zero partitions and thus no part file;
+        # an empty CSV loads as an empty signal DB downstream.
+        open(local_csv_path, "w").close()
+    shutil.rmtree(stage_local, ignore_errors=True)
     print(f"[blf_pipeline] materialized table {table_name!r} -> {local_csv_path!r}", flush=True)
 
 

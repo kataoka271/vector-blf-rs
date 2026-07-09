@@ -305,8 +305,7 @@ impl<R: Read + Seek> Reader<R> {
     // ── emit helpers ───────────────────────────────────────────────────────────
 
     fn timestamp_ns(&self, time_s: f64) -> u64 {
-        self.start_time_ns
-            + (time_s * 1_000_000_000.0) as u64
+        self.start_time_ns + (time_s * 1_000_000_000.0) as u64
     }
 
     fn emit_can(&self, record: &[u8], layout: &CanLayout) -> BaseObject {

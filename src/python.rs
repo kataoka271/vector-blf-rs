@@ -565,7 +565,10 @@ impl CanSignalDb {
                 blf::enum_value_map_from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))
             })
             .transpose()?;
-        Ok(Self { inner: db, enum_map })
+        Ok(Self {
+            inner: db,
+            enum_map,
+        })
     }
 
     /// Decode all matching signals for ``message_id`` from ``data``.
@@ -635,7 +638,12 @@ impl CanSignalDb {
     ///
     /// ``can_id`` is the parent container CAN ID; ``pdu_id`` identifies the I-PDU.
     /// Returns ``(signal_name, signal_value, category)`` tuples.
-    fn decode_pdu(&self, can_id: u32, pdu_id: u32, data: &[u8]) -> Vec<(String, f64, Option<String>)> {
+    fn decode_pdu(
+        &self,
+        can_id: u32,
+        pdu_id: u32,
+        data: &[u8],
+    ) -> Vec<(String, f64, Option<String>)> {
         self.inner
             .extract_pdu(can_id, pdu_id, data, self.enum_map.as_ref())
             .into_iter()
@@ -675,7 +683,10 @@ impl SomeIpSignalDb {
                 blf::enum_value_map_from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))
             })
             .transpose()?;
-        Ok(Self { inner: db, enum_map })
+        Ok(Self {
+            inner: db,
+            enum_map,
+        })
     }
 
     /// Decode all matching signals for ``(service_id, method_id)`` from ``payload``.
@@ -683,7 +694,12 @@ impl SomeIpSignalDb {
     /// Returns a list of ``(signal_name, signal_value, category)`` tuples.
     /// ``category`` is a string when a value-to-category mapping exists, otherwise ``None``.
     /// Signals whose bit range extends outside ``payload`` are silently skipped.
-    fn decode(&self, service_id: u16, method_id: u16, payload: &[u8]) -> Vec<(String, f64, Option<String>)> {
+    fn decode(
+        &self,
+        service_id: u16,
+        method_id: u16,
+        payload: &[u8],
+    ) -> Vec<(String, f64, Option<String>)> {
         self.inner
             .extract(service_id, method_id, payload, self.enum_map.as_ref())
             .into_iter()

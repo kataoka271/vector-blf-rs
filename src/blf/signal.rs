@@ -226,20 +226,20 @@ impl CanSignalDb {
             }
             let message_id = parse_u32(p[0]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid message_id: {:?}", p[0]),
+                message: invalid_int_message("message_id", p[0]),
             })?;
             let name = p[1].to_string();
             let start_byte = parse_u32(p[2]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid start_byte: {:?}", p[2]),
+                message: invalid_int_message("start_byte", p[2]),
             })?;
             let start_bit_in_byte = parse_u32(p[3]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid start_bit: {:?}", p[3]),
+                message: invalid_int_message("start_bit", p[3]),
             })?;
             let bit_length = parse_u32(p[4]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid bit_length: {:?}", p[4]),
+                message: invalid_int_message("bit_length", p[4]),
             })?;
             let byte_order = match p[5].to_lowercase().as_str() {
                 "intel" => ByteOrder::Intel,
@@ -296,7 +296,7 @@ impl CanSignalDb {
             if p.len() >= 10 && !p[9].is_empty() {
                 let pdu_id = parse_u32(p[9]).map_err(|_| ParseError::Csv {
                     line: lineno,
-                    message: format!("invalid pdu_id: {:?}", p[9]),
+                    message: invalid_int_message("pdu_id", p[9]),
                 })?;
                 db.insert_container(def, pdu_id);
             } else {
@@ -573,6 +573,20 @@ fn parse_u16(s: &str) -> ParseResult<u16> {
     }
 }
 
+/// Build an "invalid {field}" CSV error message, adding a hint when the value
+/// looks like a decimal (e.g. "12.0"), a common artifact of spreadsheet exports
+/// that formatted an integer column as a number.
+fn invalid_int_message(field: &str, value: &str) -> String {
+    if value.contains('.') {
+        format!(
+            "invalid {field}: {value:?} (must be a whole number, not a decimal; \
+             if this came from a spreadsheet, format the column as integer or text)"
+        )
+    } else {
+        format!("invalid {field}: {value:?}")
+    }
+}
+
 /// A named signal bound to a specific SOME/IP (service_id, method_id) pair.
 #[derive(Debug, Clone)]
 pub struct SomeIpSignalDef {
@@ -625,24 +639,24 @@ impl SomeIpSignalDb {
             }
             let service_id = parse_u16(p[0]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid service_id: {:?}", p[0]),
+                message: invalid_int_message("service_id", p[0]),
             })?;
             let method_id = parse_u16(p[1]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid method_id: {:?}", p[1]),
+                message: invalid_int_message("method_id", p[1]),
             })?;
             let name = p[2].to_string();
             let start_byte = parse_u32(p[3]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid start_byte: {:?}", p[3]),
+                message: invalid_int_message("start_byte", p[3]),
             })?;
             let start_bit_in_byte = parse_u32(p[4]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid start_bit: {:?}", p[4]),
+                message: invalid_int_message("start_bit", p[4]),
             })?;
             let bit_length = parse_u32(p[5]).map_err(|_| ParseError::Csv {
                 line: lineno,
-                message: format!("invalid bit_length: {:?}", p[5]),
+                message: invalid_int_message("bit_length", p[5]),
             })?;
             let byte_order = match p[6].to_lowercase().as_str() {
                 "intel" => ByteOrder::Intel,
@@ -828,16 +842,16 @@ pub fn check_can_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             continue;
         }
         if parse_u32(p[0]).is_err() {
-            errors.push((lineno, format!("invalid message_id: {:?}", p[0])));
+            errors.push((lineno, invalid_int_message("message_id", p[0])));
         }
         if parse_u32(p[2]).is_err() {
-            errors.push((lineno, format!("invalid start_byte: {:?}", p[2])));
+            errors.push((lineno, invalid_int_message("start_byte", p[2])));
         }
         if parse_u32(p[3]).is_err() {
-            errors.push((lineno, format!("invalid start_bit: {:?}", p[3])));
+            errors.push((lineno, invalid_int_message("start_bit", p[3])));
         }
         if parse_u32(p[4]).is_err() {
-            errors.push((lineno, format!("invalid bit_length: {:?}", p[4])));
+            errors.push((lineno, invalid_int_message("bit_length", p[4])));
         }
         if !matches!(p[5].to_lowercase().as_str(), "intel" | "motorola") {
             errors.push((
@@ -858,7 +872,7 @@ pub fn check_can_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             errors.push((lineno, format!("invalid offset: {:?}", p[8])));
         }
         if p.len() >= 10 && !p[9].is_empty() && parse_u32(p[9]).is_err() {
-            errors.push((lineno, format!("invalid pdu_id: {:?}", p[9])));
+            errors.push((lineno, invalid_int_message("pdu_id", p[9])));
         }
         if let Ok(mid) = parse_u32(p[0]) {
             let is_container = p.len() >= 10 && !p[9].is_empty();
@@ -913,19 +927,19 @@ pub fn check_someip_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             continue;
         }
         if parse_u16(p[0]).is_err() {
-            errors.push((lineno, format!("invalid service_id: {:?}", p[0])));
+            errors.push((lineno, invalid_int_message("service_id", p[0])));
         }
         if parse_u16(p[1]).is_err() {
-            errors.push((lineno, format!("invalid method_id: {:?}", p[1])));
+            errors.push((lineno, invalid_int_message("method_id", p[1])));
         }
         if parse_u32(p[3]).is_err() {
-            errors.push((lineno, format!("invalid start_byte: {:?}", p[3])));
+            errors.push((lineno, invalid_int_message("start_byte", p[3])));
         }
         if parse_u32(p[4]).is_err() {
-            errors.push((lineno, format!("invalid start_bit: {:?}", p[4])));
+            errors.push((lineno, invalid_int_message("start_bit", p[4])));
         }
         if parse_u32(p[5]).is_err() {
-            errors.push((lineno, format!("invalid bit_length: {:?}", p[5])));
+            errors.push((lineno, invalid_int_message("bit_length", p[5])));
         }
         if !matches!(p[6].to_lowercase().as_str(), "intel" | "motorola") {
             errors.push((
@@ -983,7 +997,7 @@ pub fn enum_value_map_from_csv<R: std::io::Read>(reader: R) -> ParseResult<EnumV
         let name = p[0].to_string();
         let raw = parse_u32(p[1]).map_err(|_| ParseError::Csv {
             line: lineno,
-            message: format!("invalid raw_value: {:?}", p[1]),
+            message: invalid_int_message("raw_value", p[1]),
         })? as u64;
         let category = p[2].to_string();
         map.entry(name).or_default().insert(raw, category);
@@ -1019,7 +1033,7 @@ pub fn check_enum_csv<R: std::io::Read>(reader: R) -> Vec<(usize, String)> {
             continue;
         }
         if parse_u32(p[1]).is_err() {
-            errors.push((lineno, format!("invalid raw_value: {:?}", p[1])));
+            errors.push((lineno, invalid_int_message("raw_value", p[1])));
         }
         if p[2].is_empty() {
             errors.push((lineno, "category must not be empty".to_string()));
@@ -1194,6 +1208,18 @@ message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scal
                    256,Sig,0,0,8,Intel,false,1.0,0.0\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         assert_eq!(db.signals(256).len(), 1); // 256 == 0x100
+    }
+
+    #[test]
+    fn csv_start_bit_decimal_point_hint() {
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x100,Sig,0,0.0,8,Intel,false,1.0,0.0\n";
+        let err = CanSignalDb::from_csv(csv.as_bytes()).unwrap_err();
+        let ParseError::Csv { message, .. } = err else {
+            panic!("expected ParseError::Csv");
+        };
+        assert!(message.contains("start_bit"), "{message}");
+        assert!(message.contains("whole number"), "{message}");
     }
 
     #[test]
@@ -1480,7 +1506,8 @@ IgnitionStatus,0x01,On
                    0x100,GearPosition,0,0,8,Intel,false,1.0,0.0\n";
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
 
-        let enum_csv = "signal_name,raw_value,category\nGearPosition,0,Neutral\nGearPosition,1,First\n";
+        let enum_csv =
+            "signal_name,raw_value,category\nGearPosition,0,Neutral\nGearPosition,1,First\n";
         let enums = enum_value_map_from_csv(enum_csv.as_bytes()).unwrap();
 
         let vals = db.extract(0x100, &[1], Some(&enums));

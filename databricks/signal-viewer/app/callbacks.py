@@ -15,9 +15,11 @@ from ._dash import app
 from .config import _GOLD_TABLE, _LOCAL_DEV, GENIE_SPACE_ID, _parse_key
 from .db import (
     _df_to_store,
+    _fetch_all_channels,
     _fetch_all_signals,
     _fetch_filenames,
     _fetch_global_time_range,
+    _fetch_signals_by_search,
     _log_token_info,
     _query,
     _store_to_df,
@@ -45,6 +47,9 @@ from .genie import (
 )
 from .perfetto import build_perfetto_trace
 
+_MAX_STACKED_TRACES = 20  # cap to prevent stacked figure height explosion
+_MAX_VISIBLE_TAGS = 20  # cap pattern-matched button registrations in signal-tags
+
 
 def _fmt_s(seconds: float) -> str:
     """Format elapsed seconds as HH:MM:SS.mmm."""
@@ -61,23 +66,26 @@ def _fmt_s(seconds: float) -> str:
 
 @callback(
     Output("all-signals-cache", "data"),
+    Output("all-channels-cache", "data"),
     Output("time-range-store", "data"),
     Output("filenames-cache", "data"),
     Input("url", "pathname"),
 )
 def prefetch_signals(_):
-    return _fetch_all_signals(), _fetch_global_time_range(), _fetch_filenames()
+    return _fetch_all_signals(), _fetch_all_channels(), _fetch_global_time_range(), _fetch_filenames()
 
 
 @callback(
     Output("all-signals-cache", "data", allow_duplicate=True),
+    Output("all-channels-cache", "data", allow_duplicate=True),
     Output("time-range-store", "data", allow_duplicate=True),
     Output("filenames-cache", "data", allow_duplicate=True),
+    Output("filename-debounce-interval", "disabled", allow_duplicate=True),
     Input("refresh-signals-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def refresh_signal_cache(_):
-    return _fetch_all_signals(), _fetch_global_time_range(), _fetch_filenames()
+    return _fetch_all_signals(), _fetch_all_channels(), _fetch_global_time_range(), _fetch_filenames(), True
 
 
 app.clientside_callback(
@@ -95,13 +103,26 @@ app.clientside_callback(
 )
 
 
-@callback(
-    Output("all-signals-cache", "data", allow_duplicate=True),
+app.clientside_callback(
+    "function(v) { return [v, false]; }",
+    Output("filename-pending-store", "data"),
+    Output("filename-debounce-interval", "disabled"),
     Input("filename-filter", "value"),
     prevent_initial_call=True,
 )
-def filter_signals_by_file(filenames):
-    return _fetch_all_signals(filenames or None)
+
+
+@callback(
+    Output("all-signals-cache", "data", allow_duplicate=True),
+    Output("all-channels-cache", "data", allow_duplicate=True),
+    Output("filename-debounce-interval", "disabled", allow_duplicate=True),
+    Input("filename-debounce-interval", "n_intervals"),
+    State("filename-pending-store", "data"),
+    prevent_initial_call=True,
+)
+def filter_signals_by_file(_, filenames):
+    scope = filenames or None
+    return _fetch_all_signals(scope), _fetch_all_channels(scope), True
 
 
 app.clientside_callback(
@@ -120,13 +141,56 @@ app.clientside_callback(
     Output("channel-filter", "options"),
     Output("channel-filter", "value"),
     Input("source-filter", "value"),
-    Input("all-signals-cache", "data"),
+    Input("all-channels-cache", "data"),
 )
 
 
+@callback(
+    Output("signal-search-cache", "data"),
+    Input("signal-search", "value"),
+    Input("all-signals-cache", "data"),
+    State("filename-pending-store", "data"),
+    State("signal-search-cache", "data"),
+    prevent_initial_call=True,
+)
+def search_signals_server(search_value, _all_signals, filenames, prev_cache):
+    """Search signals server-side so results aren't limited to the ~500-row browse cache.
+
+    Reuses the previous result set when the new keyword only narrows an
+    untruncated prior search in the same file scope, to avoid re-querying on
+    every keystroke.
+    """
+    kw = (search_value or "").strip().lower()
+    if not kw:
+        return None
+
+    scope = list(filenames) if filenames else None
+    triggered_id = dash.ctx.triggered_id
+    if (
+        triggered_id == "signal-search"
+        and prev_cache
+        and prev_cache.get("scope") == scope
+        and not prev_cache.get("truncated")
+        and kw.startswith(prev_cache.get("keyword", "\0"))
+    ):
+        return dash.no_update
+
+    rows, truncated = _fetch_signals_by_search(kw, scope)
+    return {"keyword": kw, "scope": scope, "truncated": truncated, "rows": rows}
+
+
+# Rebuilds the signal picker (and lat/lon pickers) entirely client-side so
+# filtering/typing doesn't round-trip to the server.
+# Inputs: source-filter (selected sources), all-signals-cache (browse cache,
+#   capped ~500 rows), signal-search (keyword), channel-filter (selected
+#   channels), signal-search-cache (server-side search results, may cover
+#   more rows than the browse cache), signal-select.value (State, current
+#   selection to preserve/prune).
+# Outputs: signal-select.options/.value, avail-msg.children (status text),
+#   lat-signal.options, lon-signal.options.
 app.clientside_callback(
     """
-    function(sources, cache, search, channels, currentValue) {
+    function(sources, cache, search, channels, searchCache, currentValue) {
         var no_update = window.dash_clientside.no_update;
 
         if (cache === null || cache === undefined) {
@@ -140,7 +204,7 @@ app.clientside_callback(
         var triggeredId = (ctx.triggered && ctx.triggered.length > 0)
             ? ctx.triggered[0].prop_id.split(".")[0]
             : null;
-        var searchTriggered = triggeredId === "signal-search";
+        var searchTriggered = triggeredId === "signal-search" || triggeredId === "signal-search-cache";
 
         var sourceSet = new Set(sources);
 
@@ -158,12 +222,29 @@ app.clientside_callback(
             ? bySource.filter(function(r) { return channelSet.has(r.signal_source + r.channel); })
             : bySource;
 
+        // allOpts (and therefore lat/lon pickers + the "N available" baseline) is always
+        // derived from the browse cache scoped by source/channel only, never by search.
         var allOpts = byChannel.map(toOpt);
 
+        var kw = search ? search.trim().toLowerCase() : "";
+
+        // Prefer full server search results once they arrive (scoped by source/channel);
+        // until then fall back to filtering the (possibly incomplete) browse cache so
+        // typing still gives instant feedback.
+        var usingServerRows = false;
+        var searchPool = byChannel;
+        if (kw && searchCache && searchCache.rows && searchCache.keyword !== undefined
+            && kw.indexOf(searchCache.keyword) === 0) {
+            var poolBySource = searchCache.rows.filter(function(r) { return sourceSet.has(r.signal_source); });
+            searchPool = channelSet
+                ? poolBySource.filter(function(r) { return channelSet.has(r.signal_source + r.channel); })
+                : poolBySource;
+            usingServerRows = true;
+        }
+
         var filtered = byChannel;
-        if (search) {
-            var kw = search.toLowerCase();
-            filtered = byChannel.filter(function(r) {
+        if (kw) {
+            filtered = searchPool.filter(function(r) {
                 return r.signal_name.toLowerCase().indexOf(kw) !== -1 ||
                        r.signal_source.toLowerCase().indexOf(kw) !== -1;
             });
@@ -176,16 +257,30 @@ app.clientside_callback(
         }
 
         var opts = filtered.map(toOpt);
-        var suffix = (search && opts.length < allOpts.length) ? " (" + opts.length + " shown)" : "";
+        var MAX_SHOWN = 100;
+        var truncated = opts.length > MAX_SHOWN;
+        var visibleOpts = truncated ? opts.slice(0, MAX_SHOWN) : opts;
+        var matchCountLabel = String(opts.length) + (usingServerRows && searchCache.truncated ? "+" : "");
+        var suffix = "";
+        if (search) {
+            suffix = truncated
+                ? " (" + matchCountLabel + " match, showing first " + MAX_SHOWN + ")"
+                : " (" + matchCountLabel + " match)";
+        } else if (truncated) {
+            suffix = " (showing first " + MAX_SHOWN + ", filter to narrow)";
+        }
         var statusMsg = allOpts.length + " signal(s) available." + suffix;
 
+        var LAT_LON_MAX = 200;
+        var latLonOpts = allOpts.length > LAT_LON_MAX ? allOpts.slice(0, LAT_LON_MAX) : allOpts;
+
         if (searchTriggered) {
-            return [opts, no_update, statusMsg, allOpts, allOpts];
+            return [visibleOpts, no_update, statusMsg, latLonOpts, latLonOpts];
         }
 
         var allValid = new Set(allOpts.map(function(o) { return o.value; }));
         var newValue = (currentValue || []).filter(function(v) { return allValid.has(v); });
-        return [opts, newValue, statusMsg, allOpts, allOpts];
+        return [visibleOpts, newValue, statusMsg, latLonOpts, latLonOpts];
     }
     """,
     Output("signal-select", "options"),
@@ -197,6 +292,7 @@ app.clientside_callback(
     Input("all-signals-cache", "data"),
     Input("signal-search", "value"),
     Input("channel-filter", "value"),
+    Input("signal-search-cache", "data"),
     State("signal-select", "value"),
 )
 
@@ -233,7 +329,7 @@ def render_signal_tags(selected, anomalous_signals):
         return []
     anomalous_set = set(anomalous_signals or [])
     tags = []
-    for key in selected:
+    for key in selected[:_MAX_VISIBLE_TAGS]:
         src, channel, name = _parse_key(key)
         display_src = "ETH" if src == "SOMEIP" else src
         label = f"{display_src}{channel}::{name}"
@@ -269,6 +365,23 @@ def render_signal_tags(selected, anomalous_signals):
                     "padding": "2px 8px 2px 10px",
                     "fontSize": "11px",
                     "color": "#ff8888" if is_anomalous else _TEXT,
+                    "whiteSpace": "nowrap",
+                },
+            )
+        )
+    if len(selected) > _MAX_VISIBLE_TAGS:
+        tags.append(
+            html.Span(
+                f"+{len(selected) - _MAX_VISIBLE_TAGS}",
+                style={
+                    "display": "inline-flex",
+                    "alignItems": "center",
+                    "backgroundColor": _PANEL,
+                    "border": f"1px solid {_BORDER}",
+                    "borderRadius": "12px",
+                    "padding": "2px 10px",
+                    "fontSize": "11px",
+                    "color": "#888",
                     "whiteSpace": "nowrap",
                 },
             )
@@ -459,6 +572,12 @@ def render_chart(
 
         if traces:
             h = int(chart_height or 600)
+            truncation_note = ""
+            if layout == "stacked" and len(traces) > _MAX_STACKED_TRACES:
+                truncation_note = (
+                    f" (stacked: first {_MAX_STACKED_TRACES} of {len(traces)} signals; use Overlay to see all)"
+                )
+                traces = traces[:_MAX_STACKED_TRACES]
             vlines = build_anomaly_vlines(anomalies_raw, traces, time_store)
             normalize = layout == "overlay" and overlay_mode != "nominal"
             chart_fig = (
@@ -473,7 +592,7 @@ def render_chart(
             )
             row_data, col_defs = _pivot_table(traces)
             total = sum(len(x) for _, _, _, x, _, _ in traces)
-            chart_msg = f"{total:,} pts across {len(traces)} signal(s)."
+            chart_msg = f"{total:,} pts across {len(traces)} signal(s).{truncation_note}"
         else:
             chart_msg = "No data for selected signals."
             chart_fig = _empty_fig(chart_msg)
@@ -868,6 +987,7 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
     question = req_store.get("question", "")
     history = list(history_raw or [])
     history.append({"question": question, "answer": response_text})
+    history = history[-20:]
 
     return (
         {"request_id": request_id, "status": "done"},

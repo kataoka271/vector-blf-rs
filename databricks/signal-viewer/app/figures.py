@@ -37,6 +37,7 @@ _Anomalies = list[dict]  # list of {"x": float | str, "label": str}
 _XaxisMode = Literal["shared", "synced", "free"]
 
 _VAL_WIDTH = 12  # fixed character width for right-aligned signal values in hover tooltip
+_GRID_MAX_ROWS = 50_000  # cap AgGrid rowData; AgGrid paginates client-side, so this only guards against pathological payload sizes (e.g. max_pts=50k x lo/hi)
 
 
 def _scale_traces(traces: _Traces) -> _Traces:
@@ -290,7 +291,7 @@ def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
         parts.append(col.rename(col_name))
         if y_str is not None:
             categorical_cols.add(col_name)
-    pivot = pd.concat(parts, axis=1)
+    pivot = pd.concat(parts, axis=1).head(_GRID_MAX_ROWS)
 
     signal_cols = [c for c in pivot.columns if c != "time"]
     col_defs = [{"field": "time", "headerName": "Time", "pinned": "left", "filter": True, "minWidth": 160}] + [

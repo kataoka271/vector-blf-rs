@@ -41,9 +41,9 @@ def _dummy_values(src: str, channel: int, name: str) -> list[float]:
 
 def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
     print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
-    if "_source_file" in stmt and "DISTINCT" in stmt and "signal_name" not in stmt:
+    if "_source_file" in stmt and "signal_name" not in stmt:
         return pd.DataFrame({"_source_file": _DUMMY_FILES})
-    if "DISTINCT" in stmt:
+    if "blf_signal_catalog" in stmt or "DISTINCT" in stmt:
         rows = [{"signal_name": n, "signal_source": s, "channel": c} for s, c, n in _DUMMY_CATALOG]
         return pd.DataFrame(rows).sort_values(["signal_source", "channel", "signal_name"]).reset_index(drop=True)
     if "t_min" in stmt:

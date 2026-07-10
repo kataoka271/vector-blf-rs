@@ -154,9 +154,13 @@ app.layout = dbc.Container(
         dcc.Store(id="genie-anomaly-markers-store"),
         dcc.Store(id="genie-flagged-signals-store"),
         dcc.Store(id="genie-history-store"),
+        dcc.Store(id="all-channels-cache"),
         dcc.Store(id="signal-data-cache"),
         dcc.Store(id="time-range-store"),
         dcc.Store(id="filenames-cache"),
+        dcc.Store(id="filename-pending-store"),
+        dcc.Store(id="signal-search-cache"),
+        dcc.Interval(id="filename-debounce-interval", interval=600, n_intervals=0, disabled=True),
         dcc.Download(id="dl-perfetto"),
         dbc.Toast(
             id="replot-toast",
@@ -256,6 +260,7 @@ app.layout = dbc.Container(
                                             type="search",
                                             placeholder="Filter signals...",
                                             size="sm",
+                                            debounce=True,
                                             style={"fontSize": "12px"},
                                         ),
                                         html.Div(

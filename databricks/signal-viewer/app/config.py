@@ -9,6 +9,9 @@ USE_USER_TOKEN = True  # Set to False to use Service Principal credentials inste
 CATALOG = os.environ.get("BLF_CATALOG", "main")
 SCHEMA = os.environ.get("BLF_SCHEMA", "blf")
 _GOLD_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_gold_signals`"
+_CATALOG_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_signal_catalog`"
+_TIME_RANGE_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_time_range`"
+_SOURCE_FILES_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_source_files`"
 
 _KEY_RE = re.compile(r"^([A-Za-z]+)(\d+)::(.+)$")
 

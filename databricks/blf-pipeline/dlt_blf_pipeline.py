@@ -1332,3 +1332,57 @@ def blf_gold_signals():
     )
     # signal_name is not globally unique; consumers must include signal_source in WHERE.
     return can.union(eth).union(someip)
+
+
+# ── gold layer — signal catalog (distinct signal names) ──────────────────────
+
+
+@dlt.table(
+    name="blf_signal_catalog",
+    comment=(
+        "Distinct (signal_source, channel, signal_name) combinations from blf_gold_signals. "
+        "Small lookup table used by Signal Viewer to populate the signal list "
+        "without scanning the full gold table."
+    ),
+    table_properties={
+        "quality": "gold",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+)
+def blf_signal_catalog():
+    return dlt.read("blf_gold_signals").select("signal_source", "channel", "signal_name").distinct()
+
+
+@dlt.table(
+    name="blf_time_range",
+    comment=(
+        "Pre-aggregated time range from blf_gold_signals: min/max timestamp_s and earliest event_time. "
+        "Single-row table used by Signal Viewer to avoid a full gold table scan on every page load."
+    ),
+    table_properties={
+        "quality": "gold",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+)
+def blf_time_range():
+    return dlt.read("blf_gold_signals").agg(
+        F.min("timestamp_s").alias("t_min"),
+        F.max("timestamp_s").alias("t_max"),
+        F.min("event_time").alias("t0"),
+    )
+
+
+@dlt.table(
+    name="blf_source_files",
+    comment=(
+        "Distinct _source_file values from blf_gold_signals. "
+        "Small lookup table used by Signal Viewer to populate the file filter "
+        "without scanning the full gold table."
+    ),
+    table_properties={
+        "quality": "gold",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+)
+def blf_source_files():
+    return dlt.read("blf_gold_signals").select("_source_file").distinct()

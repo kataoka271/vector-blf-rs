@@ -1,6 +1,7 @@
 """Local-dev dummy data and query stub."""
 
 import math
+import os
 
 import pandas as pd
 
@@ -24,6 +25,17 @@ _DUMMY_CATALOG = [
     ("SOMEIP", 0, "AmbientLight_lux"),
     ("CAN", 1, "GPS_Latitude"),
     ("CAN", 1, "GPS_Longitude"),
+]
+
+# Set BLF_DUMMY_SIGNAL_COUNT to append N synthetic signals spread across several
+# sources/channels, to exercise UI caps (500-row browse cache, 100-row display
+# truncation, unbounded channel-filter list, 20-tag overflow) without a real
+# Databricks deployment. E.g.: BLF_DUMMY_SIGNAL_COUNT=800 uv run python app.py
+_DUMMY_SYNTHETIC_SOURCES_CHANNELS = [("CAN", 0), ("CAN", 1), ("CAN", 2), ("SOMEIP", 0), ("SOMEIP", 1)]
+_DUMMY_SIGNAL_COUNT = int(os.environ.get("BLF_DUMMY_SIGNAL_COUNT", "0"))
+_DUMMY_CATALOG = _DUMMY_CATALOG + [
+    (*_DUMMY_SYNTHETIC_SOURCES_CHANNELS[i % len(_DUMMY_SYNTHETIC_SOURCES_CHANNELS)], f"SynthSignal_{i:04d}")
+    for i in range(_DUMMY_SIGNAL_COUNT)
 ]
 
 

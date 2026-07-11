@@ -1,5 +1,7 @@
 """Tests for signal_conversion.py."""
 
+from typing import Union
+
 import pandas as pd
 import pytest
 from signal_conversion import (
@@ -8,9 +10,11 @@ from signal_conversion import (
     ENUM_FIELDNAMES,
     SOMEIP_FIELDNAMES,
     convert_dataframe,
+    convert_excel,
     decrypt_excel_or_passthrough,
     extract_enum_rows,
     is_empty,
+    load_excel,
     normalize_byte_order,
     normalize_float,
     normalize_id,
@@ -21,6 +25,7 @@ from signal_conversion import (
     parse_flexible_int,
     resolve_col,
     resolve_column_map,
+    resolve_sheet,
     uc_volume_to_local,
 )
 
@@ -278,6 +283,22 @@ class TestResolveColumnMap:
 
 
 # ---------------------------------------------------------------------------
+# resolve_sheet
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSheet:
+    def test_int_passthrough(self):
+        assert resolve_sheet(0) == 0
+
+    def test_numeric_string_becomes_int(self):
+        assert resolve_sheet("2") == 2
+
+    def test_sheet_name_unchanged(self):
+        assert resolve_sheet("Sheet1") == "Sheet1"
+
+
+# ---------------------------------------------------------------------------
 # extract_enum_rows
 # ---------------------------------------------------------------------------
 
@@ -441,6 +462,78 @@ class TestConvertDataframeCan:
         signals, enums = convert_dataframe(df, col, "can", errors)
         assert len(enums) == 2
         assert enums[0]["signal_name"] == "speed"
+
+
+# ---------------------------------------------------------------------------
+# convert_excel (resolve_column_map + convert_dataframe, combined)
+# ---------------------------------------------------------------------------
+
+# _can_df()'s columns are already named after their field, so an identity
+# mapping (header name == field name) exercises the same resolution path a
+# real --map/--mapping-json header-name mapping would.
+_CAN_IDENTITY_MAPPING: dict[str, Union[str, int]] = {field: field for field in _CAN_COL}
+
+
+class TestConvertExcel:
+    def test_matches_manual_resolve_and_convert(self):
+        df = _can_df()
+        expected_errors: list[str] = []
+        expected_signals, expected_enums = convert_dataframe(
+            df, resolve_column_map(_CAN_IDENTITY_MAPPING, list(df.columns)), "can", expected_errors
+        )
+
+        signals, enums, errors = convert_excel(df, _CAN_IDENTITY_MAPPING, "can")
+
+        assert signals == expected_signals
+        assert enums == expected_enums
+        assert errors == expected_errors
+
+    def test_happy_path(self):
+        signals, enums, errors = convert_excel(_can_df(), _CAN_IDENTITY_MAPPING, "can")
+        assert len(signals) == 2
+        assert enums == []
+        assert errors == []
+
+    def test_unknown_column_raises(self):
+        with pytest.raises(SystemExit):
+            convert_excel(_can_df(), {**_CAN_IDENTITY_MAPPING, "message_id": "missing_header"}, "can")
+
+
+# ---------------------------------------------------------------------------
+# load_excel
+# ---------------------------------------------------------------------------
+
+
+class TestLoadExcel:
+    def test_passes_through_resolved_sheet_and_options(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        def fake_decrypt(path, password):
+            captured["decrypt_args"] = (path, password)
+            return path
+
+        def fake_read_excel(source, sheet_name=None, header=None, dtype=None):
+            captured["read_excel_kwargs"] = {
+                "source": source,
+                "sheet_name": sheet_name,
+                "header": header,
+                "dtype": dtype,
+            }
+            return "sentinel-dataframe"
+
+        monkeypatch.setattr("signal_conversion.decrypt_excel_or_passthrough", fake_decrypt)
+        monkeypatch.setattr("signal_conversion.pd.read_excel", fake_read_excel)
+
+        result = load_excel("book.xlsx", "s3cr3t", "2", header_row=1)
+
+        assert result == "sentinel-dataframe"
+        assert captured["decrypt_args"] == ("book.xlsx", "s3cr3t")
+        assert captured["read_excel_kwargs"] == {
+            "source": "book.xlsx",
+            "sheet_name": 2,
+            "header": 1,
+            "dtype": object,
+        }
 
 
 def _someip_df():

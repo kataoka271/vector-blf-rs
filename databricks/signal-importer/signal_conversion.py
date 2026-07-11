@@ -2,7 +2,7 @@
 signal_conversion.py -- Shared Excel-to-signal-CSV conversion helpers.
 
 Used by:
-  scripts/excel_to_signals.py          (local CLI tool)
+  databricks/signal-importer/excel_to_signals.py     (local CLI tool)
   databricks/signal-importer/import_signals_task.py  (Databricks job task)
 """
 
@@ -332,6 +332,44 @@ def resolve_column_map(
 ) -> dict[str, int]:
     """Convert a COLUMN_MAP dict (field -> header_or_index) to field -> positional index."""
     return {field: resolve_col(spec, columns) for field, spec in mapping.items()}
+
+
+# ---------------------------------------------------------------------------
+# Excel loading (shared by the CLI and the Databricks job task)
+# ---------------------------------------------------------------------------
+
+
+def resolve_sheet(sheet: Union[str, int]) -> Union[str, int]:
+    """Coerce a sheet identifier to int when possible, else keep as a sheet name."""
+    try:
+        return int(sheet)
+    except (ValueError, TypeError):
+        return sheet
+
+
+def load_excel(
+    path: str,
+    password: Optional[str],
+    sheet: Union[str, int],
+    header_row: int,
+) -> pd.DataFrame:
+    """Decrypt (if needed) and read one sheet of an Excel workbook as all-object dtype."""
+    source = decrypt_excel_or_passthrough(path, password)
+    return pd.read_excel(source, sheet_name=resolve_sheet(sheet), header=header_row, dtype=object)
+
+
+def convert_excel(
+    df: pd.DataFrame,
+    raw_mapping: dict[str, Union[str, int]],
+    mode: str,
+    header_row: int = 0,
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str]]:
+    """Resolve raw_mapping against df's headers and convert to (signal_rows, enum_rows, errors)."""
+    columns = list(df.columns.astype(str))
+    col = resolve_column_map(raw_mapping, columns)
+    errors: list[str] = []
+    signal_rows, enum_rows = convert_dataframe(df, col, mode, errors, header_row)
+    return signal_rows, enum_rows, errors
 
 
 # ---------------------------------------------------------------------------

@@ -42,20 +42,20 @@ is_signed normalization (case-insensitive):
   "false", "no", "0", "unsigned", "f", "n" -> false
 
 Example -- CAN with mapping file:
-    uv run python scripts/excel_to_signals.py signals.xlsx \\
+    uv run python databricks/signal-importer/excel_to_signals.py signals.xlsx \\
         --mapping-file my_mapping.py \\
         --coding-col "Coding" --meaning-col "Meaning" \\
         --enum-output enum_values.csv -o can_signals.csv
 
 Example -- CAN with per-field flags (backward-compatible):
-    uv run python scripts/excel_to_signals.py signals.xlsx \\
+    uv run python databricks/signal-importer/excel_to_signals.py signals.xlsx \\
         --message-id 0 --signal-name 1 \\
         --start-byte 2 --start-bit 3 --bit-length 4 \\
         --byte-order 5 --is-signed 6 --scale 7 --offset 8 \\
         -o can_signals.csv
 
 Example -- encrypted Excel:
-    uv run python scripts/excel_to_signals.py signals.xlsx \\
+    uv run python databricks/signal-importer/excel_to_signals.py signals.xlsx \\
         --password "s3cr3t" --mapping-file my_mapping.py -o can_signals.csv
 
 Example mapping file (my_mapping.py):
@@ -83,15 +83,13 @@ import importlib.util
 import sys
 from typing import Union
 
-import pandas as pd
 from signal_conversion import (
     CAN_FIELDNAMES,
     CAN_FIELDNAMES_CONTAINER,
     ENUM_FIELDNAMES,
     SOMEIP_FIELDNAMES,
-    convert_dataframe,
-    decrypt_excel_or_passthrough,
-    resolve_column_map,
+    convert_excel,
+    load_excel,
 )
 
 # ---------------------------------------------------------------------------
@@ -197,25 +195,15 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Resolve sheet identifier
-    sheet: Union[str, int] = args.sheet
-    try:
-        sheet = int(sheet)
-    except (ValueError, TypeError):
-        pass
-
     # Load and optionally decrypt Excel
     try:
-        source = decrypt_excel_or_passthrough(args.input, args.password)
-        df = pd.read_excel(source, sheet_name=sheet, header=args.header_row, dtype=object)
+        df = load_excel(args.input, args.password, args.sheet, args.header_row)
     except ImportError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"Error reading {args.input}: {exc}", file=sys.stderr)
         return 1
-
-    columns: list[str] = list(df.columns.astype(str))
 
     # Build raw_mapping: mapping file -> --map overrides -> per-field flags
     raw_mapping: dict[str, Union[str, int]] = {}
@@ -273,15 +261,11 @@ def main() -> int:
                 flag = "--" + field.replace("_", "-")
                 parser.error(f"{flag} is required (or use --mapping-file)")
 
-    # Resolve to positional indices
+    # Resolve column mapping and convert rows
     try:
-        col = resolve_column_map(raw_mapping, columns)
+        signal_rows, enum_rows, errors = convert_excel(df, raw_mapping, args.mode, args.header_row)
     except SystemExit:
         raise
-
-    # Convert rows
-    errors: list[str] = []
-    signal_rows, enum_rows = convert_dataframe(df, col, args.mode, errors, args.header_row)
 
     for e in errors:
         print(f"warning: {e}", file=sys.stderr)

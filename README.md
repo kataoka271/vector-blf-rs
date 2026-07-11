@@ -416,7 +416,7 @@ databricks permissions get genie <GENIE_SPACE_ID>
 
 | Script | Description |
 |---|---|
-| `scripts/excel_to_signals.py` | Convert an Excel workbook sheet to a CAN or SOME/IP signal CSV |
+| `databricks/signal-importer/excel_to_signals.py` | Convert an Excel workbook sheet to a CAN or SOME/IP signal CSV |
 | `scripts/arxml_to_can_signals.py` | Convert ARXML to signal CSV (alternative to `vector-blf-rs convert`) |
 | `scripts/bench_python.py` | Python benchmark comparing `vector_blf` against `python-can` |
 | `scripts/create_ipdum_blf.py` | Generate test BLF files with IPduM container frames |
@@ -424,11 +424,11 @@ databricks permissions get genie <GENIE_SPACE_ID>
 
 ```bash
 # Convert an Excel signal sheet to CAN signal CSV
-uv run python scripts/excel_to_signals.py signals.xlsx out.csv \
+uv run python databricks/signal-importer/excel_to_signals.py signals.xlsx out.csv \
   --message-id 0 --signal-name 1 --start-byte 2 --start-bit 3 --bit-length 4
 
 # Convert to SOME/IP signal CSV
-uv run python scripts/excel_to_signals.py signals.xlsx out.csv --mode someip \
+uv run python databricks/signal-importer/excel_to_signals.py signals.xlsx out.csv --mode someip \
   --service-id 0 --method-id 1 --signal-name 2
 ```
 

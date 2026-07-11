@@ -5,8 +5,8 @@ Reads a (possibly password-protected) Excel file from a Unity Catalog Volume,
 converts CAN or SOME/IP signal definitions and enum values, then writes them
 to Unity Catalog Delta tables.
 
-Depends on signal_conversion.py (uploaded alongside this file as a library
-in the DAB job YAML).
+Depends on signal_conversion.py, which lives alongside this file in the same
+directory and is synced with it by the DAB bundle deploy.
 
 Parameters (passed as sys.argv by the DAB job YAML):
   --excel-path     UC Volume path to the Excel file
@@ -40,17 +40,12 @@ import os
 import sys
 from typing import Union
 
-# signal_conversion.py lives in scripts/ two levels above this file in the workspace.
-# DABs syncs the entire bundle, so the relative path is stable across targets.
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts"))
+# signal_conversion.py lives alongside this file; ensure it's importable regardless
+# of the job's working directory.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pandas as pd
-from signal_conversion import (
-    convert_dataframe,
-    decrypt_excel_or_passthrough,
-    resolve_column_map,
-    uc_volume_to_local,
-)
+from signal_conversion import convert_excel, load_excel, uc_volume_to_local
 
 
 def _parse_args() -> argparse.Namespace:
@@ -83,13 +78,6 @@ def _write_table(rows: list[dict], table: str) -> None:
 def main() -> int:
     args = _parse_args()
 
-    # Resolve sheet identifier
-    sheet: Union[str, int] = args.sheet
-    try:
-        sheet = int(sheet)
-    except (ValueError, TypeError):
-        pass
-
     # Retrieve password from Databricks secret scope (empty scope/key = no encryption)
     password = ""
     if args.secret_scope and args.secret_key:
@@ -101,8 +89,7 @@ def main() -> int:
     # Load and optionally decrypt Excel
     local = uc_volume_to_local(args.excel_path)
     try:
-        source = decrypt_excel_or_passthrough(local, password)
-        df = pd.read_excel(source, sheet_name=sheet, header=args.header_row, dtype=object)
+        df = load_excel(local, password, args.sheet, args.header_row)
     except ImportError as exc:
         print(f"[import_signals] error: {exc}", flush=True)
         return 1
@@ -119,16 +106,12 @@ def main() -> int:
         print(f"[import_signals] error: invalid --mapping-json: {exc}", flush=True)
         return 1
 
-    columns: list[str] = list(df.columns.astype(str))
+    # Convert rows
     try:
-        col = resolve_column_map(raw_mapping, columns)
+        signal_rows, enum_rows, errors = convert_excel(df, raw_mapping, args.mode, args.header_row)
     except SystemExit as exc:
         print(f"[import_signals] error: {exc}", flush=True)
         return 1
-
-    # Convert rows
-    errors: list[str] = []
-    signal_rows, enum_rows = convert_dataframe(df, col, args.mode, errors, args.header_row)
 
     for e in errors:
         print(f"[import_signals] warning: {e}", flush=True)

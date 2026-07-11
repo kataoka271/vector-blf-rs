@@ -15,6 +15,7 @@ _PANEL = "#1c1a27"
 _BORDER = "#2a2838"
 _ACCENT = "#7ecfec"
 _TEXT = "#ccc"
+_WARN = "#ff4444"
 
 _AXIS_BOX = {"showline": True, "mirror": True, "linecolor": _BORDER, "linewidth": 1}
 

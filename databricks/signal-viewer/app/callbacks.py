@@ -192,12 +192,16 @@ app.clientside_callback(
     """
     function(sources, cache, search, channels, searchCache, currentValue) {
         var no_update = window.dash_clientside.no_update;
+        var NORMAL_STYLE = {fontSize: "12px", color: "#ccc", minHeight: "16px"};
+        var WARN_STYLE = {fontSize: "12px", color: "#ff4444", minHeight: "16px", fontWeight: "600"};
+        var EMPTY_HIDDEN = {display: "none", fontSize: "11px", color: "#ff4444", padding: "2px 0"};
+        var EMPTY_SHOWN = {display: "block", fontSize: "11px", color: "#ff4444", padding: "2px 0"};
 
         if (cache === null || cache === undefined) {
-            return [no_update, no_update, "Loading signals...", no_update, no_update];
+            return [no_update, no_update, "Loading signals...", NORMAL_STYLE, no_update, no_update, "", EMPTY_HIDDEN];
         }
         if (!sources || sources.length === 0) {
-            return [[], [], "No source selected.", [], []];
+            return [[], [], "No source selected.", NORMAL_STYLE, [], [], "", EMPTY_HIDDEN];
         }
 
         var ctx = window.dash_clientside.callback_context;
@@ -251,9 +255,16 @@ app.clientside_callback(
         }
 
         if (filtered.length === 0) {
-            var msg = search ? "No signals match." : "No signals found. Has the pipeline run?";
+            var msg;
+            if (search) {
+                msg = "No signals match.";
+            } else if (cache.length === 0) {
+                msg = "No signals found. Has the pipeline run?";
+            } else {
+                msg = "No signals match the current filters.";
+            }
             var valueOut = searchTriggered ? no_update : [];
-            return [[], valueOut, msg, [], []];
+            return [[], valueOut, msg, WARN_STYLE, [], [], msg, EMPTY_SHOWN];
         }
 
         var opts = filtered.map(toOpt);
@@ -275,19 +286,22 @@ app.clientside_callback(
         var latLonOpts = allOpts.length > LAT_LON_MAX ? allOpts.slice(0, LAT_LON_MAX) : allOpts;
 
         if (searchTriggered) {
-            return [visibleOpts, no_update, statusMsg, latLonOpts, latLonOpts];
+            return [visibleOpts, no_update, statusMsg, NORMAL_STYLE, latLonOpts, latLonOpts, "", EMPTY_HIDDEN];
         }
 
         var allValid = new Set(allOpts.map(function(o) { return o.value; }));
         var newValue = (currentValue || []).filter(function(v) { return allValid.has(v); });
-        return [visibleOpts, newValue, statusMsg, latLonOpts, latLonOpts];
+        return [visibleOpts, newValue, statusMsg, NORMAL_STYLE, latLonOpts, latLonOpts, "", EMPTY_HIDDEN];
     }
     """,
     Output("signal-select", "options"),
     Output("signal-select", "value"),
     Output("avail-msg", "children"),
+    Output("avail-msg", "style"),
     Output("lat-signal", "options"),
     Output("lon-signal", "options"),
+    Output("signal-select-empty", "children"),
+    Output("signal-select-empty", "style"),
     Input("source-filter", "value"),
     Input("all-signals-cache", "data"),
     Input("signal-search", "value"),

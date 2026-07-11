@@ -6,7 +6,7 @@ from dash import dcc, html
 
 from ._dash import app
 from .config import CATALOG, GENIE_SPACE_ID, SCHEMA
-from .figures import _ACCENT, _BG, _BORDER, _PANEL, _SIDEBAR_CONTENT_STYLE, _SIDEBAR_STYLE, _TEXT, _empty_fig
+from .figures import _ACCENT, _BG, _BORDER, _PANEL, _SIDEBAR_CONTENT_STYLE, _SIDEBAR_STYLE, _TEXT, _WARN, _empty_fig
 
 # ---------------------------------------------------------------------------
 # Layout helpers
@@ -312,13 +312,27 @@ app.layout = dbc.Container(
                                             target_components={"all-signals-cache": "data"},
                                             children=[
                                                 dcc.Store(id="all-signals-cache"),
-                                                dbc.Checklist(
-                                                    id="signal-select",
-                                                    options=[],
-                                                    value=[],
-                                                    labelStyle={"whiteSpace": "nowrap"},
+                                                html.Div(
+                                                    [
+                                                        dbc.Checklist(
+                                                            id="signal-select",
+                                                            options=[],
+                                                            value=[],
+                                                            labelStyle={"whiteSpace": "nowrap"},
+                                                            style={"fontSize": "11px"},
+                                                        ),
+                                                        html.Div(
+                                                            id="signal-select-empty",
+                                                            children="",
+                                                            style={
+                                                                "display": "none",
+                                                                "fontSize": "11px",
+                                                                "color": _WARN,
+                                                                "padding": "2px 0",
+                                                            },
+                                                        ),
+                                                    ],
                                                     style={
-                                                        "fontSize": "11px",
                                                         "maxHeight": "260px",
                                                         "overflowY": "auto",
                                                         "overflowX": "auto",

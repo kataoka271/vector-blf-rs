@@ -34,6 +34,7 @@ bundle:
 # Pull in per-resource definitions co-located with their source folders.
 include:
   - databricks/blf-pipeline/blf_ingestion.pipeline.yml
+  - databricks/signal-docs-pipeline/signal_docs.pipeline.yml
   - databricks/signal-viewer/signal_viewer.app.yml
   - databricks/signal-importer/signal_importer.job.yml
 
@@ -122,6 +123,27 @@ variables:
       Set via: databricks bundle deploy --var="genie_space_id=<id>"
     default: ""
 
+  signal_docs_path:
+    description: >
+      Unity Catalog Volume directory containing signal documentation files
+      (PDF, DOCX, PPTX, or XLSX). Auto Loader monitors this directory; each
+      extracted section (PDF page / DOCX document / PPTX slide / XLSX
+      sheet) becomes a row in blf_signal_doc_sections for Genie Space to
+      search when grounding natural-language questions about signal
+      meaning.
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/docs
+
+  semantic_model_endpoint:
+    description: >
+      Name of a Databricks Model Serving endpoint (foundation/multimodal
+      model) used to derive a semantic_summary column on
+      blf_signal_doc_sections via the ai_query() SQL function, from the
+      already-extracted section text. Optional -- if empty, semantic_summary
+      is left NULL and no model calls are made. The pipeline's run-as
+      identity needs CAN_QUERY permission on this endpoint.
+      Set via: databricks bundle deploy --var="semantic_model_endpoint=databricks-claude-3-7-sonnet"
+    default: ""
+
   excel_source_path:
     description: >
       UC Volume path to the Excel signal definition file.
@@ -176,6 +198,8 @@ targets:
       pipelines:
         blf_ingestion:
           continuous:  true
+          development: false
+        signal_docs:
           development: false
     variables:
       target_schema: blf

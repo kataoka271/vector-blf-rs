@@ -146,7 +146,8 @@ PyO3 bindings exposed as the `vector_blf` Python extension module:
 | File | Purpose |
 |------|---------|
 | `databricks.yml` | Databricks Asset Bundle (DAB) config — defines the `vector_blf` wheel artifact, pipeline variables, and `dev`/`prod` targets |
-| `databricks/blf-pipeline/dlt_blf_pipeline.py` | Delta Live Tables pipeline: `blf_bronze` → `blf_silver_can` / `blf_silver_eth` / `blf_silver_mf4_signals` / `blf_silver_diag` → signal tables (`blf_silver_can_signals`, `blf_silver_can_container_pdus`, `blf_silver_eth_signals`, `blf_silver_someip`, `blf_silver_someip_signals`) → `blf_gold_signals` |
+| `databricks/blf-pipeline/dlt_blf_pipeline.py` | Delta Live Tables pipeline (`blf_ingestion`, continuous streaming): `blf_bronze` → `blf_silver_can` / `blf_silver_eth` / `blf_silver_mf4_signals` / `blf_silver_diag` → signal tables (`blf_silver_can_signals`, `blf_silver_can_container_pdus`, `blf_silver_eth_signals`, `blf_silver_someip`, `blf_silver_someip_signals`) → `blf_gold_signals` |
+| `databricks/signal-docs-pipeline/signal_docs_pipeline.py` | Separate, triggered DLT pipeline (`signal_docs`): ingests PDF/DOCX/PPTX/XLSX signal documentation from a Volume, extracting per-page/slide/sheet/document text into `blf_signal_doc_sections` (optionally enriched with an `ai_query()`-derived `semantic_summary` column) for Genie Space grounding. Shares no lineage with `blf_gold_signals`; kept separate so it doesn't inherit the main pipeline's `continuous: true` in prod |
 | `databricks/signal-viewer/app.py` | Plotly Dash visualization app (Databricks App); reads from `blf_gold_signals`; features signal checklist, time-range slider, GPS map, AgGrid data table |
 | `databricks/blf-pipeline/build_wheel.sh` | Builds a manylinux `aarch64` wheel inside Docker using `maturin` + `cargo-zigbuild`; output goes to `dist/` |
 | `assets/can_signals.csv` | Demo signal definitions CSV; upload to the `signals` volume before running the pipeline |
@@ -157,7 +158,8 @@ PyO3 bindings exposed as the `vector_blf` Python extension module:
 databricks bundle validate            # check YAML
 databricks bundle deploy              # build wheel, upload, deploy (dev target)
 databricks bundle deploy -t prod      # deploy to production
-databricks bundle run blf_ingestion   # trigger a pipeline run
+databricks bundle run blf_ingestion   # trigger a BLF ingestion pipeline run
+databricks bundle run signal_docs     # trigger a signal-doc ingestion pipeline run (after uploading new docs)
 databricks bundle destroy             # tear down all managed resources
 
 # Upload signal definitions to the signals volume (dev)
@@ -165,7 +167,7 @@ databricks fs cp assets/can_signals.csv       dbfs:/Volumes/main/blf_dev/signals
 databricks fs cp assets/someip_signals.csv dbfs:/Volumes/main/blf_dev/signals/someip_signals.csv --overwrite
 ```
 
-The pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.source_path`), parses them with the `vector_blf` wheel using a pandas UDF, and writes partitioned Delta tables. Signal definitions live in the `signals` volume (`blf.signals_path` for CAN, `blf.someip_signals_path` for SOME/IP); when present, physical values are decoded into `blf_silver_can_signals` and `blf_silver_someip_signals` respectively.
+The `blf_ingestion` pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.source_path`), parses them with the `vector_blf` wheel using a pandas UDF, and writes partitioned Delta tables. Signal definitions live in the `signals` volume (`blf.signals_path` for CAN, `blf.someip_signals_path` for SOME/IP); when present, physical values are decoded into `blf_silver_can_signals` and `blf_silver_someip_signals` respectively. The separate `signal_docs` pipeline (triggered, not continuous) reads `blf.signal_docs_path` independently and has no dependency on `blf_ingestion`.
 
 **Volume layout (dev):**
 
@@ -174,6 +176,7 @@ The pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.sourc
 | `main.blf_dev.raw` | `/Volumes/main/blf_dev/raw/` | Source `*.blf` files (Auto Loader input) |
 | `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/can_signals.csv` | CAN signal definitions CSV |
 | `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/someip_signals.csv` | SOME/IP signal definitions CSV |
+| `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/docs/*.{pdf,docx,pptx,xlsx}` | Signal documentation files (Auto Loader input for `blf_signal_doc_sections`) |
 
 **Cross-compilation note:** Databricks Serverless runs Linux ARM64 (`aarch64`). `build_wheel.sh` uses Docker + zig to cross-compile from Windows/macOS without a Linux machine.
 

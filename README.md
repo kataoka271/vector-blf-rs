@@ -167,11 +167,15 @@ for obj in vector_blf.Reader("path/to/file.blf"):
 
 ---
 
-## Databricks DLT pipeline
+## Databricks DLT pipelines
 
-`databricks/blf-pipeline/dlt_blf_pipeline.py` is a Delta Live Tables pipeline
-that streams `*.blf` files from a Unity Catalog Volume into structured Delta
-tables.
+Two independent Delta Live Tables pipelines are deployed by the bundle. They
+share no lineage and run on separate schedules.
+
+### `blf_ingestion` (continuous)
+
+`databricks/blf-pipeline/dlt_blf_pipeline.py` streams `*.blf` files from a
+Unity Catalog Volume into structured Delta tables.
 
 ```
 Auto Loader (*.blf -> file paths)
@@ -198,10 +202,33 @@ blf_bronze                  -- all message types, one row per log object
 blf_gold_signals            -- CAN + ETH + SOME/IP signals unified schema
 ```
 
-Auto Loader tracks which files have been processed, so only new BLF files are
-ingested on each run (exactly-once, incremental).
+Auto Loader tracks which files have been processed, so only new BLF files
+are ingested on each run (exactly-once, incremental). In `prod` this
+pipeline runs `continuous: true` (auto-restarting).
 
 Signal definitions are loaded from CSVs (see Pipeline parameters). `assets/can_signals.csv` and `assets/someip_signals.csv` in this repo contain demo signal sets.
+
+### `signal_docs` (triggered)
+
+`databricks/signal-docs-pipeline/signal_docs_pipeline.py` extracts text from
+signal documentation files. It's a separate pipeline resource — not a table
+inside `blf_ingestion` — because documentation uploads are infrequent and
+don't need `blf_ingestion`'s continuous streaming compute:
+
+```
+Auto Loader (*.pdf/*.docx/*.pptx/*.xlsx -> file paths)
+         |  pypdf / python-docx / python-pptx / openpyxl
+         v
+blf_signal_doc_sections     -- extracted text sections, one per page/slide/sheet/document
+                                (+ optional ai_query() semantic_summary column)
+```
+
+This pipeline is always `continuous: false` (both `dev` and `prod`) — run it
+manually after uploading new documentation:
+
+```bash
+databricks bundle run signal_docs
+```
 
 ### Deploy with Databricks Asset Bundles
 
@@ -211,12 +238,13 @@ Signal definitions are loaded from CSVs (see Pipeline parameters). `assets/can_s
 # One-time setup
 databricks configure           # set workspace host + token
 
-# Build the Linux wheel, upload, and create/update the DLT pipeline
+# Build the Linux wheel, upload, and create/update both DLT pipelines
 databricks bundle deploy       # → dev target (default)
 databricks bundle deploy -t prod
 
 # Trigger a pipeline run
-databricks bundle run blf_ingestion
+databricks bundle run blf_ingestion   # continuous in prod; this just kicks off an update
+databricks bundle run signal_docs     # always triggered -- run after uploading new docs
 
 # Tear down managed resources
 databricks bundle destroy -t prod
@@ -236,7 +264,7 @@ maturin build --release --features python --target x86_64-unknown-linux-gnu --zi
 
 Then update the `artifacts.vector_blf.build` line in `databricks.yml` to match.
 
-### Pipeline parameters
+### Pipeline parameters (`blf_ingestion`)
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -280,11 +308,40 @@ databricks fs cp assets/can_signals.csv dbfs:/Volumes/main/blf_dev/signals/can_s
 databricks fs cp assets/someip_signals.csv dbfs:/Volumes/main/blf_dev/signals/someip_signals.csv --overwrite
 ```
 
+### Signal documentation (PDF / Word / PowerPoint / Excel)
+
+Real-world signal documentation (OEM CAN matrix / interface control documents, SOME/IP service specs, glossaries) usually isn't a hand-curated CSV — it's a PDF, Word doc, slide deck, or spreadsheet. This is handled by the separate `signal_docs` pipeline (`databricks/signal-docs-pipeline/signal_docs_pipeline.py` — see [above](#databricks-dlt-pipelines)), with its own parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `blf.signal_docs_path` | `/Volumes/.../signals/docs` | Volume directory of PDF/DOCX/PPTX/XLSX signal documentation files; extracted into `blf_signal_doc_sections` |
+| `blf.semantic_model_endpoint` | `""` | Model Serving endpoint name; when set, adds an `ai_query()`-derived `semantic_summary` column to `blf_signal_doc_sections` (optional) |
+
+`blf.signal_docs_path` points at a Volume directory that Auto Loader watches for `*.pdf`, `*.docx`, `*.pptx`, and `*.xlsx` files; each is broken into `blf_signal_doc_sections` rows:
+
+```
+_source_file, _file_mtime, _file_size_bytes, _ingested_at,
+doc_type, section_number, section_label, text, semantic_summary
+```
+
+One row per PDF page, PPTX slide, or XLSX sheet; DOCX has no fixed page boundary in its file format, so it's one row for the whole document. Genie Space (see below) can search `text` directly (e.g. `WHERE text LIKE '%term%'`) to ground questions about signal meaning that aren't obvious from `signal_name` alone.
+
+Upload documentation files the same way as signal CSVs:
+
+```bash
+databricks fs cp your_can_matrix.pdf dbfs:/Volumes/main/blf_dev/signals/docs/your_can_matrix.pdf --overwrite
+databricks bundle run signal_docs   # triggered pipeline -- doesn't run automatically
+```
+
+**This is not the same as the `signal_importer` job** (`databricks/signal-importer/`), which converts a *structured* Excel sheet (fixed columns: `message_id, signal_name, start_byte, ...`) into the `can_signals`/`someip_signals` decode-parameter tables above. This pipeline path is for free-text *documentation*, not decode parameters.
+
+**Optional: AI semantic summaries.** Setting `blf.semantic_model_endpoint` to a Databricks Model Serving endpoint name adds a `semantic_summary` column, computed via the `ai_query()` SQL function from each section's extracted text (1-3 sentence summary calling out signal names/units it recognizes). It's off by default — `semantic_summary` stays `NULL` and no model calls are made until the endpoint is set. The `signal_docs` pipeline's run-as identity needs `CAN_QUERY` permission on that endpoint, and every extracted section triggers one model call per pipeline run, so enabling it adds latency and inference cost proportional to the number of pages/slides/sheets ingested.
+
 ---
 
 ## Signal Viewer (Databricks App)
 
-`databricks/signal-viewer/` is a [Plotly Dash](https://dash.plotly.com/) web application deployable as a Databricks App. It reads from the `blf_gold_signals` Delta table produced by the DLT pipeline and provides interactive signal visualization.
+`databricks/signal-viewer/` is a [Plotly Dash](https://dash.plotly.com/) web application deployable as a Databricks App. It reads from the `blf_gold_signals` Delta table produced by the `blf_ingestion` pipeline and provides interactive signal visualization.
 
 **Features:**
 
@@ -350,6 +407,8 @@ databricks permissions get genie <GENIE_SPACE_ID>
 ```
 
 **3. Redeploy the app** after updating `app.yaml`.
+
+**4. Add `blf_signal_doc_sections` to the Genie Space.** Genie Space table/instruction curation isn't part of DAB IaC — there's no bundle resource for it — so this step is manual, in the Databricks UI: open the Genie Space, add `blf_signal_doc_sections` to its table list, and add an instruction along the lines of "When a question mentions a domain term not obviously matching a signal_name, search blf_signal_doc_sections.text (and semantic_summary, if populated) for that term to find the right signal." This gives Genie a documentation table to ground natural-language questions on, alongside `blf_gold_signals`/`blf_signal_catalog`.
 
 ---
 

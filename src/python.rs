@@ -6,12 +6,18 @@ use crate::blf::{self, ContainerHeader};
 use crate::mf4;
 use pyo3::exceptions::{PyStopIteration, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyString};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 
 // (uds_type, service_id, service_name, nrc, nrc_name, data)
 type UdsTuple = (String, i32, String, Option<i32>, Option<String>, Vec<u8>);
+
+// One (signal_name, signal_value, category) tuple per decoded signal.
+// signal_name is an interned Py<PyString> shared across every decode of the
+// same signal (see CanSignalDb::interned_name / SomeIpSignalDb::interned_name).
+type DecodedSignals = Vec<(Py<PyString>, f64, Option<String>)>;
 
 // ── message classes ──────────────────────────────────────────────────────────
 
@@ -548,13 +554,17 @@ impl Reader {
 pub struct CanSignalDb {
     inner: blf::CanSignalDb,
     enum_map: Option<blf::EnumValueMap>,
+    // Interned Python str objects, one per distinct signal name, built once at
+    // construction so decode calls can clone_ref() instead of allocating a new
+    // PyString for every decoded signal on every call.
+    name_cache: HashMap<String, Py<PyString>>,
 }
 
 #[pymethods]
 impl CanSignalDb {
     #[new]
     #[pyo3(signature = (path, enum_path=None))]
-    fn new(path: &str, enum_path: Option<&str>) -> PyResult<Self> {
+    fn new(py: Python<'_>, path: &str, enum_path: Option<&str>) -> PyResult<Self> {
         let f =
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         let db = blf::CanSignalDb::from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -565,9 +575,16 @@ impl CanSignalDb {
                 blf::enum_value_map_from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))
             })
             .transpose()?;
+        let mut name_cache = HashMap::new();
+        for name in db.signal_names() {
+            name_cache
+                .entry(name.to_string())
+                .or_insert_with(|| PyString::new_bound(py, name).unbind());
+        }
         Ok(Self {
             inner: db,
             enum_map,
+            name_cache,
         })
     }
 
@@ -576,11 +593,16 @@ impl CanSignalDb {
     /// Returns a list of ``(signal_name, signal_value, category)`` tuples.
     /// ``category`` is a string when a value-to-category mapping exists, otherwise ``None``.
     /// Signals whose bit range extends outside ``data`` are silently skipped.
-    fn decode(&self, message_id: u32, data: &[u8]) -> Vec<(String, f64, Option<String>)> {
+    ///
+    /// ``signal_name`` is returned from a per-DB cache of interned ``str``
+    /// objects built once at construction, so repeated decodes of the same
+    /// signal (the common case: one CAN ID decoded on every message) reuse
+    /// the same Python string object instead of allocating a new one per call.
+    fn decode(&self, py: Python<'_>, message_id: u32, data: &[u8]) -> DecodedSignals {
         self.inner
             .extract(message_id, data, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val, cat)| (name.to_string(), val, cat))
+            .map(|(name, val, cat)| (self.interned_name(py, name), val, cat))
             .collect()
     }
 
@@ -598,10 +620,11 @@ impl CanSignalDb {
     #[pyo3(signature = (message_id, data, long_header = false))]
     fn decode_container(
         &self,
+        py: Python<'_>,
         message_id: u32,
         data: &[u8],
         long_header: bool,
-    ) -> Vec<(String, f64, Option<String>)> {
+    ) -> DecodedSignals {
         let header = if long_header {
             ContainerHeader::Long
         } else {
@@ -610,7 +633,7 @@ impl CanSignalDb {
         self.inner
             .extract_container(message_id, data, header, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val, cat)| (name.to_string(), val, cat))
+            .map(|(name, val, cat)| (self.interned_name(py, name), val, cat))
             .collect()
     }
 
@@ -638,17 +661,24 @@ impl CanSignalDb {
     ///
     /// ``can_id`` is the parent container CAN ID; ``pdu_id`` identifies the I-PDU.
     /// Returns ``(signal_name, signal_value, category)`` tuples.
-    fn decode_pdu(
-        &self,
-        can_id: u32,
-        pdu_id: u32,
-        data: &[u8],
-    ) -> Vec<(String, f64, Option<String>)> {
+    fn decode_pdu(&self, py: Python<'_>, can_id: u32, pdu_id: u32, data: &[u8]) -> DecodedSignals {
         self.inner
             .extract_pdu(can_id, pdu_id, data, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val, cat)| (name.to_string(), val, cat))
+            .map(|(name, val, cat)| (self.interned_name(py, name), val, cat))
             .collect()
+    }
+}
+
+impl CanSignalDb {
+    /// Look up the interned `PyString` for `name`, falling back to allocating
+    /// a fresh one for names not seen at construction time (defensive only --
+    /// every name in `inner` was added to `name_cache` in `new()`).
+    fn interned_name(&self, py: Python<'_>, name: &str) -> Py<PyString> {
+        match self.name_cache.get(name) {
+            Some(cached) => cached.clone_ref(py),
+            None => PyString::new_bound(py, name).unbind(),
+        }
     }
 }
 
@@ -665,13 +695,14 @@ impl CanSignalDb {
 pub struct SomeIpSignalDb {
     inner: blf::SomeIpSignalDb,
     enum_map: Option<blf::EnumValueMap>,
+    name_cache: HashMap<String, Py<PyString>>,
 }
 
 #[pymethods]
 impl SomeIpSignalDb {
     #[new]
     #[pyo3(signature = (path, enum_path=None))]
-    fn new(path: &str, enum_path: Option<&str>) -> PyResult<Self> {
+    fn new(py: Python<'_>, path: &str, enum_path: Option<&str>) -> PyResult<Self> {
         let f =
             File::open(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         let db =
@@ -683,9 +714,16 @@ impl SomeIpSignalDb {
                 blf::enum_value_map_from_csv(f).map_err(|e| PyValueError::new_err(e.to_string()))
             })
             .transpose()?;
+        let mut name_cache = HashMap::new();
+        for name in db.signal_names() {
+            name_cache
+                .entry(name.to_string())
+                .or_insert_with(|| PyString::new_bound(py, name).unbind());
+        }
         Ok(Self {
             inner: db,
             enum_map,
+            name_cache,
         })
     }
 
@@ -694,17 +732,30 @@ impl SomeIpSignalDb {
     /// Returns a list of ``(signal_name, signal_value, category)`` tuples.
     /// ``category`` is a string when a value-to-category mapping exists, otherwise ``None``.
     /// Signals whose bit range extends outside ``payload`` are silently skipped.
+    ///
+    /// ``signal_name`` is returned from a per-DB cache of interned ``str``
+    /// objects built once at construction (see ``CanSignalDb::decode``).
     fn decode(
         &self,
+        py: Python<'_>,
         service_id: u16,
         method_id: u16,
         payload: &[u8],
-    ) -> Vec<(String, f64, Option<String>)> {
+    ) -> DecodedSignals {
         self.inner
             .extract(service_id, method_id, payload, self.enum_map.as_ref())
             .into_iter()
-            .map(|(name, val, cat)| (name.to_string(), val, cat))
+            .map(|(name, val, cat)| (self.interned_name(py, name), val, cat))
             .collect()
+    }
+}
+
+impl SomeIpSignalDb {
+    fn interned_name(&self, py: Python<'_>, name: &str) -> Py<PyString> {
+        match self.name_cache.get(name) {
+            Some(cached) => cached.clone_ref(py),
+            None => PyString::new_bound(py, name).unbind(),
+        }
     }
 }
 

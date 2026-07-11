@@ -322,6 +322,19 @@ impl CanSignalDb {
         self.len() == 0
     }
 
+    /// All signal names across regular and container frames. Not deduplicated.
+    pub fn signal_names(&self) -> impl Iterator<Item = &str> {
+        self.frames
+            .values()
+            .flat_map(|defs| defs.iter().map(|d| d.name.as_str()))
+            .chain(
+                self.containers
+                    .values()
+                    .flat_map(|m| m.values())
+                    .flat_map(|defs| defs.iter().map(|d| d.name.as_str())),
+            )
+    }
+
     /// Insert a regular-frame signal definition.
     pub fn insert(&mut self, def: SignalDef) {
         self.frames.entry(def.message_id).or_default().push(def);
@@ -754,6 +767,13 @@ impl SomeIpSignalDb {
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    /// All signal names across every (service_id, method_id) pair. Not deduplicated.
+    pub fn signal_names(&self) -> impl Iterator<Item = &str> {
+        self.map
+            .values()
+            .flat_map(|defs| defs.iter().map(|d| d.name.as_str()))
     }
 
     /// Write all signal definitions to `w` in the canonical CSV format.
@@ -1526,6 +1546,28 @@ IgnitionStatus,0x01,On
         let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
         let vals = db.extract(0x100, &[1], None);
         assert_eq!(vals.first().unwrap().2, None);
+    }
+
+    #[test]
+    fn can_signal_names_covers_regular_and_container() {
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x100,Direct,0,0,8,Intel,false,1.0,0.0\n\
+                   0x200,Contained,0,0,8,Intel,false,1.0,0.0,0x01\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        let mut names: Vec<&str> = db.signal_names().collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["Contained", "Direct"]);
+    }
+
+    #[test]
+    fn someip_signal_names() {
+        let csv = "service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset\n\
+                   0x0064,0x0001,Temperature,0,0,16,Intel,false,0.01,0.0\n\
+                   0x0064,0x0001,Pressure,2,0,8,Intel,false,1.0,0.0\n";
+        let db = SomeIpSignalDb::from_csv(csv.as_bytes()).unwrap();
+        let mut names: Vec<&str> = db.signal_names().collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["Pressure", "Temperature"]);
     }
 
     #[test]

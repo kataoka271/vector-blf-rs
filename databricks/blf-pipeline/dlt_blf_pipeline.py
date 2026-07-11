@@ -513,7 +513,7 @@ def _parse_blf_batch(iterator):
         "delta.autoOptimize.optimizeWrite": "true",
         "delta.autoOptimize.autoCompact": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["message_type", "channel", "timestamp_ns"],
 )
 def blf_bronze():
     """Stream new BLF files via Auto Loader; expand each file into rows."""
@@ -551,7 +551,7 @@ _DIR_LABEL = F.when(F.col("dir") == 0, "Tx").when(F.col("dir") == 1, "Rx").other
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["message_type", "channel", "timestamp_ns"],
 )
 def blf_silver_can():
     return (
@@ -706,7 +706,7 @@ def _decode_pdu_signals(
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["message_type", "channel", "timestamp_ns"],
 )
 def blf_silver_can_container_pdus():
     return (
@@ -764,7 +764,7 @@ def blf_silver_can_container_pdus():
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["channel", "signal_name", "timestamp_ns"],
 )
 def blf_silver_can_signals():
     _sig_cols = [
@@ -849,7 +849,7 @@ def blf_silver_can_signals():
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["message_type", "channel", "timestamp_ns"],
 )
 def blf_silver_eth():
     return (
@@ -910,7 +910,7 @@ def _parse_eth_payload(ether_types: pd.Series, data_col: pd.Series) -> pd.Series
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["channel", "signal_name", "timestamp_ns"],
 )
 def blf_silver_eth_signals():
     return (
@@ -1051,7 +1051,7 @@ def _parse_someip(ether_types: pd.Series, data_col: pd.Series) -> pd.Series:
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["message_type", "channel", "timestamp_ns"],
 )
 def blf_silver_someip():
     return (
@@ -1141,7 +1141,7 @@ def _decode_someip_signals(
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["message_type"],
+    cluster_by=["channel", "signal_name", "timestamp_ns"],
 )
 def blf_silver_someip_signals():
     return (
@@ -1231,7 +1231,7 @@ def blf_silver_someip_signals():
         "quality": "silver",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["transport", "uds_type"],
+    cluster_by=["transport", "uds_type", "timestamp_ns"],
 )
 def blf_silver_diag():
     return (
@@ -1282,7 +1282,7 @@ def blf_silver_diag():
         "quality": "gold",
         "delta.autoOptimize.optimizeWrite": "true",
     },
-    partition_cols=["signal_source"],
+    cluster_by=["signal_source", "channel", "signal_name", "timestamp_s"],
 )
 def blf_gold_signals():
     can = dlt.read_stream("blf_silver_can_signals").select(

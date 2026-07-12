@@ -8,6 +8,7 @@ resources:
       user_api_scopes:
         - sql
         - genie
+        - files.files
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -18,6 +19,14 @@ resources:
             name: "vehicle network signal analysis"
             space_id: ${var.genie_space_id}
             permission: CAN_RUN
+        - name: video-volume
+          # READ_VOLUME here is auto-granted to the app SP on deploy (unlike the
+          # table access below). The volume itself is NOT created by this bundle --
+          # create `main.<schema>.video` manually first, same as `raw`/`signals`.
+          uc_securable:
+            securable_type: VOLUME
+            securable_full_name: ${var.target_catalog}.${var.target_schema}.video
+            permission: READ_VOLUME
       # NOTE: DABs grants SQL warehouse CAN_USE automatically, but Unity Catalog
       # table access must be granted separately to the app service principal.
       # After first deploy, find the SP's application_id via:

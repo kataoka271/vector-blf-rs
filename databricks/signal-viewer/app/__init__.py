@@ -1,5 +1,6 @@
 from . import (
     callbacks,  # noqa: F401 -- registers all callbacks
     layout,  # noqa: F401 -- sets app.layout
+    video,  # noqa: F401 -- registers the /video-proxy Flask route
 )
 from ._dash import app  # noqa: F401 -- re-export Dash instance

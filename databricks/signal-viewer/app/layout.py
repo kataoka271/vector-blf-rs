@@ -160,7 +160,11 @@ app.layout = dbc.Container(
         dcc.Store(id="filenames-cache"),
         dcc.Store(id="filename-pending-store"),
         dcc.Store(id="signal-search-cache"),
+        dcc.Store(id="video-meta-store"),
+        dcc.Store(id="video-seek-store"),
+        html.Div(id="video-cursor-sink", style={"display": "none"}),
         dcc.Interval(id="filename-debounce-interval", interval=600, n_intervals=0, disabled=True),
+        dcc.Interval(id="video-cursor-interval", interval=100, n_intervals=0, disabled=True),
         dcc.Download(id="dl-perfetto"),
         dbc.Toast(
             id="replot-toast",
@@ -657,6 +661,43 @@ app.layout = dbc.Container(
                                     config={"displayModeBar": True, "scrollZoom": True},
                                     style={"padding": "0 16px 16px"},
                                 ),
+                            ),
+                        ),
+                        html.Div(
+                            id="video-section",
+                            style={"display": "none"},
+                            children=html.Div(
+                                [
+                                    html.Video(
+                                        id="video-player",
+                                        controls=True,
+                                        muted=True,
+                                        style={"width": "100%", "maxHeight": "480px", "backgroundColor": "#000"},
+                                    ),
+                                    html.Div(
+                                        [
+                                            dbc.Label(
+                                                "Offset (s)",
+                                                size="sm",
+                                                className="text-secondary mb-0",
+                                                style={"minWidth": "70px"},
+                                            ),
+                                            dbc.Input(
+                                                id="video-offset-input",
+                                                type="number",
+                                                value=0,
+                                                step=0.1,
+                                                style={"width": "100px", "fontSize": "12px"},
+                                            ),
+                                            html.Span(
+                                                "Adjust if video and log clocks are out of sync.",
+                                                style={"fontSize": "11px", "color": "#888", "marginLeft": "8px"},
+                                            ),
+                                        ],
+                                        className="d-flex align-items-center gap-2 mt-2",
+                                    ),
+                                ],
+                                style={"padding": "0 16px 16px"},
                             ),
                         ),
                         dag.AgGrid(

@@ -18,6 +18,7 @@ Layer layout
   blf_silver_mf4_signals     streaming table — MF4 scalar signal values (long format)
   blf_silver_diag            streaming table — UDS messages merged from CAN ISO-TP and DoIP
   blf_gold_signals           streaming table — CAN + ETH + SOME/IP signals merged into one schema
+  blf_video_files            streaming table — video files discovered by filename-stem, for Signal Viewer playback sync
 
 Setup
 -----
@@ -42,6 +43,7 @@ Setup
        blf.someip_signals_path /Volumes/mycat/myschema/someip_signals.csv (optional)
        blf.enum_signals_path   /Volumes/mycat/myschema/enum_values.csv        (optional)
        blf.container_long_header false                (optional, default: false)
+       blf.video_path           /Volumes/mycat/myschema/video                  (optional)
 
    Signal definitions can also be loaded from Unity Catalog tables instead of CSV files.
    When a table parameter is set it takes precedence over the corresponding path parameter.
@@ -86,6 +88,14 @@ Setup
    column with the category name; numeric signals without a mapping get NULL.
    Applies to both CAN and SOME/IP signals.
 
+   Video files (optional, for Signal Viewer playback sync): if blf.video_path is
+   set, *.mp4/*.webm/*.mov files found there are listed (path + mtime + size only
+   -- no frame parsing or transcoding) into blf_video_files, keyed by filename
+   stem. Signal Viewer matches a video to a BLF source file when they share the
+   same stem, e.g. drive001.blf <-> drive001.mp4. MP4/H.264 is the format assumed
+   to play back without transcoding in an HTML5 <video> element. If
+   blf.video_path is not set, blf_video_files will be empty.
+
 The pipeline is continuous-streaming: Auto Loader tracks which files have
 been processed, so only new *.blf files are ingested on each run.
 """
@@ -120,6 +130,7 @@ CONTAINER_LONG_HEADER: bool = spark.conf.get("blf.container_long_header", "false
 SIGNALS_TABLE = spark.conf.get("blf.signals_table", "")
 SOMEIP_SIGNALS_TABLE = spark.conf.get("blf.someip_signals_table", "")
 ENUM_SIGNALS_TABLE = spark.conf.get("blf.enum_signals_table", "")
+VIDEO_PATH = spark.conf.get("blf.video_path", "")
 
 # ── bronze output schema (flat rows emitted by _parse_blf_batch) ──────────────
 
@@ -1386,3 +1397,46 @@ def blf_time_range():
 )
 def blf_source_files():
     return dlt.read("blf_gold_signals").select("_source_file").distinct()
+
+
+# ── video files (optional, for Signal Viewer playback sync) ───────────────────
+
+_VIDEO_FILES_SCHEMA = StructType(
+    [
+        StructField("_video_path", StringType(), nullable=False),
+        StructField("_video_stem", StringType(), nullable=False),
+        StructField("_video_mtime", TimestampType()),
+        StructField("_video_size_bytes", LongType()),
+    ]
+)
+
+
+@dlt.table(
+    name="blf_video_files",
+    comment=(
+        "Video files discovered under blf.video_path, one row per file "
+        "(path + mtime + size only -- no frame parsing or transcoding). "
+        "Signal Viewer matches a video to a BLF source file by filename stem, "
+        "e.g. drive001.blf <-> drive001.mp4. Empty if blf.video_path is not set."
+    ),
+    table_properties={
+        "quality": "bronze",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+)
+def blf_video_files():
+    if not VIDEO_PATH:
+        return spark.createDataFrame([], schema=_VIDEO_FILES_SCHEMA)
+    return (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", "binaryFile")
+        .option("pathGlobFilter", "*.{mp4,webm,mov}")
+        .option("cloudFiles.schemaLocation", f"{VIDEO_PATH}/_autoloader_schema")
+        .load(VIDEO_PATH)
+        .select(
+            F.col("path").alias("_video_path"),
+            F.regexp_extract(F.col("path"), r"([^/]+)\.[^./]+$", 1).alias("_video_stem"),
+            F.col("modificationTime").alias("_video_mtime"),
+            F.col("length").alias("_video_size_bytes"),
+        )
+    )

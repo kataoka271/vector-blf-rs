@@ -3,6 +3,7 @@
 import time as _time
 import traceback
 import uuid as _uuid
+from urllib.parse import quote
 
 import dash
 import dash_bootstrap_components as dbc
@@ -20,6 +21,7 @@ from .db import (
     _fetch_filenames,
     _fetch_global_time_range,
     _fetch_signals_by_search,
+    _fetch_video_for_file,
     _log_token_info,
     _query,
     _store_to_df,
@@ -755,6 +757,89 @@ app.clientside_callback(
     """,
     Output("time-range-store", "data", allow_duplicate=True),
     Input("time-range-store", "data"),
+    prevent_initial_call=True,
+)
+
+# ---------------------------------------------------------------------------
+# Video playback sync
+# ---------------------------------------------------------------------------
+
+
+@callback(
+    Output("video-player", "src"),
+    Output("video-section", "style"),
+    Output("video-cursor-interval", "disabled"),
+    Output("video-meta-store", "data"),
+    Input("signal-data-cache", "data"),
+    State("filename-filter", "value"),
+    State("time-range-store", "data"),
+    prevent_initial_call=True,
+)
+def update_video_panel(cache_data, filenames, time_store):
+    hidden = {"display": "none"}
+    if cache_data is None or not filenames or len(filenames) != 1 or time_store is None:
+        return dash.no_update, hidden, True, None
+
+    info = _fetch_video_for_file(filenames[0])
+    if info is None:
+        return dash.no_update, hidden, True, None
+
+    src = f"/video-proxy?file={quote(filenames[0])}"
+    meta = {"t_min": time_store["min"], "t0": time_store.get("t0")}
+    return src, {}, False, meta
+
+
+@callback(
+    Output("video-seek-store", "data"),
+    Input("chart", "clickData"),
+    State("video-meta-store", "data"),
+    State("video-offset-input", "value"),
+    prevent_initial_call=True,
+)
+def seek_video_from_chart_click(click_data, meta, offset):
+    if not click_data or not meta:
+        return dash.no_update
+    x = click_data["points"][0].get("x")
+    if x is None:
+        return dash.no_update
+    offset = float(offset or 0)
+    if meta.get("t0"):
+        video_seconds = (pd.Timestamp(x) - pd.Timestamp(meta["t0"])).total_seconds() - offset
+    else:
+        video_seconds = (float(x) - meta["t_min"]) - offset
+    return {"seconds": max(0.0, video_seconds)}
+
+
+app.clientside_callback(
+    """
+    function(seek) {
+        if (!seek) return window.dash_clientside.no_update;
+        var videoEl = document.getElementById('video-player');
+        if (videoEl) { videoEl.currentTime = Math.max(0, seek.seconds); }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("video-cursor-sink", "children", allow_duplicate=True),
+    Input("video-seek-store", "data"),
+    prevent_initial_call=True,
+)
+
+app.clientside_callback(
+    """
+    function(_n, meta, offset) {
+        if (!meta) return window.dash_clientside.no_update;
+        var videoEl = document.getElementById('video-player');
+        if (!videoEl) return window.dash_clientside.no_update;
+        var t = videoEl.currentTime + (parseFloat(offset) || 0);
+        var xValue = meta.t0 ? new Date(new Date(meta.t0).getTime() + t * 1000).toISOString() : meta.t_min + t;
+        window._videoSync.setCursor('chart', xValue);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("video-cursor-sink", "children", allow_duplicate=True),
+    Input("video-cursor-interval", "n_intervals"),
+    State("video-meta-store", "data"),
+    State("video-offset-input", "value"),
     prevent_initial_call=True,
 )
 

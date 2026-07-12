@@ -64,6 +64,17 @@ variables:
       Auto Loader monitors this directory for new files.
     default: /Volumes/${var.target_catalog}/${var.target_schema}/raw
 
+  video_path:
+    description: >
+      Unity Catalog Volume path that contains video files (e.g. dashcam
+      footage) recorded alongside the *.blf source files. Auto Loader
+      monitors this directory; each *.mp4/*.webm/*.mov file becomes a row in
+      blf_video_files, keyed by filename stem. Signal Viewer plays back a
+      video alongside a BLF file's signal timeline when they share the same
+      stem, e.g. drive001.blf <-> drive001.mp4. Leave empty to disable video
+      ingestion entirely.
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/video
+
   signals_path:
     description: >
       Unity Catalog Volume path to the signal definitions CSV.

@@ -8,7 +8,13 @@ resource_specs:
     description: "The SQL warehouse the app uses to query signal data."
     sql_warehouse_spec:
       permission: "CAN_USE"
+  - name: "video-volume"
+    description: "The Unity Catalog volume the app reads dashcam-style video files from."
+    uc_securable_spec:
+      securable_type: "VOLUME"
+      permission: "READ_VOLUME"
 
 user_api_scopes:
   - "sql"
   - "genie"
+  - "files.files"

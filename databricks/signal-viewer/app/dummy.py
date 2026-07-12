@@ -53,6 +53,9 @@ def _dummy_values(src: str, channel: int, name: str) -> list[float]:
 
 def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
     print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
+    if "_video_path" in stmt:
+        # No video Volume in local dev -- always report "no matching video".
+        return pd.DataFrame({"_video_path": []})
     if "_source_file" in stmt and "signal_name" not in stmt:
         return pd.DataFrame({"_source_file": _DUMMY_FILES})
     if "blf_signal_catalog" in stmt or "DISTINCT" in stmt:

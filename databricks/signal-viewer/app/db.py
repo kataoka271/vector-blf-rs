@@ -17,6 +17,7 @@ from .config import (
     _LOCAL_DEV,
     _SOURCE_FILES_TABLE,
     _TIME_RANGE_TABLE,
+    _VIDEO_FILES_TABLE,
     USE_USER_TOKEN,
     cfg,
 )
@@ -203,4 +204,25 @@ def _fetch_global_time_range() -> dict | None:
         }
     except Exception as exc:
         print(f"[_fetch_global_time_range] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None
+
+
+def _fetch_video_for_file(filename: str) -> dict | None:
+    """Look up the video matching a BLF source file by filename stem (e.g. drive001.blf <-> drive001.mp4)."""
+    try:
+        stmt = (
+            f"SELECT _video_path, _video_mtime FROM {_VIDEO_FILES_TABLE}"
+            r" WHERE _video_stem = regexp_extract(?, '([^/]+)\.[^./]+$', 1) LIMIT 1"
+        )
+        df = _query(stmt, [filename])
+        if df.empty:
+            return None
+        mtime_raw = df["_video_mtime"].iloc[0]
+        mtime_ts = pd.Timestamp(mtime_raw) if pd.notna(mtime_raw) else None
+        return {
+            "video_path": df["_video_path"].iloc[0],
+            "mtime": mtime_ts.isoformat() if isinstance(mtime_ts, pd.Timestamp) else None,
+        }
+    except Exception as exc:
+        print(f"[_fetch_video_for_file] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
         return None

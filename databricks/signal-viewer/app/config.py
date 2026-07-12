@@ -12,6 +12,7 @@ _GOLD_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_gold_signals`"
 _CATALOG_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_signal_catalog`"
 _TIME_RANGE_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_time_range`"
 _SOURCE_FILES_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_source_files`"
+_VIDEO_FILES_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_video_files`"
 
 _KEY_RE = re.compile(r"^([A-Za-z]+)(\d+)::(.+)$")
 

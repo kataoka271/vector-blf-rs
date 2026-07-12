@@ -13,7 +13,7 @@ import traceback
 import flask
 
 from ._dash import app
-from .config import USE_USER_TOKEN, cfg
+from .config import _LOCAL_DEV, USE_USER_TOKEN, cfg
 from .db import _fetch_video_for_file
 
 _CACHE_DIR = os.path.join(tempfile.gettempdir(), "blf-video-cache")
@@ -51,6 +51,10 @@ def video_proxy():
     info = _fetch_video_for_file(filename)
     if info is None:
         return "No video found for this file.", 404
+
+    if _LOCAL_DEV:
+        # BLF_DEV_SAMPLE_VIDEO already points at a local file -- no Volume to fetch from.
+        return flask.send_file(info["video_path"], conditional=True)
 
     local_path = _cache_path(info["video_path"], info["mtime"])
     if not os.path.exists(local_path):

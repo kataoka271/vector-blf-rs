@@ -5,6 +5,8 @@ import os
 
 import pandas as pd
 
+from .config import DEV_SAMPLE_VIDEO
+
 _DUMMY_N = 500
 _DUMMY_DURATION = 300.0
 _DUMMY_T = [i * _DUMMY_DURATION / (_DUMMY_N - 1) for i in range(_DUMMY_N)]
@@ -54,8 +56,12 @@ def _dummy_values(src: str, channel: int, name: str) -> list[float]:
 def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
     print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
     if "_video_path" in stmt:
-        # No video Volume in local dev -- always report "no matching video".
-        return pd.DataFrame({"_video_path": []})
+        # No video Volume in local dev. If BLF_DEV_SAMPLE_VIDEO points at a local file,
+        # report it as a match for any file so the sync UI can be exercised; otherwise
+        # report "no matching video".
+        if DEV_SAMPLE_VIDEO:
+            return pd.DataFrame({"_video_path": [DEV_SAMPLE_VIDEO], "_video_mtime": [pd.Timestamp.now(tz="UTC")]})
+        return pd.DataFrame({"_video_path": [], "_video_mtime": []})
     if "_source_file" in stmt and "signal_name" not in stmt:
         return pd.DataFrame({"_source_file": _DUMMY_FILES})
     if "blf_signal_catalog" in stmt or "DISTINCT" in stmt:

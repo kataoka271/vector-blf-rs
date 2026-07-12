@@ -18,6 +18,10 @@ _KEY_RE = re.compile(r"^([A-Za-z]+)(\d+)::(.+)$")
 
 GENIE_SPACE_ID = os.environ.get("GENIE_SPACE_ID", "")
 
+# Local-dev only: path to a local video file to serve as a stand-in for a Volume-hosted
+# video, so the sync UI can be exercised without a real Databricks deployment.
+DEV_SAMPLE_VIDEO = os.environ.get("BLF_DEV_SAMPLE_VIDEO", "")
+
 # Databricks SDK config (None in local dev)
 cfg = None
 if not _LOCAL_DEV:

@@ -156,6 +156,7 @@ app.layout = dbc.Container(
         dcc.Store(id="genie-history-store"),
         dcc.Store(id="all-channels-cache"),
         dcc.Store(id="signal-data-cache"),
+        dcc.Store(id="session-id-store"),  # opaque per-tab id keying the server-side fetched-data cache
         dcc.Store(id="time-range-store"),
         dcc.Store(id="filenames-cache"),
         dcc.Store(id="filename-pending-store"),
@@ -313,7 +314,10 @@ app.layout = dbc.Container(
                                         dcc.Loading(
                                             type="dot",
                                             color=_ACCENT,
-                                            target_components={"all-signals-cache": "data"},
+                                            target_components={
+                                                "all-signals-cache": "data",
+                                                "signal-search-cache": "data",
+                                            },
                                             children=[
                                                 dcc.Store(id="all-signals-cache"),
                                                 html.Div(
@@ -643,7 +647,10 @@ app.layout = dbc.Container(
                         dcc.Loading(
                             type="circle",
                             color=_ACCENT,
-                            target_components={"signal-data-cache": "data", "chart": "figure"},
+                            # signal-data-cache intentionally excluded: it's now a tiny
+                            # sentinel, not the render-completion signal. chart.figure is
+                            # already an auto-tracked descendant output of this wrapper.
+                            target_components={"chart": "figure"},
                             children=dcc.Graph(
                                 id="chart",
                                 config={"displayModeBar": True, "scrollZoom": True},

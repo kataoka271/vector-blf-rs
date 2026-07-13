@@ -1,7 +1,6 @@
 """All Dash callbacks (server-side and clientside)."""
 
 import time as _time
-import traceback
 import uuid as _uuid
 from urllib.parse import quote
 
@@ -12,10 +11,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import ALL, Input, Output, State, callback, dcc, html
 
+from . import cache
 from ._dash import app
-from .config import _GOLD_TABLE, _LOCAL_DEV, GENIE_SPACE_ID, _parse_key
+from .config import _LOCAL_DEV, GENIE_SPACE_ID, _parse_key
 from .db import (
-    _df_to_store,
     _fetch_all_channels,
     _fetch_all_signals,
     _fetch_filenames,
@@ -23,8 +22,7 @@ from .db import (
     _fetch_signals_by_search,
     _fetch_video_for_file,
     _log_token_info,
-    _query,
-    _store_to_df,
+    fetch_signal_data,
 )
 from .figures import (
     _BORDER,
@@ -32,14 +30,8 @@ from .figures import (
     _SIDEBAR_CONTENT_STYLE,
     _SIDEBAR_STYLE,
     _TEXT,
-    _empty_fig,
-    _map_fig,
-    _overlay_fig,
-    _pivot_table,
-    _scale_traces,
-    _stacked_fig,
     _XaxisMode,
-    build_anomaly_vlines,
+    render_chart_and_grid,
 )
 from .genie import (
     _genie_executor,
@@ -49,7 +41,6 @@ from .genie import (
 )
 from .perfetto import build_perfetto_trace
 
-_MAX_STACKED_TRACES = 20  # cap to prevent stacked figure height explosion
 _MAX_VISIBLE_TAGS = 20  # cap pattern-matched button registrations in signal-tags
 
 
@@ -71,10 +62,17 @@ def _fmt_s(seconds: float) -> str:
     Output("all-channels-cache", "data"),
     Output("time-range-store", "data"),
     Output("filenames-cache", "data"),
+    Output("session-id-store", "data"),
     Input("url", "pathname"),
 )
 def prefetch_signals(_):
-    return _fetch_all_signals(), _fetch_all_channels(), _fetch_global_time_range(), _fetch_filenames()
+    return (
+        _fetch_all_signals(),
+        _fetch_all_channels(),
+        _fetch_global_time_range(),
+        _fetch_filenames(),
+        _uuid.uuid4().hex,
+    )
 
 
 @callback(
@@ -430,6 +428,13 @@ def remove_signal(n_clicks_list, selected):
     Output("signal-data-cache", "data"),
     Output("time-range-store", "data", allow_duplicate=True),
     Output("plot-msg", "children"),
+    Output("chart", "figure", allow_duplicate=True),
+    Output("grid", "rowData", allow_duplicate=True),
+    Output("grid", "columnDefs", allow_duplicate=True),
+    Output("map-chart", "figure", allow_duplicate=True),
+    Output("map-section", "style", allow_duplicate=True),
+    Output("plot-btn", "disabled", allow_duplicate=True),
+    Output("session-id-store", "data", allow_duplicate=True),
     Input("plot-btn", "n_clicks"),
     State("source-filter", "value"),
     State("signal-select", "value"),
@@ -439,86 +444,77 @@ def remove_signal(n_clicks_list, selected):
     State("lat-signal", "value"),
     State("lon-signal", "value"),
     State("filename-filter", "value"),
+    State("layout-mode", "value"),
+    State("chart-height", "value"),
+    State("xaxis-mode", "value"),
+    State("overlay-mode", "value"),
+    State("genie-anomaly-markers-store", "data"),
+    State("session-id-store", "data"),
     prevent_initial_call=True,
 )
-def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames):
-    if not sources:
-        return None, dash.no_update, "No source selected."
+def fetch_and_render(
+    _,
+    sources,
+    selected,
+    max_pts,
+    time_range,
+    time_range_store,
+    lat_key,
+    lon_key,
+    filenames,
+    layout,
+    chart_height,
+    xaxis_mode: _XaxisMode,
+    overlay_mode,
+    anomalies_raw,
+    session_id,
+):
+    # Self-heal: prefetch_signals should have already set this at page load; fall back
+    # if a click somehow raced ahead of it, so later redraws still have a valid key.
+    session_id = session_id or _uuid.uuid4().hex
+    map_empty = go.Figure()
+    map_hidden = {"display": "none"}
 
-    keys = set(selected or [])
-    keys.update(k for k in (lat_key, lon_key) if k)
-    if not keys:
-        return None, dash.no_update, "No signal selected."
-
-    key_triples = [_parse_key(key) for key in keys]
-    pair_filter = "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
-    pair_params = [part for triple in key_triples for part in triple]
-
-    file_filter = ""
-    file_params: list = []
-    if filenames:
-        file_filter = " AND _source_file IN (" + ", ".join(["?"] * len(filenames)) + ")"
-        file_params = list(filenames)
-
-    time_filter = ""
-    time_params: list = []
-    if time_range_store is not None and time_range is not None:
-        t_lo, t_hi = float(time_range[0]), float(time_range[1])
-        time_filter = " AND timestamp_s BETWEEN ? AND ?"
-        time_params = [t_lo, t_hi]
-
-    new_time_range: dict | object = dash.no_update
-    range_stmt = (
-        f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 "
-        f"FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}"
+    df, new_time_range, msg = fetch_signal_data(
+        sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames
     )
-    try:
-        range_df = _query(range_stmt, list(pair_params) + file_params)
-        t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
-        if t0_raw is not None and pd.isna(t0_raw):
-            t0_raw = None
-        t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
-        t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
-        new_time_range = {
-            "min": float(range_df["t_min"].iloc[0]),
-            "max": float(range_df["t_max"].iloc[0]),
-            "t0": t0_iso,
-        }
-    except Exception as exc:
-        print(f"[fetch_data] time-range query error: {exc}", flush=True)
 
-    stmt = (
-        f"WITH bucketed AS ("
-        f"  SELECT signal_source, channel, signal_name, event_time, timestamp_s, timestamp_ns, signal_value, signal_str,"
-        f"    NTILE({int(max_pts)}) OVER ("
-        f"      PARTITION BY signal_source, channel, signal_name ORDER BY timestamp_ns"
-        f"    ) AS bucket"
-        f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}{time_filter}"
-        f"), agg AS ("
-        f"  SELECT signal_source, channel, signal_name, bucket,"
-        f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS lo,"
-        f"    MAX_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS hi"
-        f"  FROM bucketed GROUP BY signal_source, channel, signal_name, bucket"
-        f") SELECT * FROM ("
-        f"  SELECT signal_source, channel, signal_name, lo.event_time AS event_time, lo.timestamp_s AS timestamp_s,"
-        f"    lo.timestamp_ns AS timestamp_ns, lo.signal_value AS signal_value, lo.signal_str AS signal_str FROM agg"
-        f"  UNION ALL"
-        f"  SELECT signal_source, channel, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value, hi.signal_str FROM agg"
-        f") ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
+    if df is None:
+        return (
+            None,
+            new_time_range,
+            msg,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            map_empty,
+            map_hidden,
+            False,
+            session_id,
+        )
+
+    cache.put_df(session_id, df)
+    sentinel = {"session_id": session_id, "n_rows": len(df)}
+    # Mirrors what render_chart used to read via State("time-range-store", "data"):
+    # the freshly computed range when the range query succeeded, else whatever was
+    # already in the store (time_range_store, unchanged since new_time_range is no_update).
+    time_store = new_time_range if isinstance(new_time_range, dict) else time_range_store
+
+    chart_fig, chart_msg, row_data, col_defs, map_fig, map_style = render_chart_and_grid(
+        df, selected, layout, chart_height, xaxis_mode, overlay_mode, lat_key, lon_key, anomalies_raw, time_store
     )
-    try:
-        df = _query(stmt, pair_params + file_params + time_params)
-    except Exception as exc:
-        msg = f"Query error: {exc}"
-        print(f"[fetch_data] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
-        return None, new_time_range, msg
 
-    signal_count = df["signal_name"].nunique() if not df.empty else 0
-    print(f"[fetch_data] {len(df):,} rows, {signal_count} signal(s)", flush=True)
     return (
-        _df_to_store(df),
+        sentinel,
         new_time_range,
-        f"Fetched {len(df):,} pts, {signal_count} signal(s).",
+        chart_msg,
+        chart_fig,
+        row_data,
+        col_defs,
+        map_fig,
+        map_style,
+        False,
+        session_id,
     )
 
 
@@ -529,8 +525,6 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     Output("grid", "columnDefs"),
     Output("map-chart", "figure"),
     Output("map-section", "style"),
-    Output("plot-btn", "disabled", allow_duplicate=True),
-    Input("signal-data-cache", "data"),
     Input("signal-select", "value"),
     Input("layout-mode", "value"),
     Input("chart-height", "value"),
@@ -540,10 +534,10 @@ def fetch_data(_, sources, selected, max_pts, time_range, time_range_store, lat_
     State("lon-signal", "value"),
     State("genie-anomaly-markers-store", "data"),
     State("time-range-store", "data"),
+    State("session-id-store", "data"),
     prevent_initial_call=True,
 )
-def render_chart(
-    cache_data,
+def redraw_chart(
     selected,
     layout,
     chart_height,
@@ -553,99 +547,19 @@ def render_chart(
     lon_key,
     anomalies_raw,
     time_store,
+    session_id,
 ):
-    map_empty = go.Figure()
-    map_hidden = {"display": "none"}
-
-    btn_disabled = False if dash.ctx.triggered_id == "signal-data-cache" else dash.no_update
-
-    if cache_data is None:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, map_empty, map_hidden, btn_disabled
-
-    df_all = _store_to_df(cache_data)
-
-    chart_fig: object = dash.no_update
-    chart_msg = ""
-    row_data: list = []
-    col_defs: object = dash.no_update
-
-    if selected:
-        traces = []
-        for key in selected:
-            src, channel, name = _parse_key(key)
-            sub = df_all[
-                (df_all["signal_source"] == src) & (df_all["channel"] == channel) & (df_all["signal_name"] == name)
-            ]
-            if sub.empty:
-                continue
-            x = (
-                sub["event_time"]
-                if "event_time" in df_all.columns and sub["event_time"].notna().any()
-                else sub["timestamp_s"]
-            )
-            y_str = sub["signal_str"] if "signal_str" in df_all.columns and sub["signal_str"].notna().any() else None
-            traces.append((src, channel, name, x, sub["signal_value"], y_str))
-
-        if traces:
-            h = int(chart_height or 600)
-            truncation_note = ""
-            if layout == "stacked" and len(traces) > _MAX_STACKED_TRACES:
-                truncation_note = (
-                    f" (stacked: first {_MAX_STACKED_TRACES} of {len(traces)} signals; use Overlay to see all)"
-                )
-                traces = traces[:_MAX_STACKED_TRACES]
-            vlines = build_anomaly_vlines(anomalies_raw, traces, time_store)
-            normalize = layout == "overlay" and overlay_mode != "nominal"
-            chart_fig = (
-                _overlay_fig(
-                    _scale_traces(traces) if normalize else traces,
-                    h,
-                    anomalies=vlines,
-                    original_traces=traces if normalize else None,
-                )
-                if layout == "overlay"
-                else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines)
-            )
-            row_data, col_defs = _pivot_table(traces)
-            total = sum(len(x) for _, _, _, x, _, _ in traces)
-            chart_msg = f"{total:,} pts across {len(traces)} signal(s).{truncation_note}"
-        else:
-            chart_msg = "No data for selected signals."
-            chart_fig = _empty_fig(chart_msg)
-            row_data = []
-
-    map_fig = map_empty
-    map_style = map_hidden
-    if lat_key and lon_key and "timestamp_ns" in df_all.columns:
-        lat_src, lat_channel, lat_name = _parse_key(lat_key)
-        lon_src, lon_channel, lon_name = _parse_key(lon_key)
-        lat_df = (
-            df_all[
-                (df_all["signal_source"] == lat_src)
-                & (df_all["channel"] == lat_channel)
-                & (df_all["signal_name"] == lat_name)
-            ][["timestamp_ns", "signal_value"]]
-            .rename(columns={"signal_value": "lat"})
-            .sort_values("timestamp_ns")
-        )
-        lon_df = (
-            df_all[
-                (df_all["signal_source"] == lon_src)
-                & (df_all["channel"] == lon_channel)
-                & (df_all["signal_name"] == lon_name)
-            ][["timestamp_ns", "signal_value"]]
-            .rename(columns={"signal_value": "lon"})
-            .sort_values("timestamp_ns")
-        )
-        if not lat_df.empty and not lon_df.empty:
-            merged = pd.merge_asof(lat_df, lon_df, on="timestamp_ns", direction="nearest").dropna(subset=["lat", "lon"])
-            if not merged.empty:
-                map_fig = _map_fig(merged["lat"], merged["lon"])
-                map_style = {}
-                pts = len(merged)
-                chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
-
-    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style, btn_disabled
+    df_all = cache.get_df(session_id)
+    if df_all is None:
+        # Cause-neutral: a miss here means either "nothing fetched yet this session"
+        # (e.g. toggling layout-mode before ever clicking Plot) or "the server-side
+        # cache entry is gone" (restart/eviction) -- these are indistinguishable, so
+        # avoid implying anything specific "expired".
+        msg = "No data yet -- click Plot." if selected else dash.no_update
+        return dash.no_update, msg, [], dash.no_update, go.Figure(), {"display": "none"}
+    return render_chart_and_grid(
+        df_all, selected, layout, chart_height, xaxis_mode, overlay_mode, lat_key, lon_key, anomalies_raw, time_store
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -853,11 +767,14 @@ app.clientside_callback(
     Output("replot-toast", "is_open"),
     Input("signal-select", "value"),
     Input("signal-data-cache", "data"),
+    State("session-id-store", "data"),
 )
-def update_replot_notice(selected, cache_data):
+def update_replot_notice(selected, cache_data, session_id):
     if not cache_data or not selected:
         return "", False
-    df = _store_to_df(cache_data)
+    df = cache.get_df(session_id)
+    if df is None:
+        return "", False
     cached_keys = set(df["signal_source"] + df["channel"].astype(str) + "::" + df["signal_name"])
     new_count = sum(1 for s in selected if s not in cached_keys)
     if new_count == 0:
@@ -878,12 +795,15 @@ app.clientside_callback(
     Input("download-perfetto-btn", "n_clicks"),
     State("signal-data-cache", "data"),
     State("signal-select", "value"),
+    State("session-id-store", "data"),
     prevent_initial_call=True,
 )
-def download_perfetto(_, cache_data, selected):
+def download_perfetto(_, cache_data, selected, session_id):
     if not cache_data or not selected:
         return dash.no_update
-    df = _store_to_df(cache_data)
+    df = cache.get_df(session_id)
+    if df is None:
+        return dash.no_update
     trace_bytes = build_perfetto_trace(df, selected)
     if not trace_bytes:
         return dash.no_update

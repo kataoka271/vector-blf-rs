@@ -3,8 +3,11 @@
 import html as _html
 from typing import Literal
 
+import dash
 import pandas as pd
 import plotly.graph_objects as go
+
+from .config import _parse_key
 
 # ---------------------------------------------------------------------------
 # Theme
@@ -39,6 +42,7 @@ _XaxisMode = Literal["shared", "synced", "free"]
 
 _VAL_WIDTH = 12  # fixed character width for right-aligned signal values in hover tooltip
 _GRID_MAX_ROWS = 50_000  # cap AgGrid rowData; AgGrid paginates client-side, so this only guards against pathological payload sizes (e.g. max_pts=50k x lo/hi)
+_MAX_STACKED_TRACES = 20  # cap to prevent stacked figure height explosion
 
 
 def _scale_traces(traces: _Traces) -> _Traces:
@@ -365,3 +369,108 @@ def _map_fig(lat: pd.Series, lon: pd.Series) -> go.Figure:
         margin={"l": 0, "r": 0, "t": 30, "b": 0},
     )
     return fig
+
+
+def render_chart_and_grid(
+    df_all: pd.DataFrame,
+    selected,
+    layout,
+    chart_height,
+    xaxis_mode: _XaxisMode,
+    overlay_mode,
+    lat_key,
+    lon_key,
+    anomalies_raw,
+    time_store,
+) -> tuple[object, str, list, object, object, dict]:
+    """Build the chart figure, grid rows/columns, and map from an already-fetched DataFrame.
+
+    Pure function of df_all -- no I/O, no dcc.Store (de)serialization. Callers
+    own dash.ctx.triggered_id logic and any signal-data-cache/plot-btn.disabled
+    writes. Returns (chart_fig, chart_msg, row_data, col_defs, map_fig, map_style).
+    """
+    map_empty = go.Figure()
+    map_hidden = {"display": "none"}
+
+    chart_fig: object = dash.no_update
+    chart_msg = ""
+    row_data: list = []
+    col_defs: object = dash.no_update
+
+    if selected:
+        traces = []
+        for key in selected:
+            src, channel, name = _parse_key(key)
+            sub = df_all[
+                (df_all["signal_source"] == src) & (df_all["channel"] == channel) & (df_all["signal_name"] == name)
+            ]
+            if sub.empty:
+                continue
+            x = (
+                sub["event_time"]
+                if "event_time" in df_all.columns and sub["event_time"].notna().any()
+                else sub["timestamp_s"]
+            )
+            y_str = sub["signal_str"] if "signal_str" in df_all.columns and sub["signal_str"].notna().any() else None
+            traces.append((src, channel, name, x, sub["signal_value"], y_str))
+
+        if traces:
+            h = int(chart_height or 600)
+            truncation_note = ""
+            if layout == "stacked" and len(traces) > _MAX_STACKED_TRACES:
+                truncation_note = (
+                    f" (stacked: first {_MAX_STACKED_TRACES} of {len(traces)} signals; use Overlay to see all)"
+                )
+                traces = traces[:_MAX_STACKED_TRACES]
+            vlines = build_anomaly_vlines(anomalies_raw, traces, time_store)
+            normalize = layout == "overlay" and overlay_mode != "nominal"
+            chart_fig = (
+                _overlay_fig(
+                    _scale_traces(traces) if normalize else traces,
+                    h,
+                    anomalies=vlines,
+                    original_traces=traces if normalize else None,
+                )
+                if layout == "overlay"
+                else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines)
+            )
+            row_data, col_defs = _pivot_table(traces)
+            total = sum(len(x) for _, _, _, x, _, _ in traces)
+            chart_msg = f"{total:,} pts across {len(traces)} signal(s).{truncation_note}"
+        else:
+            chart_msg = "No data for selected signals."
+            chart_fig = _empty_fig(chart_msg)
+            row_data = []
+
+    map_fig = map_empty
+    map_style = map_hidden
+    if lat_key and lon_key and "timestamp_ns" in df_all.columns:
+        lat_src, lat_channel, lat_name = _parse_key(lat_key)
+        lon_src, lon_channel, lon_name = _parse_key(lon_key)
+        lat_df = (
+            df_all[
+                (df_all["signal_source"] == lat_src)
+                & (df_all["channel"] == lat_channel)
+                & (df_all["signal_name"] == lat_name)
+            ][["timestamp_ns", "signal_value"]]
+            .rename(columns={"signal_value": "lat"})
+            .sort_values("timestamp_ns")
+        )
+        lon_df = (
+            df_all[
+                (df_all["signal_source"] == lon_src)
+                & (df_all["channel"] == lon_channel)
+                & (df_all["signal_name"] == lon_name)
+            ][["timestamp_ns", "signal_value"]]
+            .rename(columns={"signal_value": "lon"})
+            .sort_values("timestamp_ns")
+        )
+        if not lat_df.empty and not lon_df.empty:
+            merged = pd.merge_asof(lat_df, lon_df, on="timestamp_ns", direction="nearest").dropna(subset=["lat", "lon"])
+            if not merged.empty:
+                map_fig = _map_fig(merged["lat"], merged["lon"])
+                map_style = {}
+                pts = len(merged)
+                chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
+
+    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style

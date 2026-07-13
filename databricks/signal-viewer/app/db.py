@@ -1,13 +1,13 @@
-"""Database query helpers and DataFrame serialization."""
+"""Database query helpers."""
 
 import base64
 import datetime
 import json
 import traceback
 
+import dash
 import flask
 import pandas as pd
-import pyarrow as pa
 
 from databricks import sql
 
@@ -19,6 +19,7 @@ from .config import (
     _TIME_RANGE_TABLE,
     _VIDEO_FILES_TABLE,
     USE_USER_TOKEN,
+    _parse_key,
     cfg,
 )
 from .dummy import _dummy_query
@@ -80,20 +81,6 @@ def _query(stmt: str, params=None) -> pd.DataFrame:
         raise RuntimeError("Missing X-Forwarded-Access-Token header.")
     _log_token_info(user_token)
     return _run_query(stmt, params, user_token=user_token if USE_USER_TOKEN else None)
-
-
-def _df_to_store(df: pd.DataFrame) -> str:
-    """Serialize a DataFrame to a base64-encoded Arrow IPC stream for dcc.Store."""
-    table = pa.Table.from_pandas(df, preserve_index=False)
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
-
-
-def _store_to_df(data: str) -> pd.DataFrame:
-    """Deserialize a base64-encoded Arrow IPC stream produced by _df_to_store."""
-    return pa.ipc.open_stream(base64.b64decode(data)).read_pandas()
 
 
 def _fetch_filenames() -> list[str] | None:
@@ -205,6 +192,92 @@ def _fetch_global_time_range() -> dict | None:
     except Exception as exc:
         print(f"[_fetch_global_time_range] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
         return None
+
+
+def fetch_signal_data(
+    sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames
+) -> tuple[pd.DataFrame | None, dict | object, str]:
+    """Run the two-query fetch (unfiltered time-range + downsampled main query).
+
+    Returns (df, new_time_range, message). df is None only on the validation
+    guard paths (no source/no signal selected) and on a main-query error --
+    callers rely on this None-vs-not-None distinction to mean "a successful
+    query happened, even if it returned zero rows".
+    """
+    if not sources:
+        return None, dash.no_update, "No source selected."
+
+    keys = set(selected or [])
+    keys.update(k for k in (lat_key, lon_key) if k)
+    if not keys:
+        return None, dash.no_update, "No signal selected."
+
+    key_triples = [_parse_key(key) for key in keys]
+    pair_filter = "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
+    pair_params = [part for triple in key_triples for part in triple]
+
+    file_filter = ""
+    file_params: list = []
+    if filenames:
+        file_filter = " AND _source_file IN (" + ", ".join(["?"] * len(filenames)) + ")"
+        file_params = list(filenames)
+
+    time_filter = ""
+    time_params: list = []
+    if time_range_store is not None and time_range is not None:
+        t_lo, t_hi = float(time_range[0]), float(time_range[1])
+        time_filter = " AND timestamp_s BETWEEN ? AND ?"
+        time_params = [t_lo, t_hi]
+
+    new_time_range: dict | object = dash.no_update
+    range_stmt = (
+        f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 "
+        f"FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}"
+    )
+    try:
+        range_df = _query(range_stmt, list(pair_params) + file_params)
+        t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
+        if t0_raw is not None and pd.isna(t0_raw):
+            t0_raw = None
+        t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
+        t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
+        new_time_range = {
+            "min": float(range_df["t_min"].iloc[0]),
+            "max": float(range_df["t_max"].iloc[0]),
+            "t0": t0_iso,
+        }
+    except Exception as exc:
+        print(f"[fetch_signal_data] time-range query error: {exc}", flush=True)
+
+    stmt = (
+        f"WITH bucketed AS ("
+        f"  SELECT signal_source, channel, signal_name, event_time, timestamp_s, timestamp_ns, signal_value, signal_str,"
+        f"    NTILE({int(max_pts)}) OVER ("
+        f"      PARTITION BY signal_source, channel, signal_name ORDER BY timestamp_ns"
+        f"    ) AS bucket"
+        f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}{time_filter}"
+        f"), agg AS ("
+        f"  SELECT signal_source, channel, signal_name, bucket,"
+        f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS lo,"
+        f"    MAX_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS hi"
+        f"  FROM bucketed GROUP BY signal_source, channel, signal_name, bucket"
+        f") SELECT * FROM ("
+        f"  SELECT signal_source, channel, signal_name, lo.event_time AS event_time, lo.timestamp_s AS timestamp_s,"
+        f"    lo.timestamp_ns AS timestamp_ns, lo.signal_value AS signal_value, lo.signal_str AS signal_str FROM agg"
+        f"  UNION ALL"
+        f"  SELECT signal_source, channel, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value, hi.signal_str FROM agg"
+        f") ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
+    )
+    try:
+        df = _query(stmt, pair_params + file_params + time_params)
+    except Exception as exc:
+        msg = f"Query error: {exc}"
+        print(f"[fetch_signal_data] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None, new_time_range, msg
+
+    signal_count = df["signal_name"].nunique() if not df.empty else 0
+    print(f"[fetch_signal_data] {len(df):,} rows, {signal_count} signal(s)", flush=True)
+    return df, new_time_range, f"Fetched {len(df):,} pts, {signal_count} signal(s)."
 
 
 def _fetch_video_for_file(filename: str) -> dict | None:

@@ -314,7 +314,7 @@ app.clientside_callback(
 
 app.clientside_callback(
     "function(n) { return true; }",
-    Output("plot-btn", "disabled", allow_duplicate=True),
+    Output("plot-btn", "disabled"),
     Input("plot-btn", "n_clicks"),
     prevent_initial_call=True,
 )
@@ -944,7 +944,7 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sour
     Output("genie-preview-store", "data"),
     Output("genie-chat-log", "children", allow_duplicate=True),
     Output("genie-ask-btn", "disabled", allow_duplicate=True),
-    Output("genie-history-store", "data", allow_duplicate=True),
+    Output("genie-history-store", "data"),
     Input("genie-poll-interval", "n_intervals"),
     State("genie-request-store", "data"),
     State("genie-conversation-store", "data"),
@@ -1095,7 +1095,7 @@ app.clientside_callback(
 @callback(
     Output("signal-select", "value", allow_duplicate=True),
     Output("time-range-slider", "value", allow_duplicate=True),
-    Output("plot-btn", "n_clicks", allow_duplicate=True),
+    Output("plot-btn", "n_clicks"),
     Output("genie-insight-store", "data"),
     Output("genie-preview-store", "data", allow_duplicate=True),
     Output("genie-anomaly-markers-store", "data"),

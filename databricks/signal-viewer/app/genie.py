@@ -23,6 +23,31 @@ _RE_CLOCK = re.compile(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:to|-|--)\s*(\d{1,2}:\d{
 _RE_LAST = re.compile(r"last\s+(\d+(?:\.\d+)?)\s*(second|sec|minute|min)s?", re.IGNORECASE)
 
 
+def build_context_prefix(
+    filenames: list[str] | None,
+    sources: list[str] | None,
+    channels: list[str] | None,
+) -> str:
+    """Summarize the sidebar's current file/source/channel filters as a Genie context prefix.
+
+    Values are passed through as raw column/key values (not the sidebar's display
+    labels, which relabel SOMEIP as ETH) so Genie can map them unambiguously onto
+    blf_gold_signals columns.
+    """
+    parts = []
+    if filenames:
+        parts.append(f"file(s) (_source_file column) {', '.join(filenames)}")
+    if sources:
+        parts.append(f"source(s) (signal_source column) {', '.join(sources)}")
+    if channels:
+        # Each value concatenates signal_source + channel number, e.g. "CAN1" means
+        # signal_source='CAN' AND channel=1; "SOMEIP2" means signal_source='SOMEIP' AND channel=2.
+        parts.append(f"channel(s) (signal_source+channel key) {', '.join(channels)}")
+    if not parts:
+        return ""
+    return "Currently viewing " + "; ".join(parts) + "."
+
+
 def _genie_query(space_id: str, content: str, conversation_id: str | None, user_token: str) -> dict:
     """Run a Genie Space query in an executor thread. Returns result dict."""
     print(f"[_genie_query] start space_id={space_id} conversation_id={conversation_id}", flush=True)

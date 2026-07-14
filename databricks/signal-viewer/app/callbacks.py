@@ -37,6 +37,7 @@ from .genie import (
     _genie_executor,
     _genie_futures,
     _genie_query,
+    build_context_prefix,
     interpret_genie_response,
 )
 from .perfetto import build_perfetto_trace
@@ -905,9 +906,12 @@ def new_genie_conversation(_):
     State("genie-input", "value"),
     State("genie-conversation-store", "data"),
     State("genie-chat-log", "children"),
+    State("filename-filter", "value"),
+    State("source-filter", "value"),
+    State("channel-filter", "value"),
     prevent_initial_call=True,
 )
-def submit_genie_query(n_clicks, question, conv_store, chat_log):
+def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sources, channels):
     if not question or not question.strip():
         return dash.no_update, True, dash.no_update, False, dash.no_update
     if not GENIE_SPACE_ID and not _LOCAL_DEV:
@@ -922,7 +926,9 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log):
         _log_token_info(user_token)
     conv_id = (conv_store or {}).get("conversation_id")
     request_id = str(_uuid.uuid4())
-    future = _genie_executor.submit(_genie_query, GENIE_SPACE_ID or "mock", question.strip(), conv_id, user_token)
+    context = build_context_prefix(filenames, sources, channels)
+    content = f"{context}\n\n{question.strip()}" if context else question.strip()
+    future = _genie_executor.submit(_genie_query, GENIE_SPACE_ID or "mock", content, conv_id, user_token)
     _genie_futures[request_id] = (future, _time.time())
 
     user_bubble = html.Div(question.strip(), className="genie-bubble genie-user")

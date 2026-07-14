@@ -410,6 +410,43 @@ databricks permissions get genie <GENIE_SPACE_ID>
 
 **4. Add `blf_signal_doc_sections` to the Genie Space.** Genie Space table/instruction curation isn't part of DAB IaC — there's no bundle resource for it — so this step is manual, in the Databricks UI: open the Genie Space, add `blf_signal_doc_sections` to its table list, and add an instruction along the lines of "When a question mentions a domain term not obviously matching a signal_name, search blf_signal_doc_sections.text (and semantic_summary, if populated) for that term to find the right signal." This gives Genie a documentation table to ground natural-language questions on, alongside `blf_gold_signals`/`blf_signal_catalog`.
 
+**5. Teach Genie to use the app's selected-filter context.** `build_context_prefix()` in `databricks/signal-viewer/app/genie.py` prepends a summary of the sidebar's current File/Source/Channel selection to every question sent to Genie, in this form:
+
+```
+Currently viewing file(s) (_source_file column) <value>; source(s) (signal_source column) <value>; channel(s) (signal_source+channel key) <value>.
+```
+
+Without an instruction telling Genie how to read this, it won't connect a question like "tell me about this log file" to the selected file. Add an instruction to the Genie Space along these lines (also manual, in the Databricks UI — same reason as step 4):
+
+```
+Questions from the Signal Viewer app may start with a line like:
+
+  "Currently viewing file(s) (_source_file column) <value>; source(s) (signal_source
+  column) <value>; channel(s) (signal_source+channel key) <value>."
+
+This describes the filters currently selected in the app's sidebar. When present,
+apply it as a WHERE-clause condition on blf_gold_signals, and treat referring
+phrases in the question ("this file", "this log", "these signals") as pointing to
+it. If the line is absent, no filter is selected in the app -- ask which file(s) to
+use, or default to querying all files.
+
+Field mapping:
+- "file(s) (_source_file column) <value>": exact match (=/IN) against _source_file.
+  Values are full Volume paths, not basenames -- do not use LIKE with just a
+  filename.
+- "source(s) (signal_source column) <value>": IN match against signal_source
+  ('CAN', 'ETH', or 'SOMEIP').
+- "channel(s) (signal_source+channel key) <value>": each value concatenates
+  signal_source and a channel number, e.g. "CAN1" means signal_source='CAN' AND
+  channel=1, "SOMEIP2" means signal_source='SOMEIP' AND channel=2. ETH and SOMEIP
+  are distinct signal_source values -- do not conflate them.
+
+Also remember: signal_name is not unique across signal_source, so always include
+signal_source when filtering by signal_name.
+```
+
+After saving the instruction, verify it in the app: select a file in the sidebar, open the "Ask Genie" panel, and ask "tell me about this log file" — the generated SQL (visible by expanding Genie's response) should include a `_source_file` filter.
+
 ---
 
 ## Scripts

@@ -452,6 +452,13 @@ def remove_signal(n_clicks_list, selected):
     State("genie-anomaly-markers-store", "data"),
     State("session-id-store", "data"),
     prevent_initial_call=True,
+    running=[
+        (
+            Output("plot-btn", "children"),
+            [dbc.Spinner(size="sm"), " Plotting..."],
+            "Plot",
+        ),
+    ],
 )
 def fetch_and_render(
     _,

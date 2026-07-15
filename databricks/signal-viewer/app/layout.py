@@ -650,7 +650,7 @@ app.layout = dbc.Container(
                             # signal-data-cache intentionally excluded: it's now a tiny
                             # sentinel, not the render-completion signal. chart.figure is
                             # already an auto-tracked descendant output of this wrapper.
-                            target_components={"chart": "figure"},
+                            # target_components={"chart": "figure"},
                             children=dcc.Graph(
                                 id="chart",
                                 config={"displayModeBar": True, "scrollZoom": True},

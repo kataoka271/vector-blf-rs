@@ -1,11 +1,13 @@
 """Plotly figure builders and shared theme constants."""
 
 import html as _html
-from typing import Literal
+from typing import Literal, cast
 
 import dash
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from pandas.core.groupby import DataFrameGroupBy
 
 from .config import _parse_key
 
@@ -98,11 +100,37 @@ def _empty_fig(msg="") -> go.Figure:
     return fig
 
 
-def _hover_customdata(y: pd.Series, y_str: "pd.Series | None" = None) -> "list[list[str]]":
-    """Return customdata for hover tooltip: category string when available, formatted float otherwise."""
+def _hover_customdata(y: pd.Series, y_str: "pd.Series | None" = None) -> "np.ndarray":
+    """Return customdata for hover tooltip: category string when available, formatted float otherwise.
+
+    Returns a 2-D fixed-width numpy string array (n, 1) rather than a nested
+    Python list. Plotly's property validator deep-copies and re-validates
+    every element of a nested list (or an object-dtype numpy array -- numpy's
+    own __deepcopy__ falls back to per-element copy.deepcopy for dtype=object)
+    one at a time, which is catastrophically slow at tens of thousands of
+    points; a native `<U*` array takes numpy's fast bulk-memory-copy path.
+    """
+    formatted = y.map(lambda v: f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")).to_numpy(dtype=object).astype(str)
     if y_str is not None:
-        return [[str(s) if pd.notna(s) else f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")] for v, s in zip(y, y_str)]
-    return [[f"{v:{_VAL_WIDTH}.4g}".replace(" ", "&nbsp;")] for v in y]
+        str_vals = y_str.to_numpy(dtype=object)
+        is_na = y_str.isna().to_numpy()
+        combined = np.where(is_na, formatted, str_vals.astype(str)).astype(str)
+        return combined.reshape(-1, 1)
+    return formatted.reshape(-1, 1)
+
+
+def _plot_x(x: pd.Series) -> "pd.Series | np.ndarray":
+    """Strip tz info for a tz-aware datetime x-series before handing it to Plotly.
+
+    `Series.to_numpy()` on a tz-aware datetime64 series produces a dtype=object
+    array of Timestamp objects (not a native datetime64 array); Plotly's
+    property validator then deep-copies it element by element -- the same
+    catastrophic cost as the nested-list customdata case above. A plain
+    datetime64[ns] array (tz dropped) avoids that path and renders identically.
+    """
+    if isinstance(x.dtype, pd.DatetimeTZDtype):
+        return x.to_numpy(dtype="datetime64[ns]")
+    return x
 
 
 def _overlay_fig(
@@ -121,7 +149,7 @@ def _overlay_fig(
         y_hover, y_hover_str = (original_traces[i][4], original_traces[i][5]) if original_traces else (y, y_str)
         fig.add_trace(
             go.Scattergl(
-                x=x,
+                x=_plot_x(x),
                 y=y_plot,
                 mode="lines+markers",
                 line=dict(shape="hv"),
@@ -215,7 +243,7 @@ def _stacked_fig(
         y_plot = y_str if y_str is not None else y
         fig.add_trace(
             go.Scattergl(
-                x=x,
+                x=_plot_x(x),
                 y=y_plot,
                 mode="lines+markers",
                 line=dict(shape="hv"),
@@ -283,6 +311,44 @@ def _stacked_fig(
         **axes_kw,
     )
     return fig
+
+
+def _group_by_key(df_all: pd.DataFrame) -> "DataFrameGroupBy | None":
+    """Group df_all by (signal_source, channel, signal_name) once.
+
+    Looking up each selected signal via boolean-masking df_all is O(n_signals
+    * n_rows); grouping once up front makes each lookup an O(1) get_group.
+    """
+    if df_all.empty:
+        return None
+    return df_all.groupby(["signal_source", "channel", "signal_name"], sort=False)
+
+
+def _lookup_key(groups: "DataFrameGroupBy | None", key: str) -> "pd.DataFrame | None":
+    if groups is None:
+        return None
+    src, channel, name = _parse_key(key)
+    try:
+        return cast(pd.DataFrame, groups.get_group((src, channel, name)))
+    except KeyError:
+        return None
+
+
+def _extract_traces(df_all: pd.DataFrame, selected, groups: "DataFrameGroupBy | None") -> _Traces:
+    traces: _Traces = []
+    for key in selected:
+        sub = _lookup_key(groups, key)
+        if sub is None or sub.empty:
+            continue
+        src, channel, name = _parse_key(key)
+        x = (
+            sub["event_time"]
+            if "event_time" in df_all.columns and sub["event_time"].notna().any()
+            else sub["timestamp_s"]
+        )
+        y_str = sub["signal_str"] if "signal_str" in df_all.columns and sub["signal_str"].notna().any() else None
+        traces.append((src, channel, name, x, sub["signal_value"], y_str))
+    return traces
 
 
 def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
@@ -382,12 +448,19 @@ def render_chart_and_grid(
     lon_key,
     anomalies_raw,
     time_store,
-) -> tuple[object, str, list, object, object, dict]:
+    chart_only: bool = False,
+) -> tuple[object, object, object, object, object, object]:
     """Build the chart figure, grid rows/columns, and map from an already-fetched DataFrame.
 
     Pure function of df_all -- no I/O, no dcc.Store (de)serialization. Callers
     own dash.ctx.triggered_id logic and any signal-data-cache/plot-btn.disabled
     writes. Returns (chart_fig, chart_msg, row_data, col_defs, map_fig, map_style).
+
+    chart_only=True skips rebuilding the grid pivot table and the GPS map --
+    both are unchanged when the only inputs that fired are chart display
+    options (height/xaxis-mode/overlay-mode) that don't affect them. This
+    avoids re-filtering df_all and re-serializing the (potentially large)
+    AgGrid rowData on every such tweak.
     """
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
@@ -396,23 +469,13 @@ def render_chart_and_grid(
     chart_msg = ""
     row_data: list = []
     col_defs: object = dash.no_update
+    map_fig = map_empty
+    map_style = map_hidden
+
+    groups = _group_by_key(df_all) if (selected or (lat_key and lon_key)) else None
 
     if selected:
-        traces = []
-        for key in selected:
-            src, channel, name = _parse_key(key)
-            sub = df_all[
-                (df_all["signal_source"] == src) & (df_all["channel"] == channel) & (df_all["signal_name"] == name)
-            ]
-            if sub.empty:
-                continue
-            x = (
-                sub["event_time"]
-                if "event_time" in df_all.columns and sub["event_time"].notna().any()
-                else sub["timestamp_s"]
-            )
-            y_str = sub["signal_str"] if "signal_str" in df_all.columns and sub["signal_str"].notna().any() else None
-            traces.append((src, channel, name, x, sub["signal_value"], y_str))
+        traces = _extract_traces(df_all, selected, groups)
 
         if traces:
             h = int(chart_height or 600)
@@ -434,38 +497,29 @@ def render_chart_and_grid(
                 if layout == "overlay"
                 else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines)
             )
-            row_data, col_defs = _pivot_table(traces)
-            total = sum(len(x) for _, _, _, x, _, _ in traces)
-            chart_msg = f"{total:,} pts across {len(traces)} signal(s).{truncation_note}"
+            if not chart_only:
+                row_data, col_defs = _pivot_table(traces)
+                total = sum(len(x) for _, _, _, x, _, _ in traces)
+                chart_msg = f"{total:,} pts across {len(traces)} signal(s).{truncation_note}"
         else:
             chart_msg = "No data for selected signals."
             chart_fig = _empty_fig(chart_msg)
             row_data = []
 
-    map_fig = map_empty
-    map_style = map_hidden
-    if lat_key and lon_key and "timestamp_ns" in df_all.columns:
-        lat_src, lat_channel, lat_name = _parse_key(lat_key)
-        lon_src, lon_channel, lon_name = _parse_key(lon_key)
-        lat_df = (
-            df_all[
-                (df_all["signal_source"] == lat_src)
-                & (df_all["channel"] == lat_channel)
-                & (df_all["signal_name"] == lat_name)
-            ][["timestamp_ns", "signal_value"]]
-            .rename(columns={"signal_value": "lat"})
-            .sort_values("timestamp_ns")
-        )
-        lon_df = (
-            df_all[
-                (df_all["signal_source"] == lon_src)
-                & (df_all["channel"] == lon_channel)
-                & (df_all["signal_name"] == lon_name)
-            ][["timestamp_ns", "signal_value"]]
-            .rename(columns={"signal_value": "lon"})
-            .sort_values("timestamp_ns")
-        )
-        if not lat_df.empty and not lon_df.empty:
+    if not chart_only and lat_key and lon_key and "timestamp_ns" in df_all.columns:
+        lat_sub = _lookup_key(groups, lat_key)
+        lon_sub = _lookup_key(groups, lon_key)
+        if lat_sub is not None and lon_sub is not None:
+            lat_df = (
+                lat_sub[["timestamp_ns", "signal_value"]]
+                .rename(columns={"signal_value": "lat"})
+                .sort_values("timestamp_ns")
+            )
+            lon_df = (
+                lon_sub[["timestamp_ns", "signal_value"]]
+                .rename(columns={"signal_value": "lon"})
+                .sort_values("timestamp_ns")
+            )
             merged = pd.merge_asof(lat_df, lon_df, on="timestamp_ns", direction="nearest").dropna(subset=["lat", "lon"])
             if not merged.empty:
                 map_fig = _map_fig(merged["lat"], merged["lon"])
@@ -473,4 +527,6 @@ def render_chart_and_grid(
                 pts = len(merged)
                 chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
 
+    if chart_only:
+        return chart_fig, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
     return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style

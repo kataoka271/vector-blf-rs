@@ -565,8 +565,22 @@ def redraw_chart(
         # avoid implying anything specific "expired".
         msg = "No data yet -- click Plot." if selected else dash.no_update
         return dash.no_update, msg, [], dash.no_update, go.Figure(), {"display": "none"}
+    # Grid rowData/columnDefs and the GPS map don't depend on chart-display-only
+    # options, so skip rebuilding them (the expensive part on a large cached
+    # DataFrame) when one of those is the sole trigger.
+    chart_only = dash.ctx.triggered_id in ("chart-height", "xaxis-mode", "overlay-mode")
     return render_chart_and_grid(
-        df_all, selected, layout, chart_height, xaxis_mode, overlay_mode, lat_key, lon_key, anomalies_raw, time_store
+        df_all,
+        selected,
+        layout,
+        chart_height,
+        xaxis_mode,
+        overlay_mode,
+        lat_key,
+        lon_key,
+        anomalies_raw,
+        time_store,
+        chart_only=chart_only,
     )
 
 

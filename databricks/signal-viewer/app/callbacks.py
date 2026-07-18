@@ -193,10 +193,10 @@ app.clientside_callback(
     """
     function(sources, cache, search, channels, searchCache, currentValue) {
         var no_update = window.dash_clientside.no_update;
-        var NORMAL_STYLE = {fontSize: "12px", color: "#ccc", minHeight: "16px"};
-        var WARN_STYLE = {fontSize: "12px", color: "#ff4444", minHeight: "16px", fontWeight: "600"};
-        var EMPTY_HIDDEN = {display: "none", fontSize: "11px", color: "#ff4444", padding: "2px 0"};
-        var EMPTY_SHOWN = {display: "block", fontSize: "11px", color: "#ff4444", padding: "2px 0"};
+        var NORMAL_STYLE = {fontSize: "12px", color: "#dee2e6", minHeight: "16px"};
+        var WARN_STYLE = {fontSize: "12px", color: "#e74c3c", minHeight: "16px", fontWeight: "600"};
+        var EMPTY_HIDDEN = {display: "none", fontSize: "11px", color: "#e74c3c", padding: "2px 0"};
+        var EMPTY_SHOWN = {display: "block", fontSize: "11px", color: "#e74c3c", padding: "2px 0"};
 
         if (cache === null || cache === undefined) {
             return [no_update, no_update, "Loading signals...", NORMAL_STYLE, no_update, no_update, "", EMPTY_HIDDEN];
@@ -350,55 +350,29 @@ def render_signal_tags(selected, anomalous_signals):
         label = f"{display_src}{channel}::{name}"
         is_anomalous = key in anomalous_set
         tags.append(
-            html.Span(
+            dbc.Badge(
                 [
                     label,
                     html.Button(
-                        "×",
+                        type="button",
                         id={"type": "remove-signal-btn", "index": key},
                         n_clicks=0,
-                        className="signal-tag-close",
-                        style={
-                            "background": "none",
-                            "border": "none",
-                            "color": "#ff8888" if is_anomalous else "#888",
-                            "cursor": "pointer",
-                            "fontSize": "14px",
-                            "lineHeight": "1",
-                            "padding": "0 2px",
-                            "marginLeft": "2px",
-                        },
+                        className="btn-close btn-close-white ms-1",
+                        style={"fontSize": "0.5rem"},
                     ),
                 ],
-                style={
-                    "display": "inline-flex",
-                    "alignItems": "center",
-                    "gap": "2px",
-                    "backgroundColor": _PANEL,
-                    "border": "1px solid #ff4444" if is_anomalous else f"1px solid {_BORDER}",
-                    "borderRadius": "12px",
-                    "padding": "2px 8px 2px 10px",
-                    "fontSize": "11px",
-                    "color": "#ff8888" if is_anomalous else _TEXT,
-                    "whiteSpace": "nowrap",
-                },
+                color="danger" if is_anomalous else "secondary",
+                pill=True,
+                className="d-inline-flex align-items-center gap-1 fw-normal",
             )
         )
     if len(selected) > _MAX_VISIBLE_TAGS:
         tags.append(
-            html.Span(
+            dbc.Badge(
                 f"+{len(selected) - _MAX_VISIBLE_TAGS}",
-                style={
-                    "display": "inline-flex",
-                    "alignItems": "center",
-                    "backgroundColor": _PANEL,
-                    "border": f"1px solid {_BORDER}",
-                    "borderRadius": "12px",
-                    "padding": "2px 10px",
-                    "fontSize": "11px",
-                    "color": "#888",
-                    "whiteSpace": "nowrap",
-                },
+                color="secondary",
+                pill=True,
+                className="fw-normal",
             )
         )
     return tags
@@ -1073,42 +1047,23 @@ app.clientside_callback(
 app.clientside_callback(
     """
     function(insight) {
-        if (!insight) {
-            return {display: "none"};
-        }
-        return {
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "8px",
-            padding: "8px 16px",
-            backgroundColor: "#1c3a4a",
-            color: "#7ecfec",
-            fontSize: "12px",
-            borderBottom: "1px solid #2a5060",
-        };
+        return [!!insight, insight ? "Genie: " + insight : ""];
     }
     """,
-    Output("genie-insight-banner", "style"),
-    Input("genie-insight-store", "data"),
-)
-
-
-app.clientside_callback(
-    """
-    function(insight) {
-        if (!insight) return "";
-        return "Genie: " + insight;
-    }
-    """,
+    Output("genie-insight-banner", "is_open"),
     Output("genie-insight-text", "children"),
     Input("genie-insight-store", "data"),
 )
 
 
 app.clientside_callback(
-    "function(n) { return null; }",
+    """
+    function(is_open) {
+        return is_open ? window.dash_clientside.no_update : null;
+    }
+    """,
     Output("genie-insight-store", "data", allow_duplicate=True),
-    Input("genie-insight-close-btn", "n_clicks"),
+    Input("genie-insight-banner", "is_open"),
     prevent_initial_call=True,
 )
 
@@ -1172,7 +1127,7 @@ def render_genie_history(history):
                     a,
                     style={"fontSize": "11px", "color": _TEXT, "whiteSpace": "pre-wrap", "wordBreak": "break-word"},
                 ),
-                title=html.Span(q_short, style={"fontSize": "11px", "color": "#aaa"}),
+                title=html.Span(q_short, style={"fontSize": "11px"}),
                 item_id=f"h{len(history) - 1 - i}",
             )
         )

@@ -71,16 +71,19 @@ def _genie_panel() -> dbc.Offcanvas:
                         [
                             html.Span(
                                 "History",
-                                style={"fontSize": "12px", "color": "#888", "flex": "1"},
+                                className="text-muted",
+                                style={"fontSize": "12px", "flex": "1"},
                             ),
                             html.Span(
                                 id="genie-history-count",
-                                style={"fontSize": "11px", "color": "#666"},
+                                className="text-muted",
+                                style={"fontSize": "11px"},
                             ),
                             html.Span(
                                 id="genie-history-arrow",
                                 children="▼",
-                                style={"fontSize": "10px", "color": "#666"},
+                                className="text-muted",
+                                style={"fontSize": "10px"},
                             ),
                         ],
                         id="genie-history-header",
@@ -122,13 +125,7 @@ def _genie_panel() -> dbc.Offcanvas:
             dbc.Textarea(
                 id="genie-input",
                 placeholder="Ask about signals or anomalies...",
-                style={
-                    "fontSize": "12px",
-                    "backgroundColor": _BG,
-                    "color": _TEXT,
-                    "border": f"1px solid {_BORDER}",
-                    "resize": "none",
-                },
+                style={"fontSize": "12px", "resize": "none"},
                 rows=3,
             ),
             dbc.Button("Ask", id="genie-ask-btn", color="info", size="sm", className="w-100"),
@@ -219,7 +216,8 @@ app.layout = dbc.Container(
                                         ),
                                         html.Div(
                                             f"{CATALOG}.{SCHEMA}.blf_gold_signals",
-                                            style={"fontSize": "11px", "color": "#888"},
+                                            className="text-muted",
+                                            style={"fontSize": "11px"},
                                         ),
                                         html.Hr(style={"borderColor": _BORDER, "margin": "0"}),
                                         _section(
@@ -424,25 +422,13 @@ app.layout = dbc.Container(
                                                             size="sm",
                                                             className="fw-semibold text-secondary mb-0",
                                                         ),
-                                                        html.Span(
+                                                        dbc.Badge(
                                                             "?",
                                                             id="buckets-help-icon",
-                                                            style={
-                                                                "cursor": "pointer",
-                                                                "fontSize": "10px",
-                                                                "color": "#888",
-                                                                "border": "1px solid #888",
-                                                                "borderRadius": "50%",
-                                                                "width": "14px",
-                                                                "height": "14px",
-                                                                "display": "inline-flex",
-                                                                "alignItems": "center",
-                                                                "justifyContent": "center",
-                                                                "marginLeft": "5px",
-                                                                "verticalAlign": "middle",
-                                                                "lineHeight": "1",
-                                                                "flexShrink": "0",
-                                                            },
+                                                            color="secondary",
+                                                            pill=True,
+                                                            className="ms-1",
+                                                            style={"cursor": "pointer", "fontSize": "10px"},
                                                         ),
                                                         dbc.Tooltip(
                                                             "Downsampling resolution. Data points are divided into N buckets; "
@@ -483,9 +469,9 @@ app.layout = dbc.Container(
                                             ),
                                             html.Div(
                                                 id="time-range-label",
+                                                className="text-muted",
                                                 style={
                                                     "fontSize": "11px",
-                                                    "color": "#888",
                                                     "textAlign": "center",
                                                     "marginTop": "4px",
                                                 },
@@ -565,13 +551,13 @@ app.layout = dbc.Container(
                                         ),
                                         html.Div(
                                             id="avail-msg",
-                                            style={"fontSize": "12px", "color": "#ccc", "minHeight": "16px"},
+                                            style={"fontSize": "12px", "color": _TEXT, "minHeight": "16px"},
                                         ),
                                         html.Div(
                                             id="plot-msg",
                                             style={
                                                 "fontSize": "12px",
-                                                "color": "#ccc",
+                                                "color": _TEXT,
                                                 "wordBreak": "break-word",
                                                 "minHeight": "16px",
                                             },
@@ -608,31 +594,16 @@ app.layout = dbc.Container(
                     className="d-flex flex-column",
                     style={"height": "100vh", "overflowY": "auto"},
                     children=[
-                        html.Div(
+                        dbc.Alert(
+                            html.Span(
+                                id="genie-insight-text",
+                                style={"whiteSpace": "pre-wrap", "wordBreak": "break-word"},
+                            ),
                             id="genie-insight-banner",
-                            style={"display": "none"},
-                            children=[
-                                html.Span(
-                                    id="genie-insight-text",
-                                    style={"flex": "1", "whiteSpace": "pre-wrap", "wordBreak": "break-word"},
-                                ),
-                                html.Button(
-                                    "×",
-                                    id="genie-insight-close-btn",
-                                    n_clicks=0,
-                                    style={
-                                        "background": "none",
-                                        "border": "none",
-                                        "color": "#7ecfec",
-                                        "cursor": "pointer",
-                                        "fontSize": "16px",
-                                        "lineHeight": "1",
-                                        "padding": "0 4px",
-                                        "flexShrink": "0",
-                                        "alignSelf": "flex-start",
-                                    },
-                                ),
-                            ],
+                            is_open=False,
+                            dismissable=True,
+                            color="info",
+                            className="mb-0 rounded-0 py-2",
                         ),
                         html.Div(
                             id="signal-tags",
@@ -698,7 +669,8 @@ app.layout = dbc.Container(
                                             ),
                                             html.Span(
                                                 "Adjust if video and log clocks are out of sync.",
-                                                style={"fontSize": "11px", "color": "#888", "marginLeft": "8px"},
+                                                className="text-muted",
+                                                style={"fontSize": "11px", "marginLeft": "8px"},
                                             ),
                                         ],
                                         className="d-flex align-items-center gap-2 mt-2",

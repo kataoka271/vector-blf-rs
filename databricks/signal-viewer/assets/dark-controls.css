@@ -1,0 +1,117 @@
+/* dash-core-components ships dcc.Dropdown (react-select) and dcc.Slider
+ * (rc-slider) with their own light-theme defaults -- dash-bootstrap-components
+ * does not theme them. Re-skin them here with the same Darkly CSS variables
+ * used by the native Bootstrap controls, so the whole sidebar reads as one
+ * dark UI instead of light widgets floating in a dark panel. */
+
+.form-control,
+.form-control:focus {
+  background-color: var(--bs-body-bg);
+  color: var(--bs-body-color);
+  border-color: var(--bs-border-color);
+}
+
+.form-control::placeholder {
+  color: var(--bs-secondary-color);
+}
+
+/* dcc.Dropdown (react-select) */
+.Select-control {
+  background-color: var(--bs-body-bg) !important;
+  border-color: var(--bs-border-color) !important;
+}
+
+.is-focused:not(.is-open) > .Select-control {
+  border-color: var(--bs-info) !important;
+}
+
+.Select-placeholder,
+.Select-input > input {
+  color: var(--bs-secondary-color) !important;
+}
+
+.Select-value-label,
+.Select--single > .Select-control .Select-value {
+  color: var(--bs-body-color) !important;
+}
+
+.Select-menu-outer {
+  background-color: var(--bs-body-bg);
+  border-color: var(--bs-border-color);
+  color: var(--bs-body-color);
+}
+
+.Select-option {
+  background-color: var(--bs-body-bg);
+  color: var(--bs-body-color);
+}
+
+.Select-option.is-focused {
+  background-color: var(--bs-tertiary-bg);
+}
+
+.Select-option.is-selected {
+  background-color: var(--bs-info-bg-subtle);
+  color: var(--bs-info-text-emphasis);
+}
+
+.Select-noresults {
+  color: var(--bs-secondary-color);
+}
+
+.Select--multi .Select-value {
+  background-color: var(--bs-info-bg-subtle);
+  border-color: var(--bs-info-border-subtle);
+  color: var(--bs-info-text-emphasis);
+}
+
+.Select-arrow,
+.Select-clear {
+  color: var(--bs-secondary-color);
+}
+
+/* dcc.Slider / dcc.RangeSlider (rc-slider) */
+.rc-slider-rail {
+  background-color: var(--bs-border-color);
+}
+
+.rc-slider-track {
+  background-color: var(--bs-info);
+}
+
+.rc-slider-dot {
+  background-color: var(--bs-body-bg);
+  border-color: var(--bs-border-color);
+}
+
+.rc-slider-dot-active {
+  border-color: var(--bs-info);
+}
+
+.rc-slider-handle {
+  background-color: var(--bs-info);
+  border-color: var(--bs-info);
+  opacity: 1;
+}
+
+.rc-slider-handle:hover,
+.rc-slider-handle:active,
+.rc-slider-handle-dragging.rc-slider-handle-dragging.rc-slider-handle-dragging {
+  border-color: var(--bs-info) !important;
+  box-shadow: 0 0 0 4px var(--bs-info-bg-subtle) !important;
+}
+
+.rc-slider-mark-text,
+.rc-slider-mark-text-active {
+  color: var(--bs-secondary-color);
+}
+
+.rc-slider-tooltip-inner {
+  background-color: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+  box-shadow: none;
+}
+
+.rc-slider-tooltip-arrow {
+  border-top-color: var(--bs-tertiary-bg);
+}

@@ -15,12 +15,15 @@ from .config import _parse_key
 # Theme
 # ---------------------------------------------------------------------------
 
-_BG = "#13111a"
-_PANEL = "#1c1a27"
-_BORDER = "#2a2838"
-_ACCENT = "#7ecfec"
-_TEXT = "#ccc"
-_WARN = "#ff4444"
+# Sourced from bootswatch Darkly (dbc.themes.DARKLY), so Plotly figures and
+# custom CSS match the surrounding Bootstrap chrome instead of drifting.
+_BG = "#222222"  # --bs-body-bg
+_PANEL = "#303030"  # --bs-secondary-bg (dark)
+_BORDER = "#444444"  # --bs-border-color-translucent / dropdown border
+_ACCENT = "#3498db"  # --bs-info
+_TEXT = "#dee2e6"  # --bs-body-color (dark)
+_WARN = "#e74c3c"  # --bs-danger
+_MUTED = "#888888"  # --bs-gray
 
 _AXIS_BOX = {"showline": True, "mirror": True, "linecolor": _BORDER, "linewidth": 1}
 
@@ -80,7 +83,7 @@ def _empty_fig(msg="") -> go.Figure:
                 "x": 0.5,
                 "y": 0.5,
                 "showarrow": False,
-                "font": {"size": 16, "color": "#444"},
+                "font": {"size": 16, "color": _BORDER},
             }
         ]
         if msg
@@ -163,11 +166,11 @@ def _overlay_fig(
         for anom in anomalies:
             fig.add_vline(
                 x=anom["x"],
-                line_color="#ff4444",
+                line_color=_WARN,
                 line_dash="dash",
                 line_width=1.5,
                 annotation_text=anom["label"],
-                annotation_font_color="#ff4444",
+                annotation_font_color=_WARN,
                 annotation_font_size=10,
                 annotation_position="top right",
             )
@@ -187,7 +190,7 @@ def _overlay_fig(
         spikemode="across",
         spikesnap="cursor",
         spikedash="dot",
-        spikecolor="#888",
+        spikecolor=_MUTED,
         spikethickness=1,
     )
     fig.update_yaxes(**_AXIS_BOX)
@@ -230,7 +233,7 @@ def _stacked_fig(
                 "spikemode": "across",
                 "spikesnap": "cursor",
                 "spikedash": "dot",
-                "spikecolor": "#888",
+                "spikecolor": _MUTED,
                 "spikethickness": 1,
                 **({"matches": "x"} if xaxis_mode == "synced" and i > 0 else {}),
                 **({"title": "Time"} if i == n - 1 else {}),
@@ -282,7 +285,7 @@ def _stacked_fig(
             "spikemode": "across",
             "spikesnap": "cursor",
             "spikedash": "dot",
-            "spikecolor": "#888",
+            "spikecolor": _MUTED,
             "spikethickness": 1,
         }
 
@@ -290,11 +293,11 @@ def _stacked_fig(
         for anom in anomalies:
             fig.add_vline(
                 x=anom["x"],
-                line_color="#ff4444",
+                line_color=_WARN,
                 line_dash="dash",
                 line_width=1.5,
                 annotation_text=anom["label"],
-                annotation_font_color="#ff4444",
+                annotation_font_color=_WARN,
                 annotation_font_size=10,
                 annotation_position="top right",
             )

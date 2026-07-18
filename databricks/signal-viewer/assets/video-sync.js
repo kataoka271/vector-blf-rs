@@ -12,7 +12,7 @@ window._videoSync = {
                 type: 'line',
                 xref: 'x', yref: 'paper',
                 x0: xValue, x1: xValue, y0: 0, y1: 1,
-                line: { color: '#7ecfec', width: 2 },
+                line: { color: '#3498db', width: 2 },
             });
         }
         Plotly.relayout(gd, { shapes: shapes });

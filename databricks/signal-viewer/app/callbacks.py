@@ -31,6 +31,7 @@ from .figures import (
     _SIDEBAR_STYLE,
     _TEXT,
     _XaxisMode,
+    _empty_fig,
     render_chart_and_grid,
 )
 from .genie import (
@@ -51,6 +52,70 @@ def _fmt_s(seconds: float) -> str:
     ms = total_ms % 1000
     s = total_ms // 1000
     return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}.{ms:03d}"
+
+
+# ---------------------------------------------------------------------------
+# Color mode (dark/light)
+# ---------------------------------------------------------------------------
+
+# Darkly and Flatly are both loaded (see _dash.py); this swaps which <link>
+# is disabled and keeps data-bs-theme in sync, so Bootstrap's own
+# subtle/emphasis tokens (dbc.Alert, dbc.Badge, accordion) pick the matching
+# variant. Plotly figures aren't CSS-driven, so they're re-rendered
+# server-side once real data exists (see fetch_and_render / redraw_chart's
+# `dark` State/Input) -- but the placeholder chart shown before any Plot
+# click is a static figure baked in at layout-definition time (server-side
+# Python can't know a browser-persisted dbc.Switch value before the page
+# even loads), so redraw_chart can't re-theme it at initial page load
+# (Output("plot-msg", ..., allow_duplicate=True) forces
+# prevent_initial_call=True on that whole callback, which Dash then also
+# blocks from firing on load). This callback runs at load, so it patches
+# the still-empty placeholder directly via Plotly.relayout (same technique
+# as video-sync.js's cursor line) instead of going through a Dash Output.
+app.clientside_callback(
+    """
+    function(dark) {
+        document.querySelectorAll('link[rel="stylesheet"][href*="darkly"]').forEach(function(l) {
+            l.disabled = !dark;
+        });
+        var flatly = document.getElementById("theme-flatly");
+        if (flatly) { flatly.disabled = !!dark; }
+        document.documentElement.setAttribute("data-bs-theme", dark ? "dark" : "light");
+
+        // On initial page load this callback can fire before dcc.Graph has
+        // finished mounting the Plotly chart (gd.data is undefined until
+        // Plotly.newPlot runs), so retry briefly instead of silently
+        // no-op'ing on that race.
+        var attemptsLeft = 20;
+        function themePlaceholderChart() {
+            // dcc.Graph(id="chart") is an outer wrapper div -- the element
+            // Plotly.js actually instruments (.data/.layout, target of
+            // Plotly.relayout) is the nested ".js-plotly-plot" div.
+            var gd = document.querySelector("#chart .js-plotly-plot");
+            if (!gd || !gd.data) {
+                if (attemptsLeft-- > 0) { setTimeout(themePlaceholderChart, 100); }
+                return;
+            }
+            if (gd.data.length === 0 && window.Plotly) {
+                var bg = dark ? "#222222" : "#ffffff";
+                var line = dark ? "#444444" : "#dee2e6";
+                Plotly.relayout(gd, {
+                    template: dark ? "plotly_dark" : "plotly_white",
+                    paper_bgcolor: bg,
+                    plot_bgcolor: bg,
+                    "xaxis.linecolor": line,
+                    "yaxis.linecolor": line,
+                    "annotations[0].font.color": line,
+                });
+            }
+        }
+        themePlaceholderChart();
+        return "";
+    }
+    """,
+    Output("color-mode-sink", "children"),
+    Input("color-mode-switch", "value"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +258,10 @@ app.clientside_callback(
     """
     function(sources, cache, search, channels, searchCache, currentValue) {
         var no_update = window.dash_clientside.no_update;
-        var NORMAL_STYLE = {fontSize: "12px", color: "#dee2e6", minHeight: "16px"};
-        var WARN_STYLE = {fontSize: "12px", color: "#e74c3c", minHeight: "16px", fontWeight: "600"};
-        var EMPTY_HIDDEN = {display: "none", fontSize: "11px", color: "#e74c3c", padding: "2px 0"};
-        var EMPTY_SHOWN = {display: "block", fontSize: "11px", color: "#e74c3c", padding: "2px 0"};
+        var NORMAL_STYLE = {fontSize: "12px", color: "var(--bs-body-color)", minHeight: "16px"};
+        var WARN_STYLE = {fontSize: "12px", color: "var(--bs-danger)", minHeight: "16px", fontWeight: "600"};
+        var EMPTY_HIDDEN = {display: "none", fontSize: "11px", color: "var(--bs-danger)", padding: "2px 0"};
+        var EMPTY_SHOWN = {display: "block", fontSize: "11px", color: "var(--bs-danger)", padding: "2px 0"};
 
         if (cache === null || cache === undefined) {
             return [no_update, no_update, "Loading signals...", NORMAL_STYLE, no_update, no_update, "", EMPTY_HIDDEN];
@@ -425,6 +490,7 @@ def remove_signal(n_clicks_list, selected):
     State("overlay-mode", "value"),
     State("genie-anomaly-markers-store", "data"),
     State("session-id-store", "data"),
+    State("color-mode-switch", "value"),
     prevent_initial_call=True,
     running=[
         (
@@ -450,6 +516,7 @@ def fetch_and_render(
     overlay_mode,
     anomalies_raw,
     session_id,
+    dark,
 ):
     # Self-heal: prefetch_signals should have already set this at page load; fall back
     # if a click somehow raced ahead of it, so later redraws still have a valid key.
@@ -483,7 +550,17 @@ def fetch_and_render(
     time_store = new_time_range if isinstance(new_time_range, dict) else time_range_store
 
     chart_fig, chart_msg, row_data, col_defs, map_fig, map_style = render_chart_and_grid(
-        df, selected, layout, chart_height, xaxis_mode, overlay_mode, lat_key, lon_key, anomalies_raw, time_store
+        df,
+        selected,
+        layout,
+        chart_height,
+        xaxis_mode,
+        overlay_mode,
+        lat_key,
+        lon_key,
+        anomalies_raw,
+        time_store,
+        dark=dark,
     )
 
     return (
@@ -512,6 +589,7 @@ def fetch_and_render(
     Input("chart-height", "value"),
     Input("xaxis-mode", "value"),
     Input("overlay-mode", "value"),
+    Input("color-mode-switch", "value"),
     State("lat-signal", "value"),
     State("lon-signal", "value"),
     State("genie-anomaly-markers-store", "data"),
@@ -525,6 +603,7 @@ def redraw_chart(
     chart_height,
     xaxis_mode: _XaxisMode,
     overlay_mode,
+    dark,
     lat_key,
     lon_key,
     anomalies_raw,
@@ -538,11 +617,19 @@ def redraw_chart(
         # cache entry is gone" (restart/eviction) -- these are indistinguishable, so
         # avoid implying anything specific "expired".
         msg = "No data yet -- click Plot." if selected else dash.no_update
-        return dash.no_update, msg, [], dash.no_update, go.Figure(), {"display": "none"}
+        # Re-theme the placeholder chart on a color-mode flip even though there's
+        # nothing plotted yet -- it's otherwise stuck with whatever dark/light it
+        # was rendered with at layout-definition time.
+        chart = (
+            _empty_fig("Select signals and click Plot", dark=dark)
+            if dash.ctx.triggered_id == "color-mode-switch"
+            else dash.no_update
+        )
+        return chart, msg, [], dash.no_update, go.Figure(), {"display": "none"}
     # Grid rowData/columnDefs and the GPS map don't depend on chart-display-only
     # options, so skip rebuilding them (the expensive part on a large cached
     # DataFrame) when one of those is the sole trigger.
-    chart_only = dash.ctx.triggered_id in ("chart-height", "xaxis-mode", "overlay-mode")
+    chart_only = dash.ctx.triggered_id in ("chart-height", "xaxis-mode", "overlay-mode", "color-mode-switch")
     return render_chart_and_grid(
         df_all,
         selected,
@@ -555,6 +642,7 @@ def redraw_chart(
         anomalies_raw,
         time_store,
         chart_only=chart_only,
+        dark=dark,
     )
 
 

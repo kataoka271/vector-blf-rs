@@ -15,17 +15,52 @@ from .config import _parse_key
 # Theme
 # ---------------------------------------------------------------------------
 
-# Sourced from bootswatch Darkly (dbc.themes.DARKLY), so Plotly figures and
-# custom CSS match the surrounding Bootstrap chrome instead of drifting.
-_BG = "#222222"  # --bs-body-bg
-_PANEL = "#303030"  # --bs-secondary-bg (dark)
-_BORDER = "#444444"  # --bs-border-color-translucent / dropdown border
-_ACCENT = "#3498db"  # --bs-info
-_TEXT = "#dee2e6"  # --bs-body-color (dark)
-_WARN = "#e74c3c"  # --bs-danger
-_MUTED = "#888888"  # --bs-gray
+# DOM-facing styling (layout.py, AgGrid): reference the active Bootstrap
+# color-mode's CSS variables directly so the sidebar/panel chrome tracks the
+# dark/light toggle (see color-mode-switch) without any Python-side
+# branching -- swapping the <link> stylesheet in _dash.py's clientside
+# callback is enough.
+_BG = "var(--bs-body-bg)"
+_PANEL = "var(--bs-secondary-bg)"
+_BORDER = "var(--bs-border-color)"
+_ACCENT = "var(--bs-info)"
+_TEXT = "var(--bs-body-color)"
+_WARN = "var(--bs-danger)"
 
-_AXIS_BOX = {"showline": True, "mirror": True, "linecolor": _BORDER, "linewidth": 1}
+# Plotly bakes real color values into the figure JSON -- it can't read CSS
+# variables -- so figures mirror the dbc.themes.DARKLY / FLATLY computed
+# palette directly instead. The two are bootswatch's "flatly family"
+# (Darkly is documented upstream as "Flatly in night mode"), so info/danger
+# are identical between them and don't need a light variant.
+_PLOTLY_ACCENT = "#3498db"  # --bs-info (both themes)
+_PLOTLY_WARN = "#e74c3c"  # --bs-danger (both themes)
+_PLOTLY_DARK = {
+    "bg": "#222222",  # --bs-body-bg
+    "panel": "#303030",  # --bs-secondary-bg
+    "border": "#444444",  # --bs-border-color
+    "text": "#dee2e6",  # --bs-body-color
+    "muted": "#888888",  # --bs-gray
+}
+_PLOTLY_LIGHT = {
+    "bg": "#ffffff",  # --bs-body-bg
+    "panel": "#ecf0f1",  # --bs-secondary-bg
+    "border": "#dee2e6",  # --bs-border-color
+    "text": "#212529",  # --bs-body-color
+    "muted": "#95a5a6",  # --bs-gray
+}
+
+
+def _plotly_palette(dark: bool) -> dict:
+    p = dict(_PLOTLY_DARK if dark else _PLOTLY_LIGHT)
+    p["accent"] = _PLOTLY_ACCENT
+    p["warn"] = _PLOTLY_WARN
+    p["template"] = "plotly_dark" if dark else "plotly_white"
+    return p
+
+
+def _axis_box(palette: dict) -> dict:
+    return {"showline": True, "mirror": True, "linecolor": palette["border"], "linewidth": 1}
+
 
 _SIDEBAR_STYLE: dict = {
     "width": "270px",
@@ -73,7 +108,8 @@ def _scale_traces(traces: _Traces) -> _Traces:
 # ---------------------------------------------------------------------------
 
 
-def _empty_fig(msg="") -> go.Figure:
+def _empty_fig(msg="", dark: bool = True) -> go.Figure:
+    palette = _plotly_palette(dark)
     ann = (
         [
             {
@@ -83,7 +119,7 @@ def _empty_fig(msg="") -> go.Figure:
                 "x": 0.5,
                 "y": 0.5,
                 "showarrow": False,
-                "font": {"size": 16, "color": _BORDER},
+                "font": {"size": 16, "color": palette["border"]},
             }
         ]
         if msg
@@ -91,15 +127,16 @@ def _empty_fig(msg="") -> go.Figure:
     )
     fig = go.Figure(
         layout=go.Layout(
-            template="plotly_dark",
-            paper_bgcolor=_BG,
-            plot_bgcolor=_BG,
+            template=palette["template"],
+            paper_bgcolor=palette["bg"],
+            plot_bgcolor=palette["bg"],
             height=600,
             annotations=ann,
         )
     )
-    fig.update_xaxes(**_AXIS_BOX)
-    fig.update_yaxes(**_AXIS_BOX)
+    axis_box = _axis_box(palette)
+    fig.update_xaxes(**axis_box)
+    fig.update_yaxes(**axis_box)
     return fig
 
 
@@ -142,7 +179,10 @@ def _overlay_fig(
     min_height: int = 400,
     anomalies: "_Anomalies | None" = None,
     original_traces: "_Traces | None" = None,
+    dark: bool = True,
 ) -> go.Figure:
+    palette = _plotly_palette(dark)
+    axis_box = _axis_box(palette)
     fig = go.Figure()
     max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
     for i, (src, channel, name, x, y, y_str) in enumerate(traces):
@@ -166,18 +206,18 @@ def _overlay_fig(
         for anom in anomalies:
             fig.add_vline(
                 x=anom["x"],
-                line_color=_WARN,
+                line_color=palette["warn"],
                 line_dash="dash",
                 line_width=1.5,
                 annotation_text=anom["label"],
-                annotation_font_color=_WARN,
+                annotation_font_color=palette["warn"],
                 annotation_font_size=10,
                 annotation_position="top right",
             )
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor=_BG,
-        plot_bgcolor=_BG,
+        template=palette["template"],
+        paper_bgcolor=palette["bg"],
+        plot_bgcolor=palette["bg"],
         height=max(height, min_height),
         hovermode="x unified",
         xaxis_title="Time",
@@ -185,15 +225,15 @@ def _overlay_fig(
         margin={"l": 60, "r": 20, "t": 50, "b": 60},
     )
     fig.update_xaxes(
-        **_AXIS_BOX,
+        **axis_box,
         showspikes=True,
         spikemode="across",
         spikesnap="cursor",
         spikedash="dot",
-        spikecolor=_MUTED,
+        spikecolor=palette["muted"],
         spikethickness=1,
     )
-    fig.update_yaxes(**_AXIS_BOX)
+    fig.update_yaxes(**axis_box)
     return fig
 
 
@@ -207,7 +247,10 @@ def _stacked_fig(
     xaxis_mode: _XaxisMode = "shared",
     min_height: int = 100,
     anomalies: "_Anomalies | None" = None,
+    dark: bool = True,
 ) -> go.Figure:
+    palette = _plotly_palette(dark)
+    axis_box = _axis_box(palette)
     n = len(traces)
     spacing = max(0.03, 0.20 / n) if xaxis_mode in ("synced", "free") else max(0.02, 0.20 / n)
     h = (1.0 - spacing * max(n - 1, 0)) / n
@@ -227,13 +270,13 @@ def _stacked_fig(
             xref = "x" if i == 0 else f"x{i + 1}"
             xkey = "xaxis" if i == 0 else f"xaxis{i + 1}"
             axes_kw[xkey] = {
-                **_AXIS_BOX,
+                **axis_box,
                 "anchor": yref,
                 "showspikes": True,
                 "spikemode": "across",
                 "spikesnap": "cursor",
                 "spikedash": "dot",
-                "spikecolor": _MUTED,
+                "spikecolor": palette["muted"],
                 "spikethickness": 1,
                 **({"matches": "x"} if xaxis_mode == "synced" and i > 0 else {}),
                 **({"title": "Time"} if i == n - 1 else {}),
@@ -258,7 +301,7 @@ def _stacked_fig(
                 hovertemplate=f"{_html.escape(label)}{pad} : %{{customdata[0]}}<extra></extra>",
             )
         )
-        axes_kw[ykey] = {"domain": [bottom, top], **_AXIS_BOX}
+        axes_kw[ykey] = {"domain": [bottom, top], **axis_box}
         annotations.append(
             {
                 "text": _html.escape(f"{src}{channel}::{name}"),
@@ -269,8 +312,8 @@ def _stacked_fig(
                 "xanchor": "left",
                 "yanchor": "bottom",
                 "showarrow": False,
-                "font": {"size": 14, "color": _TEXT},
-                "bgcolor": _PANEL,
+                "font": {"size": 14, "color": palette["text"]},
+                "bgcolor": palette["panel"],
                 "borderpad": 4,
             }
         )
@@ -278,14 +321,14 @@ def _stacked_fig(
     if xaxis_mode == "shared":
         last_y_ref = "y" if n == 1 else f"y{n}"
         axes_kw["xaxis"] = {
-            **_AXIS_BOX,
+            **axis_box,
             "anchor": last_y_ref,
             "title": "Time",
             "showspikes": True,
             "spikemode": "across",
             "spikesnap": "cursor",
             "spikedash": "dot",
-            "spikecolor": _MUTED,
+            "spikecolor": palette["muted"],
             "spikethickness": 1,
         }
 
@@ -293,18 +336,18 @@ def _stacked_fig(
         for anom in anomalies:
             fig.add_vline(
                 x=anom["x"],
-                line_color=_WARN,
+                line_color=palette["warn"],
                 line_dash="dash",
                 line_width=1.5,
                 annotation_text=anom["label"],
-                annotation_font_color=_WARN,
+                annotation_font_color=palette["warn"],
                 annotation_font_size=10,
                 annotation_position="top right",
             )
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor=_BG,
-        plot_bgcolor=_BG,
+        template=palette["template"],
+        paper_bgcolor=palette["bg"],
+        plot_bgcolor=palette["bg"],
         height=max(height, min_height) * n,
         hovermode="x unified",
         hoversubplots="axis",
@@ -414,7 +457,8 @@ def _normalize_lat_lon(lat: pd.Series, lon: pd.Series) -> tuple[pd.Series, pd.Se
     return lat, lon
 
 
-def _map_fig(lat: pd.Series, lon: pd.Series) -> go.Figure:
+def _map_fig(lat: pd.Series, lon: pd.Series, dark: bool = True) -> go.Figure:
+    palette = _plotly_palette(dark)
     lat, lon = _normalize_lat_lon(lat, lon)
     center_lat = float(lat.mean())
     center_lon = float(lon.mean())
@@ -423,12 +467,12 @@ def _map_fig(lat: pd.Series, lon: pd.Series) -> go.Figure:
             lat=lat,
             lon=lon,
             mode="lines+markers",
-            marker={"size": 4, "color": _ACCENT},
-            line={"width": 1, "color": _ACCENT},
+            marker={"size": 4, "color": palette["accent"]},
+            line={"width": 1, "color": palette["accent"]},
         )
     )
     fig.update_layout(
-        paper_bgcolor=_BG,
+        paper_bgcolor=palette["bg"],
         mapbox={
             "style": "open-street-map",
             "center": {"lat": center_lat, "lon": center_lon},
@@ -452,6 +496,7 @@ def render_chart_and_grid(
     anomalies_raw,
     time_store,
     chart_only: bool = False,
+    dark: bool = True,
 ) -> tuple[object, object, object, object, object, object]:
     """Build the chart figure, grid rows/columns, and map from an already-fetched DataFrame.
 
@@ -496,9 +541,10 @@ def render_chart_and_grid(
                     h,
                     anomalies=vlines,
                     original_traces=traces if normalize else None,
+                    dark=dark,
                 )
                 if layout == "overlay"
-                else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines)
+                else _stacked_fig(traces, h, xaxis_mode or "shared", anomalies=vlines, dark=dark)
             )
             if not chart_only:
                 row_data, col_defs = _pivot_table(traces)
@@ -506,7 +552,7 @@ def render_chart_and_grid(
                 chart_msg = f"{total:,} pts across {len(traces)} signal(s).{truncation_note}"
         else:
             chart_msg = "No data for selected signals."
-            chart_fig = _empty_fig(chart_msg)
+            chart_fig = _empty_fig(chart_msg, dark=dark)
             row_data = []
 
     if not chart_only and lat_key and lon_key and "timestamp_ns" in df_all.columns:
@@ -525,7 +571,7 @@ def render_chart_and_grid(
             )
             merged = pd.merge_asof(lat_df, lon_df, on="timestamp_ns", direction="nearest").dropna(subset=["lat", "lon"])
             if not merged.empty:
-                map_fig = _map_fig(merged["lat"], merged["lon"])
+                map_fig = _map_fig(merged["lat"], merged["lon"], dark=dark)
                 map_style = {}
                 pts = len(merged)
                 chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."

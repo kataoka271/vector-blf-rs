@@ -161,6 +161,7 @@ app.layout = dbc.Container(
         dcc.Store(id="video-meta-store"),
         dcc.Store(id="video-seek-store"),
         html.Div(id="video-cursor-sink", style={"display": "none"}),
+        html.Div(id="color-mode-sink", style={"display": "none"}),
         dcc.Interval(id="filename-debounce-interval", interval=600, n_intervals=0, disabled=True),
         dcc.Interval(id="video-cursor-interval", interval=100, n_intervals=0, disabled=True),
         dcc.Download(id="dl-perfetto"),
@@ -201,6 +202,32 @@ app.layout = dbc.Container(
                                                         "fontSize": "16px",
                                                         "flex": "1",
                                                     },
+                                                ),
+                                                html.Span(
+                                                    [
+                                                        html.I(
+                                                            className="bi bi-sun-fill text-muted",
+                                                            style={"fontSize": "12px"},
+                                                        ),
+                                                        dbc.Switch(
+                                                            id="color-mode-switch",
+                                                            value=True,
+                                                            persistence=True,
+                                                            className="d-inline-block mx-1 mb-0",
+                                                            # Bootstrap's .form-switch reserves padding-left: 2.5em for a
+                                                            # label; with no label that leaves 0.5em of dead space
+                                                            # trailing the switch, making the icon gaps asymmetric.
+                                                            # Tighten both the reserved space and the input's offsetting
+                                                            # negative margin to the switch's actual width (2em).
+                                                            style={"paddingLeft": "2em"},
+                                                            input_style={"marginLeft": "-2em"},
+                                                        ),
+                                                        html.I(
+                                                            className="bi bi-moon-stars-fill text-muted",
+                                                            style={"fontSize": "12px"},
+                                                        ),
+                                                    ],
+                                                    className="d-flex align-items-center me-2",
                                                 ),
                                                 dbc.Button(
                                                     "<",

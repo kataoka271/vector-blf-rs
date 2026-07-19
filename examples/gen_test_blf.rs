@@ -5,6 +5,9 @@ use vector_blf::blf::{
     BaseObject, Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Timestamp, Writer,
 };
 
+#[path = "util/waveform.rs"]
+mod waveform;
+
 const MESSAGE_COUNT: usize = 500;
 const CHANNELS: [u16; 4] = [1, 2, 3, 4];
 // Fixed message IDs, matching data/test_can_signals.csv so --can-signals decodes them.
@@ -55,7 +58,10 @@ fn main() {
                     dir,
                     rtr: false,
                     dlc: 8,
-                    data: (0..8u32).map(|b| (b + i as u32) as u8).collect(),
+                    // Each byte follows its own waveform so decoded signals vary over time.
+                    data: (0..8u32)
+                        .map(|b| waveform::sample(b, i as u32, id * 8 + b))
+                        .collect(),
                 })
             }
             2 => {
@@ -70,7 +76,9 @@ fn main() {
                     brs: i % 2 == 0,
                     esi: false,
                     dlc: len as u8,
-                    data: (0..len).map(|b| (b + i) as u8).collect(),
+                    data: (0..len as u32)
+                        .map(|b| waveform::sample(b, i as u32, CANFD_ID * 8 + b))
+                        .collect(),
                 })
             }
             3 => {
@@ -85,7 +93,9 @@ fn main() {
                     brs: i % 2 == 0,
                     esi: false,
                     dlc: len as u8,
-                    data: (0..len).map(|b| (b + i) as u8).collect(),
+                    data: (0..len as u32)
+                        .map(|b| waveform::sample(b, i as u32, CANFD64_ID * 8 + b))
+                        .collect(),
                 })
             }
             _ => {

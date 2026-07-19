@@ -3,11 +3,15 @@ use std::io::{BufWriter, Write as _};
 
 use vector_blf::blf::{BaseObject, CanFd64, Dir, Message, Timestamp, Writer};
 
+#[path = "util/waveform.rs"]
+mod waveform;
+
 // 100 message IDs x 50 signals/message (byte-aligned, 8-bit each) = 5000 signals.
 const NUM_IDS: u32 = 100;
 const SIGNALS_PER_ID: u32 = 50;
 const BASE_ID: u32 = 0x600;
-const SAMPLES_PER_ID: usize = 5;
+// Enough samples to make the per-signal waveforms (sine, square, ...) visible.
+const SAMPLES_PER_ID: usize = 100;
 const CHANNELS: [u8; 4] = [1, 2, 3, 4];
 
 fn write_signal_csv(path: &str) -> std::io::Result<()> {
@@ -36,8 +40,9 @@ fn write_blf(path: &str) -> std::io::Result<()> {
         for sample in 0..SAMPLES_PER_ID {
             let channel = CHANNELS[(idx as usize + sample) % CHANNELS.len()];
             // SIGNALS_PER_ID bytes carry the defined signals; pad to a valid CAN-FD length.
+            // Each signal follows its own waveform (shape cycles by signal index).
             let mut data: Vec<u8> = (0..SIGNALS_PER_ID)
-                .map(|sig| ((idx + sig + sample as u32) % 256) as u8)
+                .map(|sig| waveform::sample(sig, sample as u32, idx * SIGNALS_PER_ID + sig))
                 .collect();
             data.resize(64, 0);
             let obj = BaseObject {

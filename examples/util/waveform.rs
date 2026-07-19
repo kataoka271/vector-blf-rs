@@ -2,6 +2,14 @@ use std::f64::consts::PI;
 
 const PERIOD: u32 = 20;
 
+/// Payload of `n` byte-wide signals, each following its own waveform.
+///
+/// `group` decorrelates payloads that share `t` (e.g. per message ID), so
+/// signal `sig` of group `g` gets the seed `g * n + sig`.
+pub fn payload(n: u32, t: u32, group: u32) -> Vec<u8> {
+    (0..n).map(|sig| sample(sig, t, group * n + sig)).collect()
+}
+
 /// Deterministic 8-bit test waveform sampled at time step `t`.
 ///
 /// The shape is selected by `kind % 5` (sine, square, sawtooth, triangle,

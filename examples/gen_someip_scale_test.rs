@@ -1,10 +1,14 @@
 use std::fs::File;
 use std::io::{BufWriter, Write as _};
 
-use vector_blf::blf::{BaseObject, Dir, Ethernet, Message, Timestamp, Writer};
+use vector_blf::blf::{Dir, Ethernet, Message};
 
+#[path = "util/test_writer.rs"]
+mod test_writer;
 #[path = "util/waveform.rs"]
 mod waveform;
+
+use test_writer::TestBlfWriter;
 
 // 100 (service_id, method_id) pairs x 50 signals/message (byte-aligned, 8-bit each) = 5000 signals.
 const NUM_SERVICES: u32 = 100;
@@ -80,20 +84,14 @@ fn ipv4_frame(id: u16, src: [u8; 4], dst: [u8; 4], udp_payload: &[u8]) -> Vec<u8
     f
 }
 
-fn write_blf(path: &str) -> std::io::Result<()> {
-    let file = File::create(path)?;
-    let mut writer = Writer::new(BufWriter::new(file)).expect("init writer");
-
-    let mut ts_ns: u64 = 1_000_000;
-    let mut written = 0usize;
+fn write_blf(path: &str) {
+    let mut writer = TestBlfWriter::create(path);
     for idx in 0..NUM_SERVICES {
         let service_id = (BASE_SERVICE_ID + idx) as u16;
         for sample in 0..SAMPLES_PER_SERVICE {
             let channel = CHANNELS[(idx as usize + sample) % CHANNELS.len()];
-            // Each signal follows its own waveform (shape cycles by signal index).
-            let payload: Vec<u8> = (0..SIGNALS_PER_SERVICE)
-                .map(|sig| waveform::sample(sig, sample as u32, idx * SIGNALS_PER_SERVICE + sig))
-                .collect();
+            // SIGNALS_PER_SERVICE byte-wide signals, each following its own waveform.
+            let payload = waveform::payload(SIGNALS_PER_SERVICE, sample as u32, idx);
             let someip = someip_frame(service_id, METHOD_ID, &payload);
             let udp = udp_frame(30509, 30509, &someip);
             let ip = ipv4_frame(
@@ -103,26 +101,18 @@ fn write_blf(path: &str) -> std::io::Result<()> {
                 &udp,
             );
 
-            let obj = BaseObject {
-                timestamp: Timestamp::Nanosecond(ts_ns),
-                message: Message::Ethernet(Ethernet {
-                    channel,
-                    dir: Dir::Rx,
-                    src_addr: [0x02, 0x00, 0x00, 0x00, 0x00, (idx % 256) as u8],
-                    dst_addr: [0x02, 0x00, 0x00, 0x00, 0x01, (idx % 256) as u8],
-                    vlan: None,
-                    ether_type: 0x0800,
-                    data: ip,
-                }),
-            };
-            writer.write_base_object(&obj).expect("write object");
-            written += 1;
-            ts_ns += 100_000_000;
+            writer.push(Message::Ethernet(Ethernet {
+                channel,
+                dir: Dir::Rx,
+                src_addr: [0x02, 0x00, 0x00, 0x00, 0x00, (idx % 256) as u8],
+                dst_addr: [0x02, 0x00, 0x00, 0x00, 0x01, (idx % 256) as u8],
+                vlan: None,
+                ether_type: 0x0800,
+                data: ip,
+            }));
         }
     }
-    writer.finish().expect("finish writer");
-    println!("wrote {written} Ethernet/SOME-IP objects to {path}");
-    Ok(())
+    writer.finish("Ethernet/SOME-IP");
 }
 
 fn main() {
@@ -133,5 +123,5 @@ fn main() {
         NUM_SERVICES * SIGNALS_PER_SERVICE
     );
 
-    write_blf("data/test_someip_signals_5000.blf").expect("write blf");
+    write_blf("data/test_someip_signals_5000.blf");
 }

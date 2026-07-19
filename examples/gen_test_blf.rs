@@ -1,12 +1,11 @@
-use std::fs::File;
-use std::io::BufWriter;
+use vector_blf::blf::{Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message};
 
-use vector_blf::blf::{
-    BaseObject, Can, CanFd, CanFd64, Dir, Ethernet, EthernetEx, Message, Timestamp, Writer,
-};
-
+#[path = "util/test_writer.rs"]
+mod test_writer;
 #[path = "util/waveform.rs"]
 mod waveform;
+
+use test_writer::TestBlfWriter;
 
 const MESSAGE_COUNT: usize = 500;
 const CHANNELS: [u16; 4] = [1, 2, 3, 4];
@@ -36,12 +35,7 @@ fn mac_for(seed: u8) -> [u8; 6] {
 }
 
 fn main() {
-    let path = "data/test_mixed.blf";
-    let file = File::create(path).expect("create output file");
-    let mut writer = Writer::new(BufWriter::new(file)).expect("init writer");
-
-    let mut written = 0usize;
-    let mut ts_ns: u64 = 1_000_000;
+    let mut writer = TestBlfWriter::create("data/test_mixed.blf");
 
     for i in 0..MESSAGE_COUNT {
         let channel = CHANNELS[i % CHANNELS.len()];
@@ -59,9 +53,7 @@ fn main() {
                     rtr: false,
                     dlc: 8,
                     // Each byte follows its own waveform so decoded signals vary over time.
-                    data: (0..8u32)
-                        .map(|b| waveform::sample(b, i as u32, id * 8 + b))
-                        .collect(),
+                    data: waveform::payload(8, i as u32, id),
                 })
             }
             2 => {
@@ -76,9 +68,7 @@ fn main() {
                     brs: i % 2 == 0,
                     esi: false,
                     dlc: len as u8,
-                    data: (0..len as u32)
-                        .map(|b| waveform::sample(b, i as u32, CANFD_ID * 8 + b))
-                        .collect(),
+                    data: waveform::payload(len as u32, i as u32, CANFD_ID),
                 })
             }
             3 => {
@@ -93,9 +83,7 @@ fn main() {
                     brs: i % 2 == 0,
                     esi: false,
                     dlc: len as u8,
-                    data: (0..len as u32)
-                        .map(|b| waveform::sample(b, i as u32, CANFD64_ID * 8 + b))
-                        .collect(),
+                    data: waveform::payload(len as u32, i as u32, CANFD64_ID),
                 })
             }
             _ => {
@@ -126,16 +114,8 @@ fn main() {
             }
         };
 
-        let obj = BaseObject {
-            timestamp: Timestamp::Nanosecond(ts_ns),
-            message,
-        };
-        writer.write_base_object(&obj).expect("write object");
-        written += 1;
-        ts_ns += 100_000_000;
+        writer.push(message);
     }
 
-    writer.finish().expect("finish writer");
-
-    println!("wrote {written} objects to {path}");
+    writer.finish("mixed");
 }

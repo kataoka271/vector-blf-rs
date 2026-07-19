@@ -1,10 +1,14 @@
 use std::fs::File;
 use std::io::{BufWriter, Write as _};
 
-use vector_blf::blf::{BaseObject, CanFd64, Dir, Message, Timestamp, Writer};
+use vector_blf::blf::{CanFd64, Dir, Message};
 
+#[path = "util/test_writer.rs"]
+mod test_writer;
 #[path = "util/waveform.rs"]
 mod waveform;
+
+use test_writer::TestBlfWriter;
 
 // 100 message IDs x 50 signals/message (byte-aligned, 8-bit each) = 5000 signals.
 const NUM_IDS: u32 = 100;
@@ -29,45 +33,31 @@ fn write_signal_csv(path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn write_blf(path: &str) -> std::io::Result<()> {
-    let file = File::create(path)?;
-    let mut writer = Writer::new(BufWriter::new(file)).expect("init writer");
-
-    let mut ts_ns: u64 = 1_000_000;
-    let mut written = 0usize;
+fn write_blf(path: &str) {
+    let mut writer = TestBlfWriter::create(path);
     for idx in 0..NUM_IDS {
         let id = BASE_ID + idx;
         for sample in 0..SAMPLES_PER_ID {
             let channel = CHANNELS[(idx as usize + sample) % CHANNELS.len()];
-            // SIGNALS_PER_ID bytes carry the defined signals; pad to a valid CAN-FD length.
-            // Each signal follows its own waveform (shape cycles by signal index).
-            let mut data: Vec<u8> = (0..SIGNALS_PER_ID)
-                .map(|sig| waveform::sample(sig, sample as u32, idx * SIGNALS_PER_ID + sig))
-                .collect();
+            // SIGNALS_PER_ID bytes carry the defined signals, each following its
+            // own waveform; pad to a valid CAN-FD length.
+            let mut data = waveform::payload(SIGNALS_PER_ID, sample as u32, idx);
             data.resize(64, 0);
-            let obj = BaseObject {
-                timestamp: Timestamp::Nanosecond(ts_ns),
-                message: Message::CanFd64(CanFd64 {
-                    channel,
-                    id,
-                    is_ext_id: id > 0x7ff,
-                    dir: Dir::Rx,
-                    rtr: false,
-                    fdf: true,
-                    brs: true,
-                    esi: false,
-                    dlc: data.len() as u8,
-                    data,
-                }),
-            };
-            writer.write_base_object(&obj).expect("write object");
-            written += 1;
-            ts_ns += 100_000_000;
+            writer.push(Message::CanFd64(CanFd64 {
+                channel,
+                id,
+                is_ext_id: id > 0x7ff,
+                dir: Dir::Rx,
+                rtr: false,
+                fdf: true,
+                brs: true,
+                esi: false,
+                dlc: data.len() as u8,
+                data,
+            }));
         }
     }
-    writer.finish().expect("finish writer");
-    println!("wrote {written} CAN-FD64 objects to {path}");
-    Ok(())
+    writer.finish("CAN-FD64");
 }
 
 fn main() {
@@ -78,5 +68,5 @@ fn main() {
         NUM_IDS * SIGNALS_PER_ID
     );
 
-    write_blf("data/test_signals_5000.blf").expect("write blf");
+    write_blf("data/test_signals_5000.blf");
 }

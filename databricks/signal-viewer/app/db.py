@@ -93,22 +93,31 @@ def _fetch_filenames() -> list[str] | None:
         return None
 
 
-def _fetch_all_signals(filenames: list[str] | None = None, limit: int = 500) -> list[dict] | None:
+def _fetch_all_signals(filenames: list[str] | None = None, limit: int | None = 500) -> list[dict] | None:
+    """Fetch known signals, ordered by (signal_source, channel, signal_name).
+
+    `limit=None` fetches the full catalog uncapped. Prefer `_fetch_signals_by_names`
+    for resolving a bounded set of candidate names (e.g. from a Genie response) --
+    an uncapped fetch here transfers and scans the entire catalog on every call,
+    which is unnecessary when only a handful of names need resolving and was
+    observed to make the Genie request path noticeably heavier.
+    """
     try:
+        limit_clause = f" LIMIT {limit}" if limit is not None else ""
         if filenames:
             # File-filtered: query gold table (catalog table has no _source_file column)
             placeholders = ", ".join(["?"] * len(filenames))
             stmt = (
                 f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
                 f" WHERE _source_file IN ({placeholders})"
-                f" ORDER BY signal_source, channel, signal_name LIMIT {limit}"
+                f" ORDER BY signal_source, channel, signal_name{limit_clause}"
             )
             params: list | None = list(filenames)
         else:
             # Unfiltered: query the pre-aggregated catalog table (fast, no gold table scan)
             stmt = (
                 f"SELECT signal_name, signal_source, channel FROM {_CATALOG_TABLE}"
-                f" ORDER BY signal_source, channel, signal_name LIMIT {limit}"
+                f" ORDER BY signal_source, channel, signal_name{limit_clause}"
             )
             params = None
         df = _query(stmt, params)
@@ -116,6 +125,40 @@ def _fetch_all_signals(filenames: list[str] | None = None, limit: int = 500) -> 
         return df.to_dict("records")
     except Exception as exc:
         print(f"[_fetch_all_signals] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None
+
+
+def _fetch_signals_by_names(names: list[str], filenames: list[str] | None = None) -> list[dict] | None:
+    """Resolve known signals whose name matches one of `names` (case-insensitive).
+
+    Bounded, targeted alternative to `_fetch_all_signals(limit=None)`: used to
+    resolve signal names mentioned in a Genie response without transferring the
+    entire catalog on every completed response. `names` is expected to already
+    be capped by the caller (see genie.extract_candidate_tokens).
+    """
+    if not names:
+        return []
+    try:
+        lowered = list(dict.fromkeys(n.lower() for n in names))
+        placeholders = ", ".join(["?"] * len(lowered))
+        if filenames:
+            file_placeholders = ", ".join(["?"] * len(filenames))
+            stmt = (
+                f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                f" WHERE _source_file IN ({file_placeholders}) AND LOWER(signal_name) IN ({placeholders})"
+            )
+            params: list = list(filenames) + lowered
+        else:
+            stmt = (
+                f"SELECT signal_name, signal_source, channel FROM {_CATALOG_TABLE}"
+                f" WHERE LOWER(signal_name) IN ({placeholders})"
+            )
+            params = lowered
+        df = _query(stmt, params)
+        print(f"[_fetch_signals_by_names] fetched {len(df)} signal(s) for {len(lowered)} candidate name(s)", flush=True)
+        return df.to_dict("records")
+    except Exception as exc:
+        print(f"[_fetch_signals_by_names] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
         return None
 
 

@@ -19,6 +19,7 @@ from .db import (
     _fetch_all_signals,
     _fetch_filenames,
     _fetch_global_time_range,
+    _fetch_signals_by_names,
     _fetch_signals_by_search,
     _fetch_video_for_file,
     _log_token_info,
@@ -39,6 +40,7 @@ from .genie import (
     _genie_futures,
     _genie_query,
     build_context_prefix,
+    extract_candidate_tokens,
     interpret_genie_response,
 )
 from .perfetto import build_perfetto_trace
@@ -1035,9 +1037,12 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sour
     State("all-signals-cache", "data"),
     State("time-range-store", "data"),
     State("genie-history-store", "data"),
+    State("filename-filter", "value"),
     prevent_initial_call=True,
 )
-def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw):
+def poll_genie_result(
+    n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw, filenames
+):
     print(
         f"[poll_genie_result] called n_intervals={n_intervals} status={req_store.get('status') if req_store else None}",
         flush=True,
@@ -1088,7 +1093,21 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
     ai_bubble = html.Div(response_text, className="genie-bubble genie-ai")
     log = log + [ai_bubble]
 
-    all_signals = all_signals_raw if isinstance(all_signals_raw, list) else []
+    # all-signals-cache is capped to the 500-row browse window (see
+    # _fetch_all_signals), so a signal Genie mentions can sort past the cutoff
+    # and silently fail to match even though it exists. Resolve a bounded set of
+    # candidate names extracted from the response with a targeted query instead
+    # of transferring/scanning the whole catalog on every completed response.
+    candidate_names = extract_candidate_tokens(response_text, result["sql_rows"])
+    resolved = _fetch_signals_by_names(candidate_names, filenames or None) if candidate_names else []
+    cached_signals = all_signals_raw if isinstance(all_signals_raw, list) else []
+    if isinstance(resolved, list) and resolved:
+        seen = {(r.get("signal_source"), r.get("channel"), r.get("signal_name")) for r in cached_signals}
+        all_signals = cached_signals + [
+            r for r in resolved if (r.get("signal_source"), r.get("channel"), r.get("signal_name")) not in seen
+        ]
+    else:
+        all_signals = cached_signals
     preview_obj = interpret_genie_response(result, all_signals, time_store)
     preview = preview_obj.to_dict() if preview_obj is not None else None
 

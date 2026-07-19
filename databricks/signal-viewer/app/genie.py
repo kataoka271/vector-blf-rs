@@ -22,6 +22,23 @@ _RE_SECONDS = re.compile(
 _RE_CLOCK = re.compile(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:to|-|--)\s*(\d{1,2}:\d{2}(?::\d{2})?)")
 _RE_LAST = re.compile(r"last\s+(\d+(?:\.\d+)?)\s*(second|sec|minute|min)s?", re.IGNORECASE)
 
+_RE_CANDIDATE_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
+_MAX_CANDIDATE_TOKENS = 200
+
+
+def extract_candidate_tokens(text: str, sql_rows: list[dict]) -> list[str]:
+    """Pull likely signal-name tokens out of a Genie response for a targeted DB lookup.
+
+    Deliberately cheap and over-inclusive -- plain English words match the token
+    shape too. The caller does an exact, case-insensitive lookup against the real
+    catalog, so a false-positive token just matches nothing; it doesn't cost a
+    full-catalog scan the way matching client-side against an unbounded signal
+    list would.
+    """
+    tokens: list[str] = [str(row["signal_name"]) for row in (sql_rows or []) if row.get("signal_name")]
+    tokens.extend(_RE_CANDIDATE_TOKEN.findall(text or ""))
+    return list(dict.fromkeys(tokens))[:_MAX_CANDIDATE_TOKENS]
+
 
 def build_context_prefix(
     filenames: list[str] | None,

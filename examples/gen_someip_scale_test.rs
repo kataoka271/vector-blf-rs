@@ -3,6 +3,8 @@ use std::io::{BufWriter, Write as _};
 
 use vector_blf::blf::{Dir, Ethernet, Message};
 
+#[path = "util/anomaly.rs"]
+mod anomaly;
 #[path = "util/test_writer.rs"]
 mod test_writer;
 #[path = "util/waveform.rs"]
@@ -91,7 +93,13 @@ fn write_blf(path: &str) {
         for sample in 0..SAMPLES_PER_SERVICE {
             let channel = CHANNELS[(idx as usize + sample) % CHANNELS.len()];
             // SIGNALS_PER_SERVICE byte-wide signals, each following its own waveform.
-            let payload = waveform::payload(SIGNALS_PER_SERVICE, sample as u32, idx);
+            let mut payload = waveform::payload(SIGNALS_PER_SERVICE, sample as u32, idx);
+            anomaly::apply(
+                &mut payload,
+                idx * SIGNALS_PER_SERVICE,
+                sample as u32,
+                SAMPLES_PER_SERVICE as u32,
+            );
             let someip = someip_frame(service_id, METHOD_ID, &payload);
             let udp = udp_frame(30509, 30509, &someip);
             let ip = ipv4_frame(
@@ -124,4 +132,15 @@ fn main() {
     );
 
     write_blf("data/test_someip_signals_5000.blf");
+
+    let anomaly_csv = "data/test_someip_signals_5000_anomalies.csv";
+    let rows = anomaly::write_ground_truth(
+        anomaly_csv,
+        NUM_SERVICES,
+        SIGNALS_PER_SERVICE,
+        SAMPLES_PER_SERVICE as u32,
+        test_writer::ts_at,
+    )
+    .expect("write anomaly ground truth");
+    println!("wrote {rows} anomaly ground-truth rows to {anomaly_csv}");
 }

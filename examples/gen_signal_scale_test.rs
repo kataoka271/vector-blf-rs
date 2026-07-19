@@ -3,6 +3,8 @@ use std::io::{BufWriter, Write as _};
 
 use vector_blf::blf::{CanFd64, Dir, Message};
 
+#[path = "util/anomaly.rs"]
+mod anomaly;
 #[path = "util/test_writer.rs"]
 mod test_writer;
 #[path = "util/waveform.rs"]
@@ -42,6 +44,12 @@ fn write_blf(path: &str) {
             // SIGNALS_PER_ID bytes carry the defined signals, each following its
             // own waveform; pad to a valid CAN-FD length.
             let mut data = waveform::payload(SIGNALS_PER_ID, sample as u32, idx);
+            anomaly::apply(
+                &mut data,
+                idx * SIGNALS_PER_ID,
+                sample as u32,
+                SAMPLES_PER_ID as u32,
+            );
             data.resize(64, 0);
             writer.push(Message::CanFd64(CanFd64 {
                 channel,
@@ -69,4 +77,15 @@ fn main() {
     );
 
     write_blf("data/test_signals_5000.blf");
+
+    let anomaly_csv = "data/test_signals_5000_anomalies.csv";
+    let rows = anomaly::write_ground_truth(
+        anomaly_csv,
+        NUM_IDS,
+        SIGNALS_PER_ID,
+        SAMPLES_PER_ID as u32,
+        test_writer::ts_at,
+    )
+    .expect("write anomaly ground truth");
+    println!("wrote {rows} anomaly ground-truth rows to {anomaly_csv}");
 }

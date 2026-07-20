@@ -124,7 +124,7 @@ def _genie_panel() -> dbc.Offcanvas:
             ),
             dbc.Textarea(
                 id="genie-input",
-                placeholder="Ask about signals or anomalies...",
+                placeholder="Ask about signals or anomalies... (Ctrl+Enter to send)",
                 style={"fontSize": "12px", "resize": "none"},
                 rows=3,
             ),

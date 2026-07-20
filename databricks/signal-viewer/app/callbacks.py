@@ -19,7 +19,6 @@ from .db import (
     _fetch_all_signals,
     _fetch_filenames,
     _fetch_global_time_range,
-    _fetch_signals_by_names,
     _fetch_signals_by_search,
     _fetch_video_for_file,
     _log_token_info,
@@ -31,16 +30,16 @@ from .figures import (
     _SIDEBAR_CONTENT_STYLE,
     _SIDEBAR_STYLE,
     _TEXT,
-    _XaxisMode,
     _empty_fig,
+    _XaxisMode,
     render_chart_and_grid,
 )
 from .genie import (
     _genie_executor,
     _genie_futures,
     _genie_query,
+    _prune_stale_genie_futures,
     build_context_prefix,
-    extract_candidate_tokens,
     interpret_genie_response,
 )
 from .perfetto import build_perfetto_trace
@@ -673,8 +672,7 @@ def update_time_slider(store, current_value, is_disabled):
     duration = max(t_max - t_min, 1.0)
     step = max(0.1, duration / 1000)
 
-    t0_raw = pd.Timestamp(store["t0"]) if store.get("t0") else None
-    t0 = t0_raw if isinstance(t0_raw, pd.Timestamp) else None
+    t0 = pd.Timestamp(store["t0"]) if store.get("t0") else None
 
     def _abs_ts(offset_s: float) -> str:
         if t0 is None:
@@ -684,8 +682,9 @@ def update_time_slider(store, current_value, is_disabled):
         return ts.strftime("%H:%M:%S")
 
     marks = {}
-    for i in range(6):
-        t = t_min + i * duration / 5
+    n_marks = 3
+    for i in range(n_marks):
+        t = t_min + i * duration / (n_marks - 1)
         marks[round(t, 3)] = _abs_ts(t)
 
     # Preserve user selection when within bounds; reset to full range otherwise.
@@ -1037,22 +1036,36 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sour
     State("all-signals-cache", "data"),
     State("time-range-store", "data"),
     State("genie-history-store", "data"),
-    State("filename-filter", "value"),
     prevent_initial_call=True,
 )
-def poll_genie_result(
-    n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw, filenames
-):
+def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw):
+    _prune_stale_genie_futures()
     print(
         f"[poll_genie_result] called n_intervals={n_intervals} status={req_store.get('status') if req_store else None}",
         flush=True,
     )
     if not req_store or req_store.get("status") != "pending":
+        print("[poll_genie_result] no pending request, skipping", flush=True)
         return dash.no_update, True, dash.no_update, dash.no_update, dash.no_update, False, dash.no_update
 
     request_id = req_store["request_id"]
+
+    # Read-only: never popped here. dcc.Interval ticks on wall-clock timing regardless
+    # of whether the previous tick's request has returned, so the tick right after this
+    # one is typically already in flight by the time this response is sent. Dash's
+    # client treats the later-dispatched request as authoritative for this callback's
+    # Outputs and discards an earlier one wholesale when it arrives -- so if only the
+    # *first* observing tick built the real answer (as a pop-based "claim" once did
+    # here), that answer could be silently dropped even though it was computed
+    # correctly, leaving the UI stuck on "Thinking...". Instead, every tick that
+    # observes completion independently recomputes the identical result below (safe:
+    # future.result() and future.cancel() are safe to call repeatedly, and the
+    # downstream computation is a pure function of `result` + State), so it no longer
+    # matters which tick's response the client applies. Cleanup is TTL-based instead
+    # (see _prune_stale_genie_futures).
     entry = _genie_futures.get(request_id)
     if entry is None:
+        print(f"[poll_genie_result] no future found for request_id={request_id}, marking done", flush=True)
         return (
             {"request_id": request_id, "status": "done"},
             True,
@@ -1064,13 +1077,13 @@ def poll_genie_result(
         )
 
     future, created_at = entry
-    # Expire after 120 s
-    if not future.done() and _time.time() - created_at < 120:
-        return dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, True, dash.no_update
 
     if not future.done():
+        if _time.time() - created_at < 120:
+            return dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, True, dash.no_update
+
         future.cancel()
-        del _genie_futures[request_id]
+        print(f"[poll_genie_result] request_id={request_id} timed out, cancelling future", flush=True)
         timeout_bubble = html.Div("Request timed out.", className="genie-bubble genie-ai")
         log = [b for b in (chat_log or []) if _get_component_id(b) != "genie-thinking-bubble"]
         return (
@@ -1084,7 +1097,6 @@ def poll_genie_result(
         )
 
     result = future.result()
-    del _genie_futures[request_id]
 
     new_conv = {"space_id": GENIE_SPACE_ID, "conversation_id": result["conversation_id"]}
 
@@ -1093,28 +1105,29 @@ def poll_genie_result(
     ai_bubble = html.Div(response_text, className="genie-bubble genie-ai")
     log = log + [ai_bubble]
 
-    # all-signals-cache is capped to the 500-row browse window (see
-    # _fetch_all_signals), so a signal Genie mentions can sort past the cutoff
-    # and silently fail to match even though it exists. Resolve a bounded set of
-    # candidate names extracted from the response with a targeted query instead
-    # of transferring/scanning the whole catalog on every completed response.
-    candidate_names = extract_candidate_tokens(response_text, result["sql_rows"])
-    resolved = _fetch_signals_by_names(candidate_names, filenames or None) if candidate_names else []
+    # genie._extract_signals trusts sql_rows' own signal_name/signal_source/channel
+    # columns directly (they come from Genie's own executed query against the real
+    # tables), so a signal outside the capped all-signals-cache browse window (see
+    # _fetch_all_signals) still matches -- no separate DB lookup needed here.
     cached_signals = all_signals_raw if isinstance(all_signals_raw, list) else []
-    if isinstance(resolved, list) and resolved:
-        seen = {(r.get("signal_source"), r.get("channel"), r.get("signal_name")) for r in cached_signals}
-        all_signals = cached_signals + [
-            r for r in resolved if (r.get("signal_source"), r.get("channel"), r.get("signal_name")) not in seen
-        ]
-    else:
-        all_signals = cached_signals
-    preview_obj = interpret_genie_response(result, all_signals, time_store)
+    preview_obj = interpret_genie_response(result, cached_signals, time_store)
     preview = preview_obj.to_dict() if preview_obj is not None else None
 
     question = req_store.get("question", "")
     history = list(history_raw or [])
-    history.append({"question": question, "answer": response_text})
+    new_entry = {"question": question, "answer": response_text}
+    # Defensive only: every overlapping tick reads the same pre-update history_raw
+    # (Dash captures State at request-dispatch time, before any of this batch's
+    # responses have been applied), so this can't actually fire in practice.
+    if not history or history[-1] != new_entry:
+        history.append(new_entry)
     history = history[-20:]
+
+    print(
+        f"[poll_genie_result] request_id={request_id} completed: "
+        f"response_len={len(response_text)} preview={'yes' if preview else 'no'} history_len={len(history)}",
+        flush=True,
+    )
 
     return (
         {"request_id": request_id, "status": "done"},

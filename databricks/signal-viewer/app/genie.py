@@ -13,6 +13,27 @@ _genie_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_na
 # Maps request_id -> (Future, created_at_epoch)
 _genie_futures: dict[str, tuple[concurrent.futures.Future, float]] = {}
 
+_GENIE_FUTURE_TTL_SEC = 180.0  # prune entries older than this so _genie_futures doesn't
+# grow unbounded across a long session; comfortably past the 120s pending-timeout plus a
+# grace window for a few overlapping poll ticks to still observe completion.
+
+
+def _prune_stale_genie_futures() -> None:
+    """Drop _genie_futures entries older than the TTL.
+
+    poll_genie_result no longer pops entries on first observed completion (that broke
+    idempotency -- see poll_genie_result), so this is the only cleanup path now. Cheap:
+    the dict holds at most a handful of entries (one in-flight Genie request per active
+    browser tab).
+    """
+    now = _time.time()
+    stale_ids = [rid for rid, (_, created_at) in _genie_futures.items() if now - created_at > _GENIE_FUTURE_TTL_SEC]
+    for rid in stale_ids:
+        _genie_futures.pop(rid, None)
+    if stale_ids:
+        print(f"[genie] pruned {len(stale_ids)} stale future(s): {stale_ids}", flush=True)
+
+
 _ANOMALY_WINDOW_SEC = 30.0  # auto time-window half-width around anomaly timestamps
 
 _RE_SECONDS = re.compile(
@@ -21,23 +42,6 @@ _RE_SECONDS = re.compile(
 )
 _RE_CLOCK = re.compile(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:to|-|--)\s*(\d{1,2}:\d{2}(?::\d{2})?)")
 _RE_LAST = re.compile(r"last\s+(\d+(?:\.\d+)?)\s*(second|sec|minute|min)s?", re.IGNORECASE)
-
-_RE_CANDIDATE_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
-_MAX_CANDIDATE_TOKENS = 200
-
-
-def extract_candidate_tokens(text: str, sql_rows: list[dict]) -> list[str]:
-    """Pull likely signal-name tokens out of a Genie response for a targeted DB lookup.
-
-    Deliberately cheap and over-inclusive -- plain English words match the token
-    shape too. The caller does an exact, case-insensitive lookup against the real
-    catalog, so a false-positive token just matches nothing; it doesn't cost a
-    full-catalog scan the way matching client-side against an unbounded signal
-    list would.
-    """
-    tokens: list[str] = [str(row["signal_name"]) for row in (sql_rows or []) if row.get("signal_name")]
-    tokens.extend(_RE_CANDIDATE_TOKEN.findall(text or ""))
-    return list(dict.fromkeys(tokens))[:_MAX_CANDIDATE_TOKENS]
 
 
 def build_context_prefix(
@@ -85,33 +89,49 @@ def _genie_query(space_id: str, content: str, conversation_id: str | None, user_
     try:
         from databricks.sdk import WorkspaceClient
 
-        w = WorkspaceClient(config=cfg)
+        try:
+            w = WorkspaceClient(token=user_token, host=cfg.host, auth_type="pat")
+        except Exception as exc:
+            print(f"[_genie_query] failed to create WorkspaceClient: {exc}", flush=True)
+            w = WorkspaceClient(config=cfg)
+
         if conversation_id:
             msg = w.genie.create_message_and_wait(space_id, conversation_id, content=content)
         else:
-            result = w.genie.start_conversation_and_wait(space_id, content=content)
-            msg = result
+            msg = w.genie.start_conversation_and_wait(space_id, content=content)
             conversation_id = str(msg.conversation_id)
 
         text = ""
         sql_rows: list[dict] = []
-        if hasattr(msg, "attachments") and msg.attachments:
-            for att in msg.attachments:
-                if hasattr(att, "text") and att.text:
-                    text += att.text.content or ""
-                if hasattr(att, "query") and att.query:
-                    try:
-                        result_set = w.genie.get_message_query_result_by_attachment(
-                            space_id, str(msg.conversation_id), str(msg.id), str(att.id)
-                        )
-                        if result_set and hasattr(result_set, "statement_response"):
-                            sr = result_set.statement_response
-                            if sr and sr.result and sr.manifest:
-                                cols = [c.name for c in sr.manifest.schema.columns]
-                                sql_rows = [dict(zip(cols, row)) for row in (sr.result.data_array or [])]
-                    except Exception:
-                        pass
+
+        if msg.attachments is None:
+            raise ValueError("Genie response has no attachments")
+
+        for att in msg.attachments:
+            if att.text:
+                if not att.text.content:
+                    raise ValueError("Genie response attachment has no text content")
+                text += att.text.content
+            if att.query:
+                result = w.genie.get_message_attachment_query_result(
+                    space_id=space_id,
+                    conversation_id=str(msg.conversation_id),
+                    message_id=str(msg.message_id),
+                    attachment_id=str(att.attachment_id),
+                )
+                sr = result.statement_response
+                if not sr:
+                    raise ValueError("Genie response attachment has no statement_response")
+                if not (sr.manifest and sr.manifest.schema and sr.manifest.schema.columns):
+                    raise ValueError("Genie response attachment has no schema columns")
+                if not (sr.result and sr.result.data_array):
+                    raise ValueError("Genie response attachment has no data rows")
+                cols = [c.name for c in sr.manifest.schema.columns]
+                sql_rows = [dict(zip(cols, row)) for row in sr.result.data_array]
         print(f"[_genie_query] done status=done conversation_id={msg.conversation_id}", flush=True)
+        print(f"[_genie_query] text={text}", flush=True)
+        print(f"[_genie_query] sql_rows={pd.DataFrame.from_records(sql_rows)}", flush=True)
+
         return {"status": "done", "text": text, "sql_rows": sql_rows, "conversation_id": str(msg.conversation_id)}
     except Exception as exc:
         print(f"[_genie_query] error: {exc}", flush=True)
@@ -127,16 +147,19 @@ def _extract_signals(text: str, sql_rows: list[dict], all_signals: list[dict]) -
 
     matched: list[str] = []
 
-    # Priority 1: SQL result rows with signal_name column
+    # Priority 1: SQL result rows with signal_name column. sql_rows come from Genie's
+    # own executed query against the real tables, so a row that already carries
+    # signal_name + signal_source + channel is trusted directly rather than requiring
+    # it to also appear in all_signals -- that cache is capped (see _fetch_all_signals)
+    # and would otherwise make a real, valid signal outside the cap silently unmatchable.
     if sql_rows:
         for row in sql_rows:
             sn = row.get("signal_name", "")
-            src = str(row.get("signal_source", ""))
-            ch = str(row.get("channel", ""))
-            full_key = f"{src}{ch}::{sn}"
-            if full_key in all_keys:
-                matched.append(full_key)
-            elif sn.lower() in all_names:
+            src = row.get("signal_source")
+            ch = row.get("channel")
+            if sn and src is not None and ch is not None:
+                matched.append(f"{src}{ch}::{sn}")
+            elif sn and sn.lower() in all_names:
                 matched.append(all_names[sn.lower()])
         if matched:
             return list(dict.fromkeys(matched))

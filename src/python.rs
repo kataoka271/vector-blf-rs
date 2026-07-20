@@ -949,6 +949,17 @@ fn parse_uds(data: &[u8]) -> Option<UdsTuple> {
     Some(uds_to_tuple(uds))
 }
 
+/// Returns True if `can_id` falls within the hardcoded ISO 15765-4
+/// diagnostic addressing ranges (11-bit physical 0x7E0-0x7E7 / response
+/// 0x7E8-0x7EF / functional 0x7DF, or 29-bit normal-fixed `0x18DAxxYY`).
+///
+/// Use this to gate which CAN frames get fed into an `IsoTpReassembler`,
+/// so ordinary (non-diagnostic) traffic is never mistaken for UDS.
+#[pyfunction]
+fn is_diagnostic_can_id(can_id: u32) -> bool {
+    blf::is_diagnostic_can_id(can_id)
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn hex(data: &[u8]) -> String {
@@ -1304,6 +1315,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_someip_udp, m)?)?;
     m.add_function(wrap_pyfunction!(parse_doip_diag, m)?)?;
     m.add_function(wrap_pyfunction!(parse_uds, m)?)?;
+    m.add_function(wrap_pyfunction!(is_diagnostic_can_id, m)?)?;
     m.add_function(wrap_pyfunction!(parse_eth_payload_signals, m)?)?;
     Ok(())
 }

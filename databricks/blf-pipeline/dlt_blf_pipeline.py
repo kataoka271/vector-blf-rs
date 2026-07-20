@@ -393,6 +393,8 @@ def _parse_blf_batch(iterator):
                             data = data_col[i]
                             if not data:
                                 continue
+                            if not vector_blf.is_diagnostic_can_id(can_id_col[i]):
+                                continue
                             data_bytes = bytes(data)
                             key = (channel_col[i], can_id_col[i])
 

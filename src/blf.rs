@@ -18,7 +18,7 @@ use object::{BaseObjectHeader, LogContainerHeader, ObjectHeaderV1, ObjectHeaderV
 use std::io::{Read, Seek, Write};
 
 pub use diag::doip::{DiagMessage, DoIp, PayloadType};
-pub use diag::isotp::{FlowStatus, IsoTpFrame, Reassembler};
+pub use diag::isotp::{is_diagnostic_can_id, FlowStatus, IsoTpFrame, Reassembler};
 pub use diag::someip::{MessageType, ReturnCode, SomeIp};
 pub use diag::uds::{Nrc, ServiceId, Uds};
 pub use encoder::Timestamp;

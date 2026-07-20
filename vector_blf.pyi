@@ -271,6 +271,16 @@ def parse_uds(data: bytes) -> Optional[Tuple[str, int, str, Optional[int], Optio
     """
     ...
 
+def is_diagnostic_can_id(can_id: int) -> bool:
+    """Return True if can_id falls within the hardcoded ISO 15765-4 diagnostic
+    addressing ranges (11-bit physical 0x7E0-0x7E7 / response 0x7E8-0x7EF /
+    functional 0x7DF, or 29-bit normal-fixed 0x18DAxxYY).
+
+    Use this to gate which CAN frames get fed into an IsoTpReassembler, so
+    ordinary (non-diagnostic) traffic is never mistaken for UDS.
+    """
+    ...
+
 def parse_eth_payload_signals(ether_type: int, eth_payload: bytes) -> List[Dict[str, Union[str, float, None]]]:
     """Parse IP/TCP/UDP header fields from an Ethernet frame payload as named signals.
 

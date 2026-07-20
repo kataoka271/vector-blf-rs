@@ -1,6 +1,23 @@
 use super::super::error::{ParseError, ParseResult};
 use super::uds::Uds;
 
+/// ISO 15765-4 standard 11-bit diagnostic addressing: physical requests
+/// 0x7E0-0x7E7, physical responses 0x7E8-0x7EF, functional request 0x7DF.
+const DIAG_ID_11BIT_RANGE: std::ops::RangeInclusive<u32> = 0x7DF..=0x7EF;
+
+/// ISO 15765-4 29-bit "normal fixed" addressing: PDU Format byte = 0xDA,
+/// giving IDs of the form `0x18DA_<target><source>`.
+const DIAG_ID_29BIT_MASK: u32 = 0xFFFF_0000;
+const DIAG_ID_29BIT_PREFIX: u32 = 0x18DA_0000;
+
+/// Returns true if `can_id` falls within the hardcoded ISO 15765-4
+/// diagnostic addressing ranges (11-bit physical/functional, or 29-bit
+/// normal-fixed addressing). Used to gate ISO-TP reassembly so ordinary
+/// (non-diagnostic) CAN traffic is never fed through the reassembler.
+pub fn is_diagnostic_can_id(can_id: u32) -> bool {
+    DIAG_ID_11BIT_RANGE.contains(&can_id) || (can_id & DIAG_ID_29BIT_MASK) == DIAG_ID_29BIT_PREFIX
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowStatus {
     ContinueToSend,

@@ -1,4 +1,6 @@
-use vector_blf::blf::{FlowStatus, IsoTpFrame, ParseError, Reassembler, ServiceId};
+use vector_blf::blf::{
+    is_diagnostic_can_id, FlowStatus, IsoTpFrame, ParseError, Reassembler, ServiceId,
+};
 
 // ── SingleFrame ────────────────────────────────────────────────────────────────
 
@@ -340,4 +342,39 @@ fn reassembler_resets_after_complete() {
     assert!(result.is_some());
     let uds = result.unwrap();
     assert_eq!(uds.service(), ServiceId::EcuReset);
+}
+
+// ── is_diagnostic_can_id ─────────────────────────────────────────────────────
+
+#[test]
+fn diagnostic_id_11bit_physical_and_functional() {
+    assert!(is_diagnostic_can_id(0x7DF)); // functional request (broadcast)
+    assert!(is_diagnostic_can_id(0x7E0)); // physical request, first ECU
+    assert!(is_diagnostic_can_id(0x7E7)); // physical request, last ECU
+    assert!(is_diagnostic_can_id(0x7E8)); // physical response, first ECU
+    assert!(is_diagnostic_can_id(0x7EF)); // physical response, last ECU
+}
+
+#[test]
+fn diagnostic_id_11bit_boundaries_excluded() {
+    assert!(!is_diagnostic_can_id(0x7DE));
+    assert!(!is_diagnostic_can_id(0x7F0));
+}
+
+#[test]
+fn diagnostic_id_29bit_normal_fixed() {
+    assert!(is_diagnostic_can_id(0x18DA_00F1)); // tester -> ECU 0x00
+    assert!(is_diagnostic_can_id(0x18DA_F100)); // ECU -> tester
+}
+
+#[test]
+fn diagnostic_id_29bit_wrong_pdu_format_excluded() {
+    assert!(!is_diagnostic_can_id(0x18DB_0000)); // PF byte 0xDB, not 0xDA
+    assert!(!is_diagnostic_can_id(0x1ADA_0000)); // wrong priority/reserved bits
+}
+
+#[test]
+fn diagnostic_id_ordinary_can_id_excluded() {
+    assert!(!is_diagnostic_can_id(0x100));
+    assert!(!is_diagnostic_can_id(0x123));
 }

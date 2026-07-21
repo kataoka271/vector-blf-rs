@@ -35,6 +35,7 @@ def _prune_stale_genie_futures() -> None:
 
 
 _ANOMALY_WINDOW_SEC = 30.0  # auto time-window half-width around anomaly timestamps
+_MAX_EXTRACTED_SIGNALS = 12  # cap so a broad Genie query doesn't overplot the chart
 
 _RE_SECONDS = re.compile(
     r"(?:between\s+)?(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\s+(?:to|and|-|--)\s+(\d+(?:\.\d+)?)\s*s",
@@ -141,9 +142,13 @@ def _genie_query(space_id: str, content: str, conversation_id: str | None, user_
 def _extract_signals(text: str, sql_rows: list[dict], all_signals: list[dict]) -> list[str]:
     """Extract signal keys matching known signals from Genie response."""
     all_keys = {f"{r['signal_source']}{r['channel']}::{r['signal_name']}": r for r in all_signals}
-    all_names = {
-        r["signal_name"].lower(): f"{r['signal_source']}{r['channel']}::{r['signal_name']}" for r in all_signals
-    }
+    all_names: dict[str, str] = {}
+    all_names_by_source: dict[tuple[str, str], str] = {}
+    for r in all_signals:
+        key = f"{r['signal_source']}{r['channel']}::{r['signal_name']}"
+        name_lower = r["signal_name"].lower()
+        all_names[name_lower] = key
+        all_names_by_source[(r["signal_source"].lower(), name_lower)] = key
 
     matched: list[str] = []
 
@@ -153,16 +158,34 @@ def _extract_signals(text: str, sql_rows: list[dict], all_signals: list[dict]) -
     # it to also appear in all_signals -- that cache is capped (see _fetch_all_signals)
     # and would otherwise make a real, valid signal outside the cap silently unmatchable.
     if sql_rows:
+        counts: dict[str, int] = {}
         for row in sql_rows:
             sn = row.get("signal_name", "")
             src = row.get("signal_source")
             ch = row.get("channel")
+            key = None
             if sn and src is not None and ch is not None:
-                matched.append(f"{src}{ch}::{sn}")
+                key = f"{src}{ch}::{sn}"
+            elif sn and src is not None and (src.lower(), sn.lower()) in all_names_by_source:
+                # No channel column in this row (Genie's query didn't select one) --
+                # disambiguate via signal_source so a name that exists under multiple
+                # sources (e.g. the same signal name on both CAN and SOMEIP) doesn't
+                # silently collide in the name-only lookup below.
+                key = all_names_by_source[(src.lower(), sn.lower())]
             elif sn and sn.lower() in all_names:
-                matched.append(all_names[sn.lower()])
-        if matched:
-            return list(dict.fromkeys(matched))
+                key = all_names[sn.lower()]
+            if key is None:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+        if counts:
+            # Broad queries can return dozens of distinct signals -- more than a chart
+            # can show. Rank by row frequency (a proxy for relevance when Genie's query
+            # groups by signal, e.g. anomaly counts) and prefer signals the explanation
+            # text actually names, since that's the closer match to what was asked.
+            ranked = sorted(counts, key=lambda k: counts[k], reverse=True)
+            text_lower = text.lower()
+            mentioned = [k for k in ranked if k.split("::", 1)[1].lower() in text_lower]
+            return (mentioned or ranked)[:_MAX_EXTRACTED_SIGNALS]
 
     # Priority 2: Exact key in text
     for key in all_keys:

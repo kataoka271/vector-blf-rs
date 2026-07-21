@@ -13,6 +13,11 @@ app = dash.Dash(
     title="Signal Viewer",
     external_stylesheets=[dbc.themes.DARKLY, dbc.icons.BOOTSTRAP],
     assets_folder=_ASSETS,
+    # Without this, Dash rewrites document.title to "Updating..." while any
+    # callback is in flight -- including the clientside one that fires every
+    # 100ms from video-cursor-interval, which flickers the tab title during
+    # video playback.
+    update_title=None,
 )
 
 # Bootstrap 5.3's "subtle"/"-emphasis" color tokens (used by dbc.Alert, dbc.Badge,

@@ -3,7 +3,10 @@ window._videoSync = {
     // merging with (not replacing) any other shapes already on the figure --
     // e.g. Genie anomaly markers added server-side via fig.add_vline.
     setCursor: function(gdId, xValue) {
-        var gd = document.getElementById(gdId);
+        // dcc.Graph(id=gdId) is an outer wrapper div -- the element Plotly.js
+        // actually instruments (.data/.layout, target of Plotly.relayout) is
+        // the nested ".js-plotly-plot" div.
+        var gd = document.querySelector("#" + gdId + " .js-plotly-plot");
         if (!gd || !gd.layout) return;
         var shapes = (gd.layout.shapes || []).filter(function(s) { return s.name !== '_video_cursor'; });
         if (xValue !== null && xValue !== undefined) {

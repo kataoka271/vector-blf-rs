@@ -162,7 +162,13 @@ app.layout = dbc.Container(
         html.Div(id="video-cursor-sink", style={"display": "none"}),
         html.Div(id="video-listener-sink", style={"display": "none"}),
         html.Div(id="color-mode-sink", style={"display": "none"}),
-        dcc.Interval(id="filename-debounce-interval", interval=600, n_intervals=0, disabled=True),
+        # max_intervals=1 caps this at exactly one fire per debounce cycle -- without
+        # it, a slow SQL round-trip (filter_signals_by_file re-disabling this after
+        # the query returns) leaves the 600ms tick free to fire again in the
+        # meantime, re-querying blf_gold_signals/blf_signal_catalog repeatedly until
+        # the response finally lands. The clientside callback below resets
+        # n_intervals to 0 on every filename-filter change so it can fire again.
+        dcc.Interval(id="filename-debounce-interval", interval=600, n_intervals=0, max_intervals=1, disabled=True),
         dcc.Interval(id="video-cursor-interval", interval=100, n_intervals=0, disabled=True),
         dcc.Download(id="dl-perfetto"),
         dbc.Toast(

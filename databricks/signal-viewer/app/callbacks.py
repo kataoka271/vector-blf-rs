@@ -171,9 +171,10 @@ app.clientside_callback(
 
 
 app.clientside_callback(
-    "function(v) { return [v, false]; }",
+    "function(v) { return [v, false, 0]; }",
     Output("filename-pending-store", "data"),
     Output("filename-debounce-interval", "disabled"),
+    Output("filename-debounce-interval", "n_intervals"),
     Input("filename-filter", "value"),
     prevent_initial_call=True,
 )

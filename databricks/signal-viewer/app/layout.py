@@ -160,6 +160,7 @@ app.layout = dbc.Container(
         dcc.Store(id="video-meta-store"),
         dcc.Store(id="video-seek-store"),
         html.Div(id="video-cursor-sink", style={"display": "none"}),
+        html.Div(id="video-listener-sink", style={"display": "none"}),
         html.Div(id="color-mode-sink", style={"display": "none"}),
         dcc.Interval(id="filename-debounce-interval", interval=600, n_intervals=0, disabled=True),
         dcc.Interval(id="video-cursor-interval", interval=100, n_intervals=0, disabled=True),

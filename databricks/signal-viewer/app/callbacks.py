@@ -788,7 +788,35 @@ def update_video_panel(cache_data, filenames, time_store):
 
     src = f"/video-proxy?file={quote(filenames[0])}"
     meta = {"t_min": time_store["min"], "t0": time_store.get("t0")}
-    return src, {}, False, meta
+    # Loading a new src always resets the <video> to paused (no autoplay); the
+    # play/pause/ended listener wired up below re-enables the interval once
+    # the user actually starts playback.
+    return src, {}, True, meta
+
+
+# video-player is a static element always present in the DOM (video-section is
+# only ever hidden via style, never unmounted), so listeners are attached once
+# at page load rather than re-attached on every src change. video-cursor-interval
+# should only tick while the video is actually advancing -- driving it off
+# play/pause/ended keeps the cursor synced without polling while paused/stopped.
+app.clientside_callback(
+    """
+    function(_pathname) {
+        var videoEl = document.getElementById('video-player');
+        if (!videoEl || videoEl._videoSyncBound) return '';
+        videoEl._videoSyncBound = true;
+        function setIntervalDisabled(disabled) {
+            window.dash_clientside.set_props('video-cursor-interval', { disabled: disabled });
+        }
+        videoEl.addEventListener('play', function() { setIntervalDisabled(false); });
+        videoEl.addEventListener('pause', function() { setIntervalDisabled(true); });
+        videoEl.addEventListener('ended', function() { setIntervalDisabled(true); });
+        return '';
+    }
+    """,
+    Output("video-listener-sink", "children"),
+    Input("url", "pathname"),
+)
 
 
 @callback(

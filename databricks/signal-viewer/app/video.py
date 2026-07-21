@@ -13,7 +13,7 @@ import traceback
 import flask
 
 from ._dash import app
-from .config import _LOCAL_DEV, USE_USER_TOKEN, cfg
+from .config import _LOCAL_DEV, cfg
 from .db import _fetch_video_for_file
 
 _CACHE_DIR = os.path.join(tempfile.gettempdir(), "blf-video-cache")
@@ -28,9 +28,12 @@ def _cache_path(video_path: str, mtime: str | None) -> str:
 def _download_to_cache(video_path: str, local_path: str) -> None:
     from databricks.sdk import WorkspaceClient
 
-    user_token = flask.request.headers.get("X-Forwarded-Access-Token") if USE_USER_TOKEN else None
+    # Uses the app's own service principal, not the viewer's OBO token: the SP has a
+    # scoped READ_VOLUME grant on exactly this volume (signal_viewer.app.yml), whereas
+    # granting the OBO token enough scope for Files API volume downloads currently
+    # requires the broad "all-apis" user_api_scope.
     assert cfg is not None, "Databricks config is not initialized."
-    w = WorkspaceClient(host=cfg.host, token=user_token) if user_token else WorkspaceClient(config=cfg)
+    w = WorkspaceClient(config=cfg)
 
     os.makedirs(_CACHE_DIR, exist_ok=True)
     tmp_path = local_path + ".part"

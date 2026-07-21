@@ -290,7 +290,7 @@ def _fetch_video_for_file(filename: str) -> dict | None:
     try:
         stmt = (
             f"SELECT _video_path, _video_mtime FROM {_VIDEO_FILES_TABLE}"
-            r" WHERE _video_stem = regexp_extract(?, '([^/]+)\.[^./]+$', 1) LIMIT 1"
+            r" WHERE _video_stem = regexp_extract(?, '([^/]+)[.][^./]+$', 1) LIMIT 1"
         )
         df = _query(stmt, [filename])
         if df.empty:

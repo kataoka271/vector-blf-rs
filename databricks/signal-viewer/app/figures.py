@@ -554,6 +554,10 @@ def render_chart_and_grid(
             chart_msg = "No data for selected signals."
             chart_fig = _empty_fig(chart_msg, dark=dark)
             row_data = []
+    elif not chart_only:
+        # All signals removed (e.g. via signal-tags) -- reset the chart instead of
+        # leaving the last-plotted figure on screen with no message/grid to match.
+        chart_fig = _empty_fig("Select signals and click Plot", dark=dark)
 
     if not chart_only and lat_key and lon_key and "timestamp_ns" in df_all.columns:
         lat_sub = _lookup_key(groups, lat_key)

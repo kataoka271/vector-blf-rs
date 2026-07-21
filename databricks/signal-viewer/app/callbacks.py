@@ -219,6 +219,9 @@ app.clientside_callback(
     State("filename-pending-store", "data"),
     State("signal-search-cache", "data"),
     prevent_initial_call=True,
+    running=[
+        (Output("signal-search-loading", "data"), True, False),
+    ],
 )
 def search_signals_server(search_value, _all_signals, filenames, prev_cache):
     """Search signals server-side so results aren't limited to the ~500-row browse cache.

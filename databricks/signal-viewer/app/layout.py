@@ -157,7 +157,6 @@ app.layout = dbc.Container(
         dcc.Store(id="time-range-store"),
         dcc.Store(id="filenames-cache"),
         dcc.Store(id="filename-pending-store"),
-        dcc.Store(id="signal-search-cache"),
         dcc.Store(id="video-meta-store"),
         dcc.Store(id="video-seek-store"),
         html.Div(id="video-cursor-sink", style={"display": "none"}),
@@ -342,9 +341,12 @@ app.layout = dbc.Container(
                                             target_components={
                                                 "all-signals-cache": "data",
                                                 "signal-search-cache": "data",
+                                                "signal-search-loading": "data",
                                             },
                                             children=[
                                                 dcc.Store(id="all-signals-cache"),
+                                                dcc.Store(id="signal-search-cache"),
+                                                dcc.Store(id="signal-search-loading"),
                                                 html.Div(
                                                     [
                                                         dbc.Checklist(

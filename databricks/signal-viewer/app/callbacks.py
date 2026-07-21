@@ -773,18 +773,24 @@ app.clientside_callback(
     Output("video-cursor-interval", "disabled"),
     Output("video-meta-store", "data"),
     Input("signal-data-cache", "data"),
+    Input("signal-select", "value"),
     State("filename-filter", "value"),
     State("time-range-store", "data"),
     prevent_initial_call=True,
 )
-def update_video_panel(cache_data, filenames, time_store):
+def update_video_panel(cache_data, selected, filenames, time_store):
     hidden = {"display": "none"}
-    if cache_data is None or not filenames or len(filenames) != 1 or time_store is None:
-        return dash.no_update, hidden, True, None
+    # Clearing src (not just hiding via style) actually stops playback/download --
+    # otherwise the <video> element keeps running in the background behind the
+    # hidden panel. selected is checked so that clearing every signal tag (which
+    # resets the chart via redraw_chart without touching signal-data-cache) also
+    # tears down the now-orphaned video instead of leaving it playing.
+    if not selected or cache_data is None or not filenames or len(filenames) != 1 or time_store is None:
+        return None, hidden, True, None
 
     info = _fetch_video_for_file(filenames[0])
     if info is None:
-        return dash.no_update, hidden, True, None
+        return None, hidden, True, None
 
     src = f"/video-proxy?file={quote(filenames[0])}"
     meta = {"t_min": time_store["min"], "t0": time_store.get("t0")}

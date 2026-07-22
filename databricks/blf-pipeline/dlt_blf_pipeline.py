@@ -306,6 +306,18 @@ if ENUM_SIGNALS_TABLE:
     ENUM_SIGNALS_PATH = _enum_csv
 
 
+# Container CAN IDs, loaded once on the driver at pipeline-definition time (not
+# per executor/row). Lets blf_silver_can_container_pdus filter out the vast
+# majority of non-container CAN traffic with a native Spark isin(...) before
+# it ever reaches the per-row demux pandas_udf, instead of paying Arrow
+# serialization + a Python for-loop for every CAN message just to discard it.
+CONTAINER_CAN_IDS: list = []
+if SIGNALS_PATH:
+    import vector_blf as _vector_blf
+
+    CONTAINER_CAN_IDS = _vector_blf.CanSignalDb(SIGNALS_PATH).container_can_ids()
+
+
 # ── parsing worker (mapInPandas) ──────────────────────────────────────────────
 
 
@@ -724,6 +736,11 @@ def _decode_pdu_signals(
 def blf_silver_can_container_pdus():
     return (
         dlt.read_stream("blf_silver_can")
+        # Drop non-container CAN traffic natively before it reaches the
+        # per-row demux UDF -- container CAN IDs are typically a small
+        # fraction of total CAN traffic, so this avoids Arrow-serializing
+        # `data` and running a Python for-loop over the rest.
+        .filter(F.col("can_id").isin(CONTAINER_CAN_IDS))
         .withColumn(
             "_pdus",
             _extract_container_pdus(

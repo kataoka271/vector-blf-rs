@@ -126,6 +126,15 @@ class CanSignalDb:
         """Return True if message_id is configured as a CAN-FD container frame."""
         ...
 
+    def container_can_ids(self) -> List[int]:
+        """Return all CAN IDs configured as container frames, sorted ascending.
+
+        Intended for pushing an isin(...) filter down onto the calling
+        DataFrame before invoking a per-row decode/demux UDF, so rows that
+        are not container frames never cross the Arrow/Python boundary.
+        """
+        ...
+
     def decode(self, message_id: int, data: bytes) -> List[Tuple[str, float, Optional[str]]]:
         """Decode all matching signals for message_id from data.
 

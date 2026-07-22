@@ -612,6 +612,15 @@ impl CanSignalDb {
         self.inner.is_container(message_id)
     }
 
+    /// All CAN IDs configured as container frames, sorted ascending.
+    ///
+    /// Intended for pushing an ``isin(...)`` filter down onto the calling
+    /// DataFrame before invoking a per-row decode/demux UDF, so rows that
+    /// are not container frames never cross the Arrow/Python boundary.
+    fn container_can_ids(&self) -> Vec<u32> {
+        self.inner.container_can_ids()
+    }
+
     /// Demultiplex a CAN-FD container frame and decode all signals from the contained I-PDUs.
     ///
     /// ``data`` is the raw CAN frame payload. ``long_header`` selects between

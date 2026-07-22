@@ -355,6 +355,18 @@ impl CanSignalDb {
         self.containers.contains_key(&can_id)
     }
 
+    /// All CAN IDs configured as container frames, sorted ascending.
+    ///
+    /// Lets callers push down an `is_container` filter (e.g. a Spark
+    /// `isin(...)` predicate) before invoking a per-row decode/demux path,
+    /// instead of running that path over every CAN ID and discarding
+    /// non-container rows afterward.
+    pub fn container_can_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.containers.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// Signal definitions for a specific container (can_id, pdu_id).
     pub fn container_signals(&self, can_id: u32, pdu_id: u32) -> &[SignalDef] {
         self.containers
@@ -1500,6 +1512,16 @@ service_id,method_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_s
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn container_can_ids_lists_only_container_frames_sorted() {
+        let csv = "message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset,pdu_id\n\
+                   0x100,Direct,0,0,8,Intel,false,1.0,0.0\n\
+                   0x300,Contained,0,0,8,Intel,false,1.0,0.0,0x01\n\
+                   0x200,Contained,0,0,8,Intel,false,1.0,0.0,0x02\n";
+        let db = CanSignalDb::from_csv(csv.as_bytes()).unwrap();
+        assert_eq!(db.container_can_ids(), vec![0x200, 0x300]);
     }
 
     #[test]

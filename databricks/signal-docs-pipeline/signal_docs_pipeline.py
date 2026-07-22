@@ -20,7 +20,7 @@ Layer layout
 Setup
 -----
 Set pipeline parameters (Edit -> Advanced -> Parameters):
-    blf.signal_docs_path        /Volumes/mycat/myschema/signals/docs   (required)
+    blf.signal_docs_path        /Volumes/mycat/myschema/docs           (required)
     blf.semantic_model_endpoint databricks-claude-3-7-sonnet           (optional)
 
 blf.signal_docs_path points at a Volume directory of PDF/DOCX/PPTX/XLSX
@@ -182,7 +182,7 @@ def _parse_doc_batch(iterator):
     comment=(
         "Text sections extracted from signal documentation files (PDF "
         "pages, DOCX whole-document, PPTX slides, XLSX sheets) uploaded "
-        "to the signals/docs Volume path. Search this table (e.g. WHERE "
+        "to the docs Volume path. Search this table (e.g. WHERE "
         "text LIKE '%term%') to ground Genie Space questions about "
         "signal meaning that aren't obvious from signal_name alone in "
         "blf_gold_signals / blf_signal_catalog (produced by the separate "

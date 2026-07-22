@@ -176,7 +176,7 @@ The `blf_ingestion` pipeline reads `*.blf` files from a Unity Catalog Volume (se
 | `main.blf_dev.raw` | `/Volumes/main/blf_dev/raw/` | Source `*.blf` files (Auto Loader input) |
 | `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/can_signals.csv` | CAN signal definitions CSV |
 | `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/someip_signals.csv` | SOME/IP signal definitions CSV |
-| `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/docs/*.{pdf,docx,pptx,xlsx}` | Signal documentation files (Auto Loader input for `blf_signal_doc_sections`) |
+| `main.blf_dev.docs` | `/Volumes/main/blf_dev/docs/*.{pdf,docx,pptx,xlsx}` | Signal documentation files (Auto Loader input for `blf_signal_doc_sections`) |
 | `main.blf_dev.video` | `/Volumes/main/blf_dev/video/*.{mp4,webm,mov}` | Video files (Auto Loader input for `blf_video_files`); matched to a BLF file by filename stem |
 
 **Cross-compilation note:** Databricks Serverless runs Linux ARM64 (`aarch64`). `build_wheel.sh` uses Docker + zig to cross-compile from Windows/macOS without a Linux machine.

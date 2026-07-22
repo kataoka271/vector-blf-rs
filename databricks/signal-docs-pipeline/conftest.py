@@ -51,7 +51,7 @@ def _install_spark_builtin() -> None:
     """Inject a mock `spark` into builtins — the DLT runtime provides this automatically."""
     mock_spark = MagicMock()
     mock_spark.conf.get.side_effect = lambda key, default="": {
-        "blf.signal_docs_path": "/Volumes/test/blf/signals/docs",
+        "blf.signal_docs_path": "/Volumes/test/blf/docs",
     }.get(key, default)
     builtins.spark = mock_spark  # type: ignore[attr-defined]
 

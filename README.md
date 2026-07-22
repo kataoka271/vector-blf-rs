@@ -314,7 +314,7 @@ Real-world signal documentation (OEM CAN matrix / interface control documents, S
 
 | Parameter | Default | Description |
 |---|---|---|
-| `blf.signal_docs_path` | `/Volumes/.../signals/docs` | Volume directory of PDF/DOCX/PPTX/XLSX signal documentation files; extracted into `blf_signal_doc_sections` |
+| `blf.signal_docs_path` | `/Volumes/.../docs` | Volume directory of PDF/DOCX/PPTX/XLSX signal documentation files; extracted into `blf_signal_doc_sections` |
 | `blf.semantic_model_endpoint` | `""` | Model Serving endpoint name; when set, adds an `ai_query()`-derived `semantic_summary` column to `blf_signal_doc_sections` (optional) |
 
 `blf.signal_docs_path` points at a Volume directory that Auto Loader watches for `*.pdf`, `*.docx`, `*.pptx`, and `*.xlsx` files; each is broken into `blf_signal_doc_sections` rows:
@@ -329,7 +329,7 @@ One row per PDF page, PPTX slide, or XLSX sheet; DOCX has no fixed page boundary
 Upload documentation files the same way as signal CSVs:
 
 ```bash
-databricks fs cp your_can_matrix.pdf dbfs:/Volumes/main/blf_dev/signals/docs/your_can_matrix.pdf --overwrite
+databricks fs cp your_can_matrix.pdf dbfs:/Volumes/main/blf_dev/docs/your_can_matrix.pdf --overwrite
 databricks bundle run signal_docs   # triggered pipeline -- doesn't run automatically
 ```
 

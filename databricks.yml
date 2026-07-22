@@ -142,7 +142,7 @@ variables:
       sheet) becomes a row in blf_signal_doc_sections for Genie Space to
       search when grounding natural-language questions about signal
       meaning.
-    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/docs
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/docs
 
   semantic_model_endpoint:
     description: >

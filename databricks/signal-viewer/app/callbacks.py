@@ -847,7 +847,7 @@ def seek_video_from_chart_click(click_data, meta, offset):
         video_seconds = (t1 - t0).total_seconds() - offset
     else:
         video_seconds = (float(x) - meta["t_min"]) - offset
-    return {"seconds": max(0.0, video_seconds)}
+    return {"seconds": max(0.0, video_seconds), "x": x}
 
 
 app.clientside_callback(
@@ -856,6 +856,11 @@ app.clientside_callback(
         if (!seek) return window.dash_clientside.no_update;
         var videoEl = document.getElementById('video-player');
         if (videoEl) { videoEl.currentTime = Math.max(0, seek.seconds); }
+        // Draw the cursor at the clicked position immediately -- the
+        // interval-driven callback below only updates it once the video
+        // is playing (n_intervals ticks), which left a stale/no cursor
+        // right after a click-to-seek while paused.
+        if (seek.x !== undefined) { window._videoSync.setCursor('chart', seek.x); }
         return window.dash_clientside.no_update;
     }
     """,

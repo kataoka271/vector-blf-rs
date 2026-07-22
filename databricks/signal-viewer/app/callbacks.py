@@ -841,7 +841,9 @@ def seek_video_from_chart_click(click_data, meta, offset):
         return dash.no_update
     offset = float(offset or 0)
     if meta.get("t0"):
-        video_seconds = (pd.Timestamp(x) - pd.Timestamp(meta["t0"])).total_seconds() - offset
+        t0 = pd.Timestamp(meta["t0"]).replace(tzinfo=None)
+        t1 = pd.Timestamp(x)
+        video_seconds = (t1 - t0).total_seconds() - offset
     else:
         video_seconds = (float(x) - meta["t_min"]) - offset
     return {"seconds": max(0.0, video_seconds)}

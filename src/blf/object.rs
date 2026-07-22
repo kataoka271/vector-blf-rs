@@ -7,7 +7,7 @@ const LOGG: &[u8] = b"LOGG";
 const LOBJ: &[u8] = b"LOBJ";
 const FILE_HEADER_SIZE: u32 = 144;
 const VALID_FILE_HEADER_SIZE: u32 = 72;
-const TIME_TEN_MICS: u32 = 2;
+const TIME_TEN_MICS: u32 = 1;
 
 #[derive(Debug)]
 pub struct FileHeader {
@@ -183,7 +183,7 @@ impl<W: Write> Encoder<W> for ObjectHeaderV1 {
                 TIME_TEN_MICS.encode(&mut w)?; // flags
                 0u16.encode(&mut w)?;
                 0u16.encode(&mut w)?;
-                us.encode(&mut w)?;
+                (us / 10).encode(&mut w)?;
             }
         }
         Ok(())
@@ -199,7 +199,7 @@ impl<R: Read> Decoder<R> for ObjectHeaderV1 {
         u16::decode(&mut r)?; // object version
         let timestamp = u64::decode(&mut r)?;
         let timestamp = if flags == TIME_TEN_MICS {
-            Timestamp::Microsecond(timestamp)
+            Timestamp::Microsecond(timestamp * 10)
         } else {
             Timestamp::Nanosecond(timestamp)
         };
@@ -228,7 +228,7 @@ impl<W: Write> Encoder<W> for ObjectHeaderV2 {
                 0u8.encode(&mut w)?;
                 0u8.encode(&mut w)?;
                 0u16.encode(&mut w)?;
-                us.encode(&mut w)?;
+                (us / 10).encode(&mut w)?;
                 0u64.encode(&mut w)?;
             }
         }
@@ -247,7 +247,7 @@ impl<R: Read> Decoder<R> for ObjectHeaderV2 {
         let timestamp = u64::decode(&mut r)?;
         u64::decode(&mut r)?; // original timestamp
         let timestamp = if flags == TIME_TEN_MICS {
-            Timestamp::Microsecond(timestamp)
+            Timestamp::Microsecond(timestamp * 10)
         } else {
             Timestamp::Nanosecond(timestamp)
         };

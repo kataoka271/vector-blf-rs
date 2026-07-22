@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from pandas.core.groupby import DataFrameGroupBy
 
-from .config import _parse_key
+from .config import _parse_key, _to_utc_naive
 
 # ---------------------------------------------------------------------------
 # Theme
@@ -432,7 +432,8 @@ def build_anomaly_vlines(
     use_datetime = pd.api.types.is_datetime64_any_dtype(first_x)
     t0_iso = (time_store or {}).get("t0")
     t_min = float((time_store or {}).get("min", 0))
-    t0 = pd.Timestamp(t0_iso) if t0_iso else None
+    t0_raw = pd.Timestamp(t0_iso) if t0_iso else None
+    t0 = _to_utc_naive(t0_raw) if isinstance(t0_raw, pd.Timestamp) else None
     result: _Anomalies = []
     for anom in anomalies_raw:
         try:

@@ -123,7 +123,7 @@ impl<W: Write> Encoder<W> for Timestamp {
         (tm.hour() as u16).encode(&mut w)?;
         (tm.minute() as u16).encode(&mut w)?;
         (tm.second() as u16).encode(&mut w)?;
-        ((tm.nanosecond() / 1000) as u16).encode(&mut w)?;
+        ((tm.nanosecond() / 1_000_000) as u16).encode(&mut w)?;
         Ok(())
     }
 }
@@ -151,6 +151,23 @@ impl<R: Read> Decoder<R> for Timestamp {
                 Ok(Timestamp::Nanosecond(ns as u64))
             }
             LocalResult::Ambiguous(_, _) => Ok(Timestamp::Nanosecond(0)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_systemtime_roundtrip_preserves_milliseconds() {
+        let ns = 1_700_000_000_000_000_000u64 + 123_000_000; // +123 ms
+        let mut buf = Vec::new();
+        Timestamp::Nanosecond(ns).encode(&mut buf).unwrap();
+        let decoded = Timestamp::decode(&buf[..]).unwrap();
+        match decoded {
+            Timestamp::Nanosecond(decoded_ns) => assert_eq!(decoded_ns, ns),
+            other => panic!("expected Nanosecond, got {other:?}"),
         }
     }
 }

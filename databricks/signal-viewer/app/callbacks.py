@@ -13,7 +13,7 @@ from dash import ALL, Input, Output, State, callback, dcc, html
 
 from . import cache
 from ._dash import app
-from .config import _LOCAL_DEV, GENIE_SPACE_ID, _parse_key
+from .config import _LOCAL_DEV, GENIE_SPACE_ID, _parse_key, _to_utc_naive
 from .db import (
     _fetch_all_channels,
     _fetch_all_signals,
@@ -840,8 +840,9 @@ def seek_video_from_chart_click(click_data, meta, offset):
     if x is None:
         return dash.no_update
     offset = float(offset or 0)
-    if meta.get("t0"):
-        t0 = pd.Timestamp(meta["t0"]).replace(tzinfo=None)
+    t0_raw = pd.Timestamp(meta["t0"]) if meta.get("t0") else None
+    if isinstance(t0_raw, pd.Timestamp):
+        t0 = _to_utc_naive(t0_raw)
         t1 = pd.Timestamp(x)
         video_seconds = (t1 - t0).total_seconds() - offset
     else:

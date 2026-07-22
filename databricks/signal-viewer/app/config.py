@@ -3,6 +3,8 @@
 import os
 import re
 
+import pandas as pd
+
 _LOCAL_DEV = not os.getenv("DATABRICKS_WAREHOUSE_ID")
 
 USE_USER_TOKEN = True  # Set to False to use Service Principal credentials instead of user token
@@ -43,3 +45,18 @@ def _parse_key(key: str) -> tuple[str, int, str]:
     prefix, name = key.split("::", 1)
     print(f"[_parse_key] key {key!r} has no numeric channel; defaulting to 0", flush=True)
     return prefix, 0, name
+
+
+def _to_utc_naive(ts: pd.Timestamp) -> pd.Timestamp:
+    """Normalize a Timestamp to the tz-naive UTC instant it represents.
+
+    A `t0` sourced from a SQL timestamp column may carry tzinfo (e.g. a
+    non-UTC session timezone), while chart x-values and other derived
+    timestamps are tz-naive UTC (figures._plot_x converts tz-aware trace
+    data to UTC before dropping tz for Plotly). Comparing/subtracting a
+    non-UTC-offset t0 against those without this conversion silently
+    shifts results by the offset instead of just failing loudly.
+    """
+    if ts.tzinfo is not None:
+        return ts.tz_convert("UTC").tz_localize(None)
+    return ts

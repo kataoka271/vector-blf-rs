@@ -17,10 +17,7 @@ _needs_doc_libs = pytest.mark.skipif(
 
 
 def test_local_path_dbfs_volume_prefix():
-    assert (
-        pipeline._local_path("dbfs:/Volumes/main/blf_dev/docs/x.pdf")
-        == "/Volumes/main/blf_dev/docs/x.pdf"
-    )
+    assert pipeline._local_path("dbfs:/Volumes/main/blf_dev/docs/x.pdf") == "/Volumes/main/blf_dev/docs/x.pdf"
 
 
 def test_local_path_legacy_dbfs():
@@ -28,9 +25,7 @@ def test_local_path_legacy_dbfs():
 
 
 def test_local_path_already_local():
-    assert (
-        pipeline._local_path("/Volumes/main/blf_dev/docs/x.pdf") == "/Volumes/main/blf_dev/docs/x.pdf"
-    )
+    assert pipeline._local_path("/Volumes/main/blf_dev/docs/x.pdf") == "/Volumes/main/blf_dev/docs/x.pdf"
 
 
 def test_local_path_plain():

@@ -1,8 +1,20 @@
-/* Floating, draggable video panel (video-section). Positioning/size lives
- * here in CSS so the Python-side style Output can keep touching only
- * "display" without clobbering JS-driven left/top or the minimized class. */
+/* Video panel (video-section), switchable between two modes via a
+ * .video-floating / .video-docked modifier class (toggled by video-float.js):
+ *   - floating: position: fixed, draggable, overlays the scrolling content.
+ *   - docked: normal in-flow block, sits inline between the chart and the
+ *     grid table like the original (pre-floating) layout.
+ * Positioning/size lives here in CSS so the Python-side style Output can
+ * keep touching only "display" without clobbering JS-driven left/top or the
+ * floating/docked/minimized classes. */
 
 .video-float-panel {
+  background-color: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.video-float-panel.video-floating {
   position: fixed;
   top: 80px;
   right: 20px;
@@ -10,22 +22,28 @@
   /* Above the Genie dbc.Offcanvas's default (~1045) so it's never trapped
      behind the chat panel; below replot-toast (9999), which is transient. */
   z-index: 1060;
-  background-color: var(--bs-secondary-bg);
-  border: 1px solid var(--bs-border-color);
-  border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  overflow: hidden;
+}
+
+.video-float-panel.video-docked {
+  position: static;
+  width: auto;
+  margin: 0 16px 16px;
 }
 
 .video-float-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   padding: 6px 10px;
   background-color: var(--bs-tertiary-bg);
   border-bottom: 1px solid var(--bs-border-color);
-  cursor: move;
   user-select: none;
+}
+
+.video-floating .video-float-header {
+  cursor: move;
   touch-action: none;
 }
 
@@ -33,8 +51,10 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--bs-body-color);
+  flex: 1;
 }
 
+.video-float-dock-btn,
 .video-float-minimize-btn {
   cursor: pointer;
   font-size: 13px;
@@ -44,6 +64,7 @@
   color: var(--bs-secondary-color);
 }
 
+.video-float-dock-btn:hover,
 .video-float-minimize-btn:hover {
   background-color: var(--bs-border-color);
 }
@@ -61,4 +82,8 @@
   width: 100%;
   max-height: 220px;
   background-color: #000;
+}
+
+.video-docked .video-float-video {
+  max-height: 480px;
 }

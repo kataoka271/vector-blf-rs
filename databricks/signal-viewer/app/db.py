@@ -228,6 +228,49 @@ def _fetch_signals_by_search(
         return [], False
 
 
+# Common name fragments for GPS position signals, used to pre-seed the Lat/Lon
+# pickers with likely candidates regardless of where they'd otherwise fall in
+# the (per-source-capped) browse cache -- see _fetch_all_signals.
+_LATLON_KEYWORDS = ["lat", "lon", "latitude", "longitude", "gps"]
+
+
+def _fetch_latlon_candidates(filenames: list[str] | None = None, limit: int = 100) -> list[dict] | None:
+    """Fetch signals matching common GPS lat/lon keywords, capped per signal_source."""
+    try:
+        or_clause = " OR ".join(["LOWER(signal_name) LIKE ?"] * len(_LATLON_KEYWORDS))
+        like_params = [f"%{kw}%" for kw in _LATLON_KEYWORDS]
+        per_source_limit = max(1, limit // 3)
+        if filenames:
+            placeholders = ", ".join(["?"] * len(filenames))
+            stmt = (
+                f"SELECT signal_name, signal_source, channel FROM ("
+                f"  SELECT signal_name, signal_source, channel,"
+                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
+                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                f"        WHERE _source_file IN ({placeholders}) AND ({or_clause}))"
+                f") WHERE rn <= {per_source_limit}"
+                f" ORDER BY signal_source, channel, signal_name"
+            )
+            params: list = [*filenames, *like_params]
+        else:
+            stmt = (
+                f"SELECT signal_name, signal_source, channel FROM ("
+                f"  SELECT signal_name, signal_source, channel,"
+                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
+                f"  FROM {_CATALOG_TABLE} WHERE {or_clause}"
+                f") WHERE rn <= {per_source_limit}"
+                f" ORDER BY signal_source, channel, signal_name"
+            )
+            params = like_params
+        df = _query(stmt, params)
+        rows = df.to_dict("records")
+        print(f"[_fetch_latlon_candidates] -> {len(rows)} row(s)", flush=True)
+        return rows
+    except Exception as exc:
+        print(f"[_fetch_latlon_candidates] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return None
+
+
 def _fetch_global_time_range() -> dict | None:
     try:
         df = _query(f"SELECT t_min, t_max, t0 FROM {_TIME_RANGE_TABLE}")

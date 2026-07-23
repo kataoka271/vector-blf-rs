@@ -156,6 +156,7 @@ app.layout = dbc.Container(
         dcc.Store(id="genie-flagged-signals-store"),
         dcc.Store(id="genie-history-store"),
         dcc.Store(id="all-channels-cache"),
+        dcc.Store(id="latlon-candidates-cache"),
         dcc.Store(id="signal-data-cache"),
         dcc.Store(id="session-id-store"),  # opaque per-tab id keying the server-side fetched-data cache
         dcc.Store(id="time-range-store"),

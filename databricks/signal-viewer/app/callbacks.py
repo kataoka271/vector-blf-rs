@@ -19,6 +19,7 @@ from .db import (
     _fetch_all_signals,
     _fetch_filenames,
     _fetch_global_time_range,
+    _fetch_latlon_candidates,
     _fetch_signals_by_search,
     _fetch_video_for_file,
     _log_token_info,
@@ -130,6 +131,7 @@ app.clientside_callback(
     Output("time-range-store", "data"),
     Output("filenames-cache", "data"),
     Output("session-id-store", "data"),
+    Output("latlon-candidates-cache", "data"),
     Input("url", "pathname"),
 )
 def prefetch_signals(_):
@@ -139,6 +141,7 @@ def prefetch_signals(_):
         _fetch_global_time_range(),
         _fetch_filenames(),
         _uuid.uuid4().hex,
+        _fetch_latlon_candidates(),
     )
 
 
@@ -148,11 +151,19 @@ def prefetch_signals(_):
     Output("time-range-store", "data", allow_duplicate=True),
     Output("filenames-cache", "data", allow_duplicate=True),
     Output("filename-debounce-interval", "disabled", allow_duplicate=True),
+    Output("latlon-candidates-cache", "data", allow_duplicate=True),
     Input("refresh-signals-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def refresh_signal_cache(_):
-    return _fetch_all_signals(), _fetch_all_channels(), _fetch_global_time_range(), _fetch_filenames(), True
+    return (
+        _fetch_all_signals(),
+        _fetch_all_channels(),
+        _fetch_global_time_range(),
+        _fetch_filenames(),
+        True,
+        _fetch_latlon_candidates(),
+    )
 
 
 app.clientside_callback(
@@ -184,13 +195,14 @@ app.clientside_callback(
     Output("all-signals-cache", "data", allow_duplicate=True),
     Output("all-channels-cache", "data", allow_duplicate=True),
     Output("filename-debounce-interval", "disabled", allow_duplicate=True),
+    Output("latlon-candidates-cache", "data", allow_duplicate=True),
     Input("filename-debounce-interval", "n_intervals"),
     State("filename-pending-store", "data"),
     prevent_initial_call=True,
 )
 def filter_signals_by_file(_, filenames):
     scope = filenames or None
-    return _fetch_all_signals(scope), _fetch_all_channels(scope), True
+    return _fetch_all_signals(scope), _fetch_all_channels(scope), True, _fetch_latlon_candidates(scope)
 
 
 app.clientside_callback(
@@ -255,13 +267,14 @@ def search_signals_server(search_value, _all_signals, filenames, prev_cache):
 # Inputs: source-filter (selected sources), all-signals-cache (browse cache,
 #   capped ~500 rows), signal-search (keyword), channel-filter (selected
 #   channels), signal-search-cache (server-side search results, may cover
-#   more rows than the browse cache), signal-select.value (State, current
-#   selection to preserve/prune).
+#   more rows than the browse cache), latlon-candidates-cache (server-side
+#   pre-seeded GPS lat/lon keyword matches, see _fetch_latlon_candidates),
+#   signal-select.value (State, current selection to preserve/prune).
 # Outputs: signal-select.options/.value, avail-msg.children (status text),
 #   lat-signal.options, lon-signal.options.
 app.clientside_callback(
     """
-    function(sources, cache, search, channels, searchCache, currentValue) {
+    function(sources, cache, search, channels, searchCache, latlonCandidates, currentValue) {
         var no_update = window.dash_clientside.no_update;
         var NORMAL_STYLE = {fontSize: "12px", color: "var(--bs-body-color)", minHeight: "16px"};
         var WARN_STYLE = {fontSize: "12px", color: "var(--bs-danger)", minHeight: "16px", fontWeight: "600"};
@@ -357,8 +370,46 @@ app.clientside_callback(
         }
         var statusMsg = allOpts.length + " signal(s) available." + suffix;
 
+        // Cap per source (not the flat total) so a GPS lat/lon signal on a
+        // source that sorts later (e.g. SOMEIP) isn't starved out by an
+        // earlier source (e.g. CAN) filling the whole budget -- same
+        // rationale as the per-source cap in _fetch_all_signals. Keyword-
+        // matched candidates (see _fetch_latlon_candidates) are folded in
+        // first and exempted from the cap, so a GPS signal always shows up
+        // even if it would otherwise be truncated within its own source.
         var LAT_LON_MAX = 200;
-        var latLonOpts = allOpts.length > LAT_LON_MAX ? allOpts.slice(0, LAT_LON_MAX) : allOpts;
+        var presentSources = new Set(byChannel.map(function(r) { return r.signal_source; }));
+        var latLonPerSourceMax = Math.max(1, Math.floor(LAT_LON_MAX / Math.max(1, presentSources.size)));
+        var candidateRows = (latlonCandidates || []).filter(function(r) {
+            if (!sourceSet.has(r.signal_source)) return false;
+            if (channelSet && !channelSet.has(r.signal_source + r.channel)) return false;
+            return true;
+        });
+        var latLonCounts = {};
+        var seenKeys = {};
+        var latLonRows = [];
+        candidateRows.forEach(function(r) {
+            var key = r.signal_source + r.channel + "::" + r.signal_name;
+            if (seenKeys[key]) return;
+            seenKeys[key] = true;
+            latLonCounts[r.signal_source] = (latLonCounts[r.signal_source] || 0) + 1;
+            latLonRows.push(r);
+        });
+        byChannel.forEach(function(r) {
+            var key = r.signal_source + r.channel + "::" + r.signal_name;
+            if (seenKeys[key]) return;
+            var n = latLonCounts[r.signal_source] || 0;
+            if (n >= latLonPerSourceMax) return;
+            seenKeys[key] = true;
+            latLonCounts[r.signal_source] = n + 1;
+            latLonRows.push(r);
+        });
+        latLonRows.sort(function(a, b) {
+            if (a.signal_source !== b.signal_source) return a.signal_source < b.signal_source ? -1 : 1;
+            if (a.channel !== b.channel) return a.channel < b.channel ? -1 : 1;
+            return a.signal_name < b.signal_name ? -1 : (a.signal_name > b.signal_name ? 1 : 0);
+        });
+        var latLonOpts = latLonRows.map(toOpt);
 
         if (searchTriggered) {
             return [visibleOpts, no_update, statusMsg, NORMAL_STYLE, latLonOpts, latLonOpts, "", EMPTY_HIDDEN];
@@ -382,6 +433,7 @@ app.clientside_callback(
     Input("signal-search", "value"),
     Input("channel-filter", "value"),
     Input("signal-search-cache", "data"),
+    Input("latlon-candidates-cache", "data"),
     State("signal-select", "value"),
 )
 

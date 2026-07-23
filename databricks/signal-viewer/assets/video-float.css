@@ -1,0 +1,64 @@
+/* Floating, draggable video panel (video-section). Positioning/size lives
+ * here in CSS so the Python-side style Output can keep touching only
+ * "display" without clobbering JS-driven left/top or the minimized class. */
+
+.video-float-panel {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  width: 360px;
+  /* Above the Genie dbc.Offcanvas's default (~1045) so it's never trapped
+     behind the chat panel; below replot-toast (9999), which is transient. */
+  z-index: 1060;
+  background-color: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.video-float-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background-color: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.video-float-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bs-body-color);
+}
+
+.video-float-minimize-btn {
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 3px;
+  color: var(--bs-secondary-color);
+}
+
+.video-float-minimize-btn:hover {
+  background-color: var(--bs-border-color);
+}
+
+.video-float-body {
+  padding: 8px 10px 10px;
+}
+
+.video-float-panel.video-float-minimized .video-float-body {
+  display: none;
+}
+
+.video-float-video {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  background-color: #000;
+}

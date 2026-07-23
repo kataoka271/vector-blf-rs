@@ -183,6 +183,56 @@ app.layout = dbc.Container(
             dismissable=True,
             style={"position": "fixed", "bottom": "20px", "right": "20px", "width": "300px", "zIndex": 9999},
         ),
+        html.Div(
+            id="video-section",
+            className="video-float-panel",
+            style={"display": "none"},  # Dash/Python only ever touches "display" here
+            children=[
+                html.Div(
+                    id="video-float-header",
+                    className="video-float-header",
+                    children=[
+                        html.Span("Video", className="video-float-title"),
+                        html.Span("-", id="video-float-minimize-btn", className="video-float-minimize-btn"),
+                    ],
+                ),
+                html.Div(
+                    id="video-float-body",
+                    className="video-float-body",
+                    children=[
+                        html.Video(
+                            id="video-player",
+                            controls=True,
+                            muted=True,
+                            className="video-float-video",
+                        ),
+                        html.Div(
+                            [
+                                dbc.Label(
+                                    "Offset (s)",
+                                    size="sm",
+                                    className="text-secondary mb-0",
+                                    style={"minWidth": "70px"},
+                                ),
+                                dbc.Input(
+                                    id="video-offset-input",
+                                    type="number",
+                                    value=0,
+                                    step=0.1,
+                                    style={"width": "100px", "fontSize": "12px"},
+                                ),
+                                html.Span(
+                                    "Adjust if video and log clocks are out of sync.",
+                                    className="text-muted",
+                                    style={"fontSize": "11px", "marginLeft": "8px"},
+                                ),
+                            ],
+                            className="d-flex align-items-center gap-2 mt-2",
+                        ),
+                    ],
+                ),
+            ],
+        ),
         dbc.Row(
             className="h-100 flex-nowrap g-0",
             children=[
@@ -679,44 +729,6 @@ app.layout = dbc.Container(
                                     config={"displayModeBar": True, "scrollZoom": True},
                                     style={"padding": "0 16px 16px"},
                                 ),
-                            ),
-                        ),
-                        html.Div(
-                            id="video-section",
-                            style={"display": "none"},
-                            children=html.Div(
-                                [
-                                    html.Video(
-                                        id="video-player",
-                                        controls=True,
-                                        muted=True,
-                                        style={"width": "100%", "maxHeight": "480px", "backgroundColor": "#000"},
-                                    ),
-                                    html.Div(
-                                        [
-                                            dbc.Label(
-                                                "Offset (s)",
-                                                size="sm",
-                                                className="text-secondary mb-0",
-                                                style={"minWidth": "70px"},
-                                            ),
-                                            dbc.Input(
-                                                id="video-offset-input",
-                                                type="number",
-                                                value=0,
-                                                step=0.1,
-                                                style={"width": "100px", "fontSize": "12px"},
-                                            ),
-                                            html.Span(
-                                                "Adjust if video and log clocks are out of sync.",
-                                                className="text-muted",
-                                                style={"fontSize": "11px", "marginLeft": "8px"},
-                                            ),
-                                        ],
-                                        className="d-flex align-items-center gap-2 mt-2",
-                                    ),
-                                ],
-                                style={"padding": "0 16px 16px"},
                             ),
                         ),
                         dag.AgGrid(

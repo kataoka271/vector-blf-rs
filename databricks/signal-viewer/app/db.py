@@ -96,25 +96,51 @@ def _fetch_filenames() -> list[str] | None:
 def _fetch_all_signals(filenames: list[str] | None = None, limit: int | None = 500) -> list[dict] | None:
     """Fetch known signals, ordered by (signal_source, channel, signal_name).
 
+    `limit` caps rows per signal_source (not the total row count), via a
+    ROW_NUMBER() window partitioned by signal_source. A plain `ORDER BY
+    signal_source ... LIMIT n` would let an alphabetically-earlier source
+    with many rows (e.g. CAN) crowd out a later one (e.g. SOMEIP) entirely
+    once the true row count exceeds `limit`.
     `limit=None` fetches the full catalog uncapped.
     """
     try:
-        limit_clause = f" LIMIT {limit}" if limit is not None else ""
+        per_source_limit = max(1, limit // 3) if limit is not None else None
         if filenames:
             # File-filtered: query gold table (catalog table has no _source_file column)
             placeholders = ", ".join(["?"] * len(filenames))
-            stmt = (
-                f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
-                f" WHERE _source_file IN ({placeholders})"
-                f" ORDER BY signal_source, channel, signal_name{limit_clause}"
-            )
+            if per_source_limit is not None:
+                stmt = (
+                    f"SELECT signal_name, signal_source, channel FROM ("
+                    f"  SELECT signal_name, signal_source, channel,"
+                    f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
+                    f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                    f"        WHERE _source_file IN ({placeholders}))"
+                    f") WHERE rn <= {per_source_limit}"
+                    f" ORDER BY signal_source, channel, signal_name"
+                )
+            else:
+                stmt = (
+                    f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                    f" WHERE _source_file IN ({placeholders})"
+                    f" ORDER BY signal_source, channel, signal_name"
+                )
             params: list | None = list(filenames)
         else:
             # Unfiltered: query the pre-aggregated catalog table (fast, no gold table scan)
-            stmt = (
-                f"SELECT signal_name, signal_source, channel FROM {_CATALOG_TABLE}"
-                f" ORDER BY signal_source, channel, signal_name{limit_clause}"
-            )
+            if per_source_limit is not None:
+                stmt = (
+                    f"SELECT signal_name, signal_source, channel FROM ("
+                    f"  SELECT signal_name, signal_source, channel,"
+                    f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
+                    f"  FROM {_CATALOG_TABLE}"
+                    f") WHERE rn <= {per_source_limit}"
+                    f" ORDER BY signal_source, channel, signal_name"
+                )
+            else:
+                stmt = (
+                    f"SELECT signal_name, signal_source, channel FROM {_CATALOG_TABLE}"
+                    f" ORDER BY signal_source, channel, signal_name"
+                )
             params = None
         df = _query(stmt, params)
         print(f"[_fetch_all_signals] fetched {len(df)} signal(s)", flush=True)
@@ -153,30 +179,48 @@ def _fetch_all_channels(filenames: list[str] | None = None) -> list[dict] | None
 def _fetch_signals_by_search(
     keyword: str, filenames: list[str] | None = None, limit: int = 500
 ) -> tuple[list[dict], bool]:
-    """Search signals matching keyword server-side (not limited to the cached browse window)."""
+    """Search signals matching keyword server-side (not limited to the cached browse window).
+
+    Caps matches per signal_source (not the total), same rationale as
+    _fetch_all_signals: a keyword matching many CAN/ETH signal names must not
+    starve SOMEIP matches out of the result set via `ORDER BY signal_source
+    ... LIMIT n`.
+    """
     try:
         like = f"%{keyword}%"
+        per_source_limit = max(1, limit // 3)
+        fetch_cap = per_source_limit + 1  # one extra row per source, to detect truncation
         if filenames:
             placeholders = ", ".join(["?"] * len(filenames))
             stmt = (
-                f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
-                f" WHERE _source_file IN ({placeholders}) AND LOWER(signal_name) LIKE ?"
-                f" ORDER BY signal_source, channel, signal_name LIMIT {limit + 1}"
+                f"SELECT signal_name, signal_source, channel FROM ("
+                f"  SELECT signal_name, signal_source, channel,"
+                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
+                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                f"        WHERE _source_file IN ({placeholders}) AND LOWER(signal_name) LIKE ?)"
+                f") WHERE rn <= {fetch_cap}"
+                f" ORDER BY signal_source, channel, signal_name"
             )
             params: list = [*filenames, like]
         else:
             stmt = (
-                f"SELECT signal_name, signal_source, channel FROM {_CATALOG_TABLE}"
-                f" WHERE LOWER(signal_name) LIKE ? ORDER BY signal_source, channel, signal_name LIMIT {limit + 1}"
+                f"SELECT signal_name, signal_source, channel FROM ("
+                f"  SELECT signal_name, signal_source, channel,"
+                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
+                f"  FROM {_CATALOG_TABLE} WHERE LOWER(signal_name) LIKE ?"
+                f") WHERE rn <= {fetch_cap}"
+                f" ORDER BY signal_source, channel, signal_name"
             )
             params = [like]
         df = _query(stmt, params)
+        truncated = not df.empty and bool((df["signal_source"].value_counts() > per_source_limit).any())
+        if truncated:
+            df = df.groupby("signal_source", group_keys=False).head(per_source_limit)
         rows = df.to_dict("records")
-        truncated = len(rows) > limit
         print(
             f"[_fetch_signals_by_search] keyword={keyword!r} -> {len(rows)} row(s), truncated={truncated}", flush=True
         )
-        return rows[:limit], truncated
+        return rows, truncated
     except Exception as exc:
         print(f"[_fetch_signals_by_search] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
         return [], False

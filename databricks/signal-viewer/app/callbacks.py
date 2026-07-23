@@ -317,11 +317,15 @@ app.clientside_callback(
             usingServerRows = true;
         }
 
+        var kwWords = kw ? kw.split(/\s+/).filter(function(w) { return w.length > 0; }) : [];
         var filtered = byChannel;
-        if (kw) {
+        if (kwWords.length > 0) {
             filtered = searchPool.filter(function(r) {
-                return r.signal_name.toLowerCase().indexOf(kw) !== -1 ||
-                       r.signal_source.toLowerCase().indexOf(kw) !== -1;
+                var name = r.signal_name.toLowerCase();
+                var src = r.signal_source.toLowerCase();
+                return kwWords.every(function(w) {
+                    return name.indexOf(w) !== -1 || src.indexOf(w) !== -1;
+                });
             });
         }
 

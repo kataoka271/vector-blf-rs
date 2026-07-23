@@ -187,7 +187,9 @@ def _fetch_signals_by_search(
     ... LIMIT n`.
     """
     try:
-        like = f"%{keyword}%"
+        words = keyword.split()
+        words_placeholders = ", ".join(["?"] * len(words))
+        match_clause = f"forall(array({words_placeholders}), w -> signal_name ILIKE concat('%', w, '%'))"
         per_source_limit = max(1, limit // 3)
         fetch_cap = per_source_limit + 1  # one extra row per source, to detect truncation
         if filenames:
@@ -197,21 +199,21 @@ def _fetch_signals_by_search(
                 f"  SELECT signal_name, signal_source, channel,"
                 f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
                 f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
-                f"        WHERE _source_file IN ({placeholders}) AND LOWER(signal_name) LIKE ?)"
+                f"        WHERE _source_file IN ({placeholders}) AND {match_clause})"
                 f") WHERE rn <= {fetch_cap}"
                 f" ORDER BY signal_source, channel, signal_name"
             )
-            params: list = [*filenames, like]
+            params: list = [*filenames, *words]
         else:
             stmt = (
                 f"SELECT signal_name, signal_source, channel FROM ("
                 f"  SELECT signal_name, signal_source, channel,"
                 f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                f"  FROM {_CATALOG_TABLE} WHERE LOWER(signal_name) LIKE ?"
+                f"  FROM {_CATALOG_TABLE} WHERE {match_clause}"
                 f") WHERE rn <= {fetch_cap}"
                 f" ORDER BY signal_source, channel, signal_name"
             )
-            params = [like]
+            params = words
         df = _query(stmt, params)
         truncated = not df.empty and bool((df["signal_source"].value_counts() > per_source_limit).any())
         if truncated:

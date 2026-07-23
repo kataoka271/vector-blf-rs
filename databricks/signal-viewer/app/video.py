@@ -37,6 +37,8 @@ def _download_to_cache(video_path: str, local_path: str) -> None:
 
     os.makedirs(_CACHE_DIR, exist_ok=True)
     tmp_path = local_path + ".part"
+    if video_path.startswith("dbfs:"):
+        video_path = video_path[5:]
     contents = w.files.download(video_path).contents
     assert contents is not None, "Files API download returned no content stream."
     with open(tmp_path, "wb") as f:

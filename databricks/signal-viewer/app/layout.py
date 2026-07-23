@@ -47,6 +47,10 @@ def _genie_panel() -> dbc.Offcanvas:
         is_open=False,
         placement="end",
         backdrop=False,
+        # scrollable=True also disables react-bootstrap's Modal enforceFocus (it computes
+        # enforceFocus && !scroll internally), which otherwise yanks focus back into the
+        # offcanvas the instant filename-filter/signal-select are clicked.
+        scrollable=True,
         close_button=False,
         style={"width": "340px", "backgroundColor": _PANEL, "color": _TEXT},
         children=[

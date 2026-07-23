@@ -684,7 +684,7 @@ app.layout = dbc.Container(
                         ),
                         html.Div(
                             id="video-section",
-                            className="video-float-panel video-floating",
+                            className="video-float-panel video-docked",
                             style={"display": "none"},  # Dash/Python only ever touches "display" here
                             children=[
                                 html.Div(
@@ -693,10 +693,10 @@ app.layout = dbc.Container(
                                     children=[
                                         html.Span("Video", className="video-float-title"),
                                         html.Span(
-                                            "⇲",
+                                            "⇱",
                                             id="video-float-dock-btn",
                                             className="video-float-dock-btn",
-                                            title="Switch to docked mode",
+                                            title="Switch to floating mode",
                                         ),
                                         html.Span(
                                             "-", id="video-float-minimize-btn", className="video-float-minimize-btn"

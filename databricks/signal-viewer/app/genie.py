@@ -49,8 +49,9 @@ def build_context_prefix(
     filenames: list[str] | None,
     sources: list[str] | None,
     channels: list[str] | None,
+    signals: list[str] | None = None,
 ) -> str:
-    """Summarize the sidebar's current file/source/channel filters as a Genie context prefix.
+    """Summarize the sidebar's current file/source/channel/signal selection as a Genie context prefix.
 
     Values are passed through as raw column/key values (not the sidebar's display
     labels, which relabel SOMEIP as ETH) so Genie can map them unambiguously onto
@@ -65,6 +66,10 @@ def build_context_prefix(
         # Each value concatenates signal_source + channel number, e.g. "CAN1" means
         # signal_source='CAN' AND channel=1; "SOMEIP2" means signal_source='SOMEIP' AND channel=2.
         parts.append(f"channel(s) (signal_source+channel key) {', '.join(channels)}")
+    if signals:
+        # Each value is signal_source+channel+"::"+signal_name, e.g. "SOMEIP2::foo" means
+        # signal_source='SOMEIP' AND channel=2 AND signal_name='foo'.
+        parts.append(f'selected signal(s) (signal_source+channel+"::"+signal_name key) {", ".join(signals)}')
     if not parts:
         return ""
     return "Currently viewing " + "; ".join(parts) + "."

@@ -1039,9 +1039,10 @@ def new_genie_conversation(_):
     State("filename-filter", "value"),
     State("source-filter", "value"),
     State("channel-filter", "value"),
+    State("signal-select", "value"),
     prevent_initial_call=True,
 )
-def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sources, channels):
+def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sources, channels, signals):
     if not question or not question.strip():
         return dash.no_update, True, dash.no_update, False, dash.no_update
     if not GENIE_SPACE_ID and not _LOCAL_DEV:
@@ -1056,7 +1057,9 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sour
         _log_token_info(user_token)
     conv_id = (conv_store or {}).get("conversation_id")
     request_id = str(_uuid.uuid4())
-    context = build_context_prefix(filenames, sources, channels)
+    # signal-select values are already raw signal_source+channel+"::"+signal_name keys
+    # (display-only relabeling of SOMEIP to ETH happens in render_signal_tags, not here).
+    context = build_context_prefix(filenames, sources, channels, signals)
     content = f"{context}\n\n{question.strip()}" if context else question.strip()
     future = _genie_executor.submit(_genie_query, GENIE_SPACE_ID or "mock", content, conv_id, user_token)
     _genie_futures[request_id] = (future, _time.time())

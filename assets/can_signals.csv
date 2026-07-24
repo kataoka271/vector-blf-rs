@@ -24,3 +24,5 @@ message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scal
 0x600,CabinTemp_degC,0,0,8,Intel,true,0.5,-40.0,0x02
 0x600,FanSpeed_pct,1,0,8,Intel,false,0.4,0.0,0x02
 0x600,AcRequest,2,0,1,Intel,false,1.0,0.0,0x02
+0x700,GPS_Latitude,0,0,32,Intel,true,0.0000001,0.0,
+0x700,GPS_Longitude,4,0,32,Intel,true,0.0000001,0.0,

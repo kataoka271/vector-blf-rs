@@ -346,7 +346,7 @@ app.clientside_callback(
             usingServerRows = true;
         }
 
-        var kwWords = kw ? kw.split(/\s+/).filter(function(w) { return w.length > 0; }) : [];
+        var kwWords = kw ? kw.split(/\\s+/).filter(function(w) { return w.length > 0; }) : [];
         var filtered = byChannel;
         if (kwWords.length > 0) {
             filtered = searchPool.filter(function(r) {

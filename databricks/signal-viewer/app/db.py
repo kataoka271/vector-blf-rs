@@ -14,6 +14,7 @@ import pandas as pd
 from databricks import sql
 
 from .config import (
+    _CATALOG_BY_FILE_TABLE,
     _CATALOG_TABLE,
     _GOLD_TABLE,
     _LOCAL_DEV,
@@ -149,21 +150,22 @@ def _fetch_all_signals(
     try:
         per_source_limit = max(1, limit // 3) if limit is not None else None
         if filenames:
-            # File-filtered: query gold table (catalog table has no _source_file column)
+            # File-filtered: query the small per-file catalog table (clustered on
+            # _source_file), not the per-sample gold table.
             placeholders = ", ".join(["?"] * len(filenames))
             if per_source_limit is not None:
                 stmt = (
                     f"SELECT signal_name, signal_source, channel FROM ("
                     f"  SELECT signal_name, signal_source, channel,"
                     f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                    f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                    f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
                     f"        WHERE _source_file IN ({placeholders}))"
                     f") WHERE rn <= {per_source_limit}"
                     f" ORDER BY signal_source, channel, signal_name"
                 )
             else:
                 stmt = (
-                    f"SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                    f"SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
                     f" WHERE _source_file IN ({placeholders})"
                     f" ORDER BY signal_source, channel, signal_name"
                 )
@@ -203,7 +205,7 @@ def _fetch_all_channels(filenames: list[str] | None = None, user_token: str | No
         if filenames:
             placeholders = ", ".join(["?"] * len(filenames))
             stmt = (
-                f"SELECT DISTINCT signal_source, channel FROM {_GOLD_TABLE}"
+                f"SELECT DISTINCT signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
                 f" WHERE _source_file IN ({placeholders})"
                 f" ORDER BY signal_source, channel"
             )
@@ -241,7 +243,7 @@ def _fetch_signals_by_search(
                 f"SELECT signal_name, signal_source, channel FROM ("
                 f"  SELECT signal_name, signal_source, channel,"
                 f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
                 f"        WHERE _source_file IN ({placeholders}) AND {match_clause})"
                 f") WHERE rn <= {fetch_cap}"
                 f" ORDER BY signal_source, channel, signal_name"
@@ -291,7 +293,7 @@ def _fetch_latlon_candidates(
                 f"SELECT signal_name, signal_source, channel FROM ("
                 f"  SELECT signal_name, signal_source, channel,"
                 f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_GOLD_TABLE}"
+                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
                 f"        WHERE _source_file IN ({placeholders}) AND ({or_clause}))"
                 f") WHERE rn <= {per_source_limit}"
                 f" ORDER BY signal_source, channel, signal_name"

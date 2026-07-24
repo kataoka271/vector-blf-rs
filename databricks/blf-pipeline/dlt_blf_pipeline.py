@@ -1384,6 +1384,24 @@ def blf_signal_catalog():
 
 
 @dlt.table(
+    name="blf_signal_catalog_by_file",
+    comment=(
+        "Distinct (signal_source, channel, signal_name, _source_file) combinations from blf_gold_signals. "
+        "Used by Signal Viewer for file-scoped signal browsing/search so those queries hit this small "
+        "lookup table instead of scanning the full per-sample gold table (which has no clustering on "
+        "_source_file)."
+    ),
+    table_properties={
+        "quality": "gold",
+        "delta.autoOptimize.optimizeWrite": "true",
+    },
+    cluster_by=["_source_file"],
+)
+def blf_signal_catalog_by_file():
+    return dlt.read("blf_gold_signals").select("signal_source", "channel", "signal_name", "_source_file").distinct()
+
+
+@dlt.table(
     name="blf_time_range",
     comment=(
         "Pre-aggregated time range from blf_gold_signals: min/max timestamp_s and earliest event_time. "

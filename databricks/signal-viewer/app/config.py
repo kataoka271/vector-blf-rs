@@ -12,6 +12,7 @@ CATALOG = os.environ.get("BLF_CATALOG", "main")
 SCHEMA = os.environ.get("BLF_SCHEMA", "blf")
 _GOLD_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_gold_signals`"
 _CATALOG_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_signal_catalog`"
+_CATALOG_BY_FILE_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_signal_catalog_by_file`"
 _TIME_RANGE_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_time_range`"
 _SOURCE_FILES_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_source_files`"
 _VIDEO_FILES_TABLE = f"`{CATALOG}`.`{SCHEMA}`.`blf_video_files`"

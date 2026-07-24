@@ -19,5 +19,33 @@ window._videoSync = {
             });
         }
         Plotly.relayout(gd, { shapes: shapes });
+    },
+
+    // Moves the map's current-position marker (trace index 1, see _map_fig in
+    // figures.py) to the GPS sample nearest xValue. track is the {t, lat, lon}
+    // payload from gps-track-store; t entries are either ISO datetime strings
+    // or plain numbers, matching whatever domain xValue itself is in (both are
+    // derived the same way -- from event_time when present, else timestamp_s).
+    updateMapMarker: function(gdId, track, xValue) {
+        if (!track || !track.t || !track.t.length || xValue === null || xValue === undefined) return;
+        var gd = document.querySelector("#" + gdId + " .js-plotly-plot");
+        if (!gd || !gd.data || gd.data.length < 2) return;
+
+        var toNum = (typeof track.t[0] === "string")
+            ? function(v) { return new Date(v).getTime(); }
+            : function(v) { return v; };
+        var target = (typeof xValue === "string") ? new Date(xValue).getTime() : xValue;
+
+        var tArr = track.t;
+        var lo = 0, hi = tArr.length - 1;
+        while (lo < hi) {
+            var mid = (lo + hi) >> 1;
+            if (toNum(tArr[mid]) < target) { lo = mid + 1; } else { hi = mid; }
+        }
+        if (lo > 0 && Math.abs(toNum(tArr[lo - 1]) - target) <= Math.abs(toNum(tArr[lo]) - target)) {
+            lo = lo - 1;
+        }
+
+        Plotly.restyle(gd, { lat: [[track.lat[lo]]], lon: [[track.lon[lo]]] }, [1]);
     }
 };

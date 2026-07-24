@@ -459,21 +459,39 @@ def _normalize_lat_lon(lat: pd.Series, lon: pd.Series) -> tuple[pd.Series, pd.Se
 
 
 def _map_fig(lat: pd.Series, lon: pd.Series, dark: bool = True) -> go.Figure:
+    """Build the GPS track map. lat/lon must already be normalized (see _normalize_lat_lon).
+
+    Trace 0 is the full track (line+markers); trace 1 is a single-point marker
+    tracking the video's current position, updated client-side via
+    Plotly.restyle in video-sync.js (see gps-track-store). It's kept as a
+    fixed-index trace here -- rather than added/removed dynamically -- so the
+    restyle target index never shifts.
+    """
     palette = _plotly_palette(dark)
-    lat, lon = _normalize_lat_lon(lat, lon)
     center_lat = float(lat.mean())
     center_lon = float(lon.mean())
     fig = go.Figure(
-        go.Scattermapbox(
-            lat=lat,
-            lon=lon,
-            mode="lines+markers",
-            marker={"size": 4, "color": palette["accent"]},
-            line={"width": 1, "color": palette["accent"]},
-        )
+        [
+            go.Scattermapbox(
+                lat=lat,
+                lon=lon,
+                mode="lines+markers",
+                marker={"size": 4, "color": palette["accent"]},
+                line={"width": 1, "color": palette["accent"]},
+                hoverinfo="skip",
+            ),
+            go.Scattermapbox(
+                lat=[lat.iloc[0]],
+                lon=[lon.iloc[0]],
+                mode="markers",
+                marker={"size": 14, "color": "#ff3b30"},
+                hoverinfo="skip",
+            ),
+        ]
     )
     fig.update_layout(
         paper_bgcolor=palette["bg"],
+        showlegend=False,
         mapbox={
             "style": "carto-darkmatter",
             "center": {"lat": center_lat, "lon": center_lon},
@@ -498,12 +516,19 @@ def render_chart_and_grid(
     time_store,
     chart_only: bool = False,
     dark: bool = True,
-) -> tuple[object, object, object, object, object, object]:
+) -> tuple[object, object, object, object, object, object, object]:
     """Build the chart figure, grid rows/columns, and map from an already-fetched DataFrame.
 
     Pure function of df_all -- no I/O, no dcc.Store (de)serialization. Callers
     own dash.ctx.triggered_id logic and any signal-data-cache/plot-btn.disabled
-    writes. Returns (chart_fig, chart_msg, row_data, col_defs, map_fig, map_style).
+    writes. Returns (chart_fig, chart_msg, row_data, col_defs, map_fig, map_style,
+    gps_track).
+
+    gps_track is {"t": [...], "lat": [...], "lon": [...]} for the video-synced
+    map marker (see video-sync.js), or None when there's no GPS track to show.
+    Its "t" values are in the same domain as the chart's x-axis (event_time ISO
+    strings, or numeric timestamp_s) so video-sync.js can compare them directly
+    against the cursor xValue it already computes from video.currentTime.
 
     chart_only=True skips rebuilding the grid pivot table and the GPS map --
     both are unchanged when the only inputs that fired are chart display
@@ -520,6 +545,7 @@ def render_chart_and_grid(
     col_defs: object = dash.no_update
     map_fig = map_empty
     map_style = map_hidden
+    gps_track: object = None
 
     groups = _group_by_key(df_all) if (selected or (lat_key and lon_key)) else None
 
@@ -564,11 +590,15 @@ def render_chart_and_grid(
         lat_sub = _lookup_key(groups, lat_key)
         lon_sub = _lookup_key(groups, lon_key)
         if lat_sub is not None and lon_sub is not None:
-            lat_df = (
-                lat_sub[["timestamp_ns", "signal_value"]]
-                .rename(columns={"signal_value": "lat"})
-                .sort_values("timestamp_ns")
-            )
+            # event_time/timestamp_s ride along on lat_df only (not lon_df) to avoid
+            # merge_asof _x/_y suffixing -- lat/lon are already aligned to the same
+            # instant via the timestamp_ns asof-join, so either row's time works.
+            lat_cols = ["timestamp_ns", "signal_value"]
+            if "event_time" in df_all.columns:
+                lat_cols.append("event_time")
+            if "timestamp_s" in df_all.columns:
+                lat_cols.append("timestamp_s")
+            lat_df = lat_sub[lat_cols].rename(columns={"signal_value": "lat"}).sort_values("timestamp_ns")
             lon_df = (
                 lon_sub[["timestamp_ns", "signal_value"]]
                 .rename(columns={"signal_value": "lon"})
@@ -576,11 +606,27 @@ def render_chart_and_grid(
             )
             merged = pd.merge_asof(lat_df, lon_df, on="timestamp_ns", direction="nearest").dropna(subset=["lat", "lon"])
             if not merged.empty:
-                map_fig = _map_fig(merged["lat"], merged["lon"], dark=dark)
+                lat_norm, lon_norm = _normalize_lat_lon(merged["lat"], merged["lon"])
+                map_fig = _map_fig(lat_norm, lon_norm, dark=dark)
                 map_style = {}
                 pts = len(merged)
                 chart_msg = chart_msg + f" Map: {pts:,} GPS pts." if chart_msg else f"Map: {pts:,} GPS pts."
+                use_event_time = "event_time" in merged.columns and merged["event_time"].notna().any()
+                t_values = (
+                    [ts.isoformat() if pd.notna(ts) else None for ts in merged["event_time"]]
+                    if use_event_time
+                    else merged["timestamp_s"].tolist()
+                )
+                gps_track = {"t": t_values, "lat": lat_norm.tolist(), "lon": lon_norm.tolist()}
 
     if chart_only:
-        return chart_fig, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style
+        return (
+            chart_fig,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
+    return chart_fig, chart_msg, row_data, col_defs, map_fig, map_style, gps_track

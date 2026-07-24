@@ -164,6 +164,11 @@ app.layout = dbc.Container(
         dcc.Store(id="filename-pending-store"),
         dcc.Store(id="video-meta-store"),
         dcc.Store(id="video-seek-store"),
+        # {t: [...], lat: [...], lon: [...]} GPS track for the video-synced map marker;
+        # t entries match the chart's x-axis domain (event_time ISO strings, or
+        # numeric timestamp_s) so they're directly comparable to the cursor xValue
+        # computed in video-sync.js.
+        dcc.Store(id="gps-track-store"),
         html.Div(id="video-cursor-sink", style={"display": "none"}),
         html.Div(id="video-listener-sink", style={"display": "none"}),
         html.Div(id="color-mode-sink", style={"display": "none"}),

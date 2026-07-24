@@ -534,6 +534,7 @@ def remove_signal(n_clicks_list, selected):
     Output("grid", "columnDefs", allow_duplicate=True),
     Output("map-chart", "figure", allow_duplicate=True),
     Output("map-section", "style", allow_duplicate=True),
+    Output("gps-track-store", "data", allow_duplicate=True),
     Output("plot-btn", "disabled", allow_duplicate=True),
     Output("session-id-store", "data", allow_duplicate=True),
     Input("plot-btn", "n_clicks"),
@@ -599,6 +600,7 @@ def fetch_and_render(
             dash.no_update,
             map_empty,
             map_hidden,
+            None,
             False,
             session_id,
         )
@@ -610,7 +612,7 @@ def fetch_and_render(
     # already in the store (time_range_store, unchanged since new_time_range is no_update).
     time_store = new_time_range if isinstance(new_time_range, dict) else time_range_store
 
-    chart_fig, chart_msg, row_data, col_defs, map_fig, map_style = render_chart_and_grid(
+    chart_fig, chart_msg, row_data, col_defs, map_fig, map_style, gps_track = render_chart_and_grid(
         df,
         selected,
         layout,
@@ -633,6 +635,7 @@ def fetch_and_render(
         col_defs,
         map_fig,
         map_style,
+        gps_track,
         False,
         session_id,
     )
@@ -645,6 +648,7 @@ def fetch_and_render(
     Output("grid", "columnDefs"),
     Output("map-chart", "figure"),
     Output("map-section", "style"),
+    Output("gps-track-store", "data"),
     Input("signal-select", "value"),
     Input("layout-mode", "value"),
     Input("chart-height", "value"),
@@ -686,7 +690,7 @@ def redraw_chart(
             if dash.ctx.triggered_id == "color-mode-switch"
             else dash.no_update
         )
-        return chart, msg, [], dash.no_update, go.Figure(), {"display": "none"}
+        return chart, msg, [], dash.no_update, go.Figure(), {"display": "none"}, None
     # Grid rowData/columnDefs and the GPS map don't depend on chart-display-only
     # options, so skip rebuilding them (the expensive part on a large cached
     # DataFrame) when one of those is the sole trigger.
@@ -908,7 +912,7 @@ def seek_video_from_chart_click(click_data, meta, offset):
 
 app.clientside_callback(
     """
-    function(seek) {
+    function(seek, track) {
         if (!seek) return window.dash_clientside.no_update;
         var videoEl = document.getElementById('video-player');
         if (videoEl) { videoEl.currentTime = Math.max(0, seek.seconds); }
@@ -916,24 +920,29 @@ app.clientside_callback(
         // interval-driven callback below only updates it once the video
         // is playing (n_intervals ticks), which left a stale/no cursor
         // right after a click-to-seek while paused.
-        if (seek.x !== undefined) { window._videoSync.setCursor('chart', seek.x); }
+        if (seek.x !== undefined) {
+            window._videoSync.setCursor('chart', seek.x);
+            window._videoSync.updateMapMarker('map-chart', track, seek.x);
+        }
         return window.dash_clientside.no_update;
     }
     """,
     Output("video-cursor-sink", "children", allow_duplicate=True),
     Input("video-seek-store", "data"),
+    State("gps-track-store", "data"),
     prevent_initial_call=True,
 )
 
 app.clientside_callback(
     """
-    function(_n, meta, offset) {
+    function(_n, meta, offset, track) {
         if (!meta) return window.dash_clientside.no_update;
         var videoEl = document.getElementById('video-player');
         if (!videoEl) return window.dash_clientside.no_update;
         var t = videoEl.currentTime + (parseFloat(offset) || 0);
         var xValue = meta.t0 ? new Date(new Date(meta.t0).getTime() + t * 1000).toISOString() : meta.t_min + t;
         window._videoSync.setCursor('chart', xValue);
+        window._videoSync.updateMapMarker('map-chart', track, xValue);
         return window.dash_clientside.no_update;
     }
     """,
@@ -941,6 +950,7 @@ app.clientside_callback(
     Input("video-cursor-interval", "n_intervals"),
     State("video-meta-store", "data"),
     State("video-offset-input", "value"),
+    State("gps-track-store", "data"),
     prevent_initial_call=True,
 )
 

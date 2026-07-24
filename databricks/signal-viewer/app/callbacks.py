@@ -476,20 +476,25 @@ def render_signal_tags(selected, anomalous_signals):
         label = f"{display_src}{channel}::{name}"
         is_anomalous = key in anomalous_set
         tags.append(
-            dbc.Badge(
-                [
-                    label,
-                    html.Button(
-                        type="button",
-                        id={"type": "remove-signal-btn", "index": key},
-                        n_clicks=0,
-                        className="btn-close btn-close-white ms-1",
-                        style={"fontSize": "0.5rem"},
-                    ),
-                ],
-                color="danger" if is_anomalous else "secondary",
-                pill=True,
-                className="d-inline-flex align-items-center gap-1 fw-normal",
+            html.Span(
+                dbc.Badge(
+                    [
+                        label,
+                        html.Button(
+                            type="button",
+                            id={"type": "remove-signal-btn", "index": key},
+                            n_clicks=0,
+                            className="btn-close btn-close-white ms-1",
+                            style={"fontSize": "0.5rem"},
+                        ),
+                    ],
+                    color="danger" if is_anomalous else "secondary",
+                    pill=True,
+                    className="d-inline-flex align-items-center gap-1 fw-normal",
+                ),
+                className="signal-tag",
+                draggable="true",
+                **{"data-key": key},
             )
         )
     if len(selected) > _MAX_VISIBLE_TAGS:
@@ -518,6 +523,24 @@ def remove_signal(n_clicks_list, selected):
         return dash.no_update
     key_to_remove = triggered["index"]
     return [s for s in (selected or []) if s != key_to_remove]
+
+
+# Mirrors signal-select.value onto window._signalSelectValue so the drag-reorder
+# handler in assets/signal-tags-dnd.js (which only sees the first _MAX_VISIBLE_TAGS
+# rendered signal-tags) can preserve the untouched tail when it rewrites the value
+# via dash_clientside.set_props. Same no-op mirror-to-window pattern as the
+# window._timeRangeStore clientside callback further down this file.
+app.clientside_callback(
+    """
+    function(value) {
+        window._signalSelectValue = value || [];
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("signal-select", "value", allow_duplicate=True),
+    Input("signal-select", "value"),
+    prevent_initial_call=True,
+)
 
 
 # ---------------------------------------------------------------------------

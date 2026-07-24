@@ -23,6 +23,8 @@ from .db import (
     _fetch_signals_by_search,
     _fetch_video_for_file,
     _log_token_info,
+    _resolve_user_token,
+    _run_parallel,
     fetch_signal_data,
 )
 from .figures import (
@@ -135,14 +137,17 @@ app.clientside_callback(
     Input("url", "pathname"),
 )
 def prefetch_signals(_):
-    return (
-        _fetch_all_signals(),
-        _fetch_all_channels(),
-        _fetch_global_time_range(),
-        _fetch_filenames(),
-        _uuid.uuid4().hex,
-        _fetch_latlon_candidates(),
+    token = _resolve_user_token()
+    signals, channels, time_range, filenames, latlon = _run_parallel(
+        [
+            lambda: _fetch_all_signals(user_token=token),
+            lambda: _fetch_all_channels(user_token=token),
+            lambda: _fetch_global_time_range(user_token=token),
+            lambda: _fetch_filenames(user_token=token),
+            lambda: _fetch_latlon_candidates(user_token=token),
+        ]
     )
+    return signals, channels, time_range, filenames, _uuid.uuid4().hex, latlon
 
 
 @callback(
@@ -156,14 +161,17 @@ def prefetch_signals(_):
     prevent_initial_call=True,
 )
 def refresh_signal_cache(_):
-    return (
-        _fetch_all_signals(),
-        _fetch_all_channels(),
-        _fetch_global_time_range(),
-        _fetch_filenames(),
-        True,
-        _fetch_latlon_candidates(),
+    token = _resolve_user_token()
+    signals, channels, time_range, filenames, latlon = _run_parallel(
+        [
+            lambda: _fetch_all_signals(user_token=token),
+            lambda: _fetch_all_channels(user_token=token),
+            lambda: _fetch_global_time_range(user_token=token),
+            lambda: _fetch_filenames(user_token=token),
+            lambda: _fetch_latlon_candidates(user_token=token),
+        ]
     )
+    return signals, channels, time_range, filenames, True, latlon
 
 
 app.clientside_callback(
@@ -202,7 +210,15 @@ app.clientside_callback(
 )
 def filter_signals_by_file(_, filenames):
     scope = filenames or None
-    return _fetch_all_signals(scope), _fetch_all_channels(scope), True, _fetch_latlon_candidates(scope)
+    token = _resolve_user_token()
+    signals, channels, latlon = _run_parallel(
+        [
+            lambda: _fetch_all_signals(scope, user_token=token),
+            lambda: _fetch_all_channels(scope, user_token=token),
+            lambda: _fetch_latlon_candidates(scope, user_token=token),
+        ]
+    )
+    return signals, channels, True, latlon
 
 
 app.clientside_callback(

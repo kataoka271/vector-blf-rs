@@ -1,9 +1,11 @@
 """Database query helpers."""
 
 import base64
+import concurrent.futures
 import datetime
 import json
 import traceback
+from typing import Any, Callable
 
 import dash
 import flask
@@ -72,20 +74,59 @@ def _run_query(stmt: str, params: list | dict | None, user_token: str | None = N
             return df
 
 
-def _query(stmt: str, params=None) -> pd.DataFrame:
-    """Run a parameterised SQL query using the request's user token or SP credentials."""
+def _resolve_user_token() -> str | None:
+    """Read the X-Forwarded-Access-Token header from the current request context.
+
+    Must be called from the thread handling the Flask request -- `flask.request`
+    is only valid there. Callers that fan out queries to worker threads (see
+    `_run_parallel`) must resolve the token once up front and pass it through
+    explicitly, rather than letting `_query` re-read `flask.request` from a
+    worker thread.
+    """
     if _LOCAL_DEV:
-        return _dummy_query(stmt, params)
+        return None
     user_token = flask.request.headers.get("X-Forwarded-Access-Token")
     if not user_token:
         raise RuntimeError("Missing X-Forwarded-Access-Token header.")
     _log_token_info(user_token)
+    return user_token
+
+
+def _query(stmt: str, params=None, *, user_token: str | None = None) -> pd.DataFrame:
+    """Run a parameterised SQL query using the request's user token or SP credentials.
+
+    `user_token`, if not given, is resolved from the current request context.
+    Pass it explicitly when calling from a worker thread (see `_run_parallel`).
+    """
+    if _LOCAL_DEV:
+        return _dummy_query(stmt, params)
+    if user_token is None:
+        user_token = _resolve_user_token()
     return _run_query(stmt, params, user_token=user_token if USE_USER_TOKEN else None)
 
 
-def _fetch_filenames() -> list[str] | None:
+def _run_parallel(calls: list[Callable[[], Any]]) -> list[Any]:
+    """Run independent no-arg fetch callables concurrently, preserving call order.
+
+    Each callable is expected to open its own SQL connection (see `_run_query`),
+    so this trades N sequential connect+round-trip waits for the slowest single
+    one. Callers must resolve any request-scoped state (e.g. the user token via
+    `_resolve_user_token`) before building these callables, since worker threads
+    cannot access `flask.request`.
+    """
+    if len(calls) <= 1:
+        return [c() for c in calls]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(calls)) as ex:
+        futures = [ex.submit(c) for c in calls]
+        return [f.result() for f in futures]
+
+
+def _fetch_filenames(user_token: str | None = None) -> list[str] | None:
     try:
-        df = _query(f"SELECT _source_file FROM {_SOURCE_FILES_TABLE} ORDER BY _source_file LIMIT 200")
+        df = _query(
+            f"SELECT _source_file FROM {_SOURCE_FILES_TABLE} ORDER BY _source_file LIMIT 200",
+            user_token=user_token,
+        )
         print(f"[_fetch_filenames] fetched {len(df)} file(s)", flush=True)
         return df["_source_file"].tolist()
     except Exception as exc:
@@ -93,7 +134,9 @@ def _fetch_filenames() -> list[str] | None:
         return None
 
 
-def _fetch_all_signals(filenames: list[str] | None = None, limit: int | None = 500) -> list[dict] | None:
+def _fetch_all_signals(
+    filenames: list[str] | None = None, limit: int | None = 500, user_token: str | None = None
+) -> list[dict] | None:
     """Fetch known signals, ordered by (signal_source, channel, signal_name).
 
     `limit` caps rows per signal_source (not the total row count), via a
@@ -142,7 +185,7 @@ def _fetch_all_signals(filenames: list[str] | None = None, limit: int | None = 5
                     f" ORDER BY signal_source, channel, signal_name"
                 )
             params = None
-        df = _query(stmt, params)
+        df = _query(stmt, params, user_token=user_token)
         print(f"[_fetch_all_signals] fetched {len(df)} signal(s)", flush=True)
         return df.to_dict("records")
     except Exception as exc:
@@ -150,7 +193,7 @@ def _fetch_all_signals(filenames: list[str] | None = None, limit: int | None = 5
         return None
 
 
-def _fetch_all_channels(filenames: list[str] | None = None) -> list[dict] | None:
+def _fetch_all_channels(filenames: list[str] | None = None, user_token: str | None = None) -> list[dict] | None:
     """Fetch the distinct (signal_source, channel) pairs, uncapped.
 
     Kept separate from _fetch_all_signals so the channel-filter checklist isn't
@@ -168,7 +211,7 @@ def _fetch_all_channels(filenames: list[str] | None = None) -> list[dict] | None
         else:
             stmt = f"SELECT DISTINCT signal_source, channel FROM {_CATALOG_TABLE} ORDER BY signal_source, channel"
             params = None
-        df = _query(stmt, params)
+        df = _query(stmt, params, user_token=user_token)
         print(f"[_fetch_all_channels] fetched {len(df)} channel(s)", flush=True)
         return df.to_dict("records")
     except Exception as exc:
@@ -234,7 +277,9 @@ def _fetch_signals_by_search(
 _LATLON_KEYWORDS = ["lat", "lon", "latitude", "longitude", "gps"]
 
 
-def _fetch_latlon_candidates(filenames: list[str] | None = None, limit: int = 100) -> list[dict] | None:
+def _fetch_latlon_candidates(
+    filenames: list[str] | None = None, limit: int = 100, user_token: str | None = None
+) -> list[dict] | None:
     """Fetch signals matching common GPS lat/lon keywords, capped per signal_source."""
     try:
         or_clause = " OR ".join(["LOWER(signal_name) LIKE ?"] * len(_LATLON_KEYWORDS))
@@ -262,7 +307,7 @@ def _fetch_latlon_candidates(filenames: list[str] | None = None, limit: int = 10
                 f" ORDER BY signal_source, channel, signal_name"
             )
             params = like_params
-        df = _query(stmt, params)
+        df = _query(stmt, params, user_token=user_token)
         rows = df.to_dict("records")
         print(f"[_fetch_latlon_candidates] -> {len(rows)} row(s)", flush=True)
         return rows
@@ -271,9 +316,9 @@ def _fetch_latlon_candidates(filenames: list[str] | None = None, limit: int = 10
         return None
 
 
-def _fetch_global_time_range() -> dict | None:
+def _fetch_global_time_range(user_token: str | None = None) -> dict | None:
     try:
-        df = _query(f"SELECT t_min, t_max, t0 FROM {_TIME_RANGE_TABLE}")
+        df = _query(f"SELECT t_min, t_max, t0 FROM {_TIME_RANGE_TABLE}", user_token=user_token)
         t0_raw = df["t0"].iloc[0] if "t0" in df.columns else None
         if t0_raw is not None and pd.isna(t0_raw):
             t0_raw = None
@@ -328,20 +373,6 @@ def fetch_signal_data(
         f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 "
         f"FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}"
     )
-    try:
-        range_df = _query(range_stmt, list(pair_params) + file_params)
-        t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
-        if t0_raw is not None and pd.isna(t0_raw):
-            t0_raw = None
-        t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
-        t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
-        new_time_range = {
-            "min": float(range_df["t_min"].iloc[0]),
-            "max": float(range_df["t_max"].iloc[0]),
-            "t0": t0_iso,
-        }
-    except Exception as exc:
-        print(f"[fetch_signal_data] time-range query error: {exc}", flush=True)
 
     stmt = (
         f"WITH bucketed AS ("
@@ -362,12 +393,47 @@ def fetch_signal_data(
         f"  SELECT signal_source, channel, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value, hi.signal_str FROM agg"
         f") ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
     )
-    try:
-        df = _query(stmt, pair_params + file_params + time_params)
-    except Exception as exc:
-        msg = f"Query error: {exc}"
-        print(f"[fetch_signal_data] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+
+    # Range and main queries are independent (the range query is deliberately
+    # unfiltered by time_filter, to keep the slider bounds stable) -- run them
+    # concurrently rather than paying two sequential connect+round-trip waits.
+    user_token = _resolve_user_token()
+
+    def _run_range() -> pd.DataFrame | Exception:
+        try:
+            return _query(range_stmt, list(pair_params) + file_params, user_token=user_token)
+        except Exception as exc:
+            return exc
+
+    def _run_main() -> pd.DataFrame | Exception:
+        try:
+            return _query(stmt, pair_params + file_params + time_params, user_token=user_token)
+        except Exception as exc:
+            return exc
+
+    range_result, main_result = _run_parallel([_run_range, _run_main])
+
+    if isinstance(range_result, Exception):
+        print(f"[fetch_signal_data] time-range query error: {range_result}", flush=True)
+    else:
+        range_df = range_result
+        t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
+        if t0_raw is not None and pd.isna(t0_raw):
+            t0_raw = None
+        t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
+        t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
+        new_time_range = {
+            "min": float(range_df["t_min"].iloc[0]),
+            "max": float(range_df["t_max"].iloc[0]),
+            "t0": t0_iso,
+        }
+
+    if isinstance(main_result, Exception):
+        msg = f"Query error: {main_result}"
+        tb = "".join(traceback.format_exception(type(main_result), main_result, main_result.__traceback__))
+        print(f"[fetch_signal_data] ERROR: {main_result}\n{tb}", flush=True)
         return None, new_time_range, msg
+    df = main_result
 
     signal_count = df["signal_name"].nunique() if not df.empty else 0
     print(f"[fetch_signal_data] {len(df):,} rows, {signal_count} signal(s)", flush=True)

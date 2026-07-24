@@ -1,9 +1,10 @@
-// Drag-to-reposition, minimize/expand, and float/dock toggling for the video
-// panel (#video-section). Pure client-side DOM manipulation -- video-section,
-// video-float-header, video-float-dock-btn, and video-float-minimize-btn are
-// static, always-mounted elements, so document-level delegated listeners
-// registered once at script load are sufficient (no re-binding needed across
-// Dash re-renders).
+// Drag-to-reposition, minimize/expand, and float/dock toggling shared by
+// every ".float-panel" (currently video-section and map-section). Pure
+// client-side DOM manipulation -- panels and their .float-header /
+// .float-dock-btn / .float-minimize-btn descendants are static,
+// always-mounted elements, so document-level delegated listeners
+// registered once at script load are sufficient (no re-binding needed
+// across Dash re-renders).
 (function () {
     var dragState = null;
 
@@ -12,11 +13,11 @@
     }
 
     document.addEventListener("pointerdown", function (e) {
-        if (e.target.closest("#video-float-minimize-btn") || e.target.closest("#video-float-dock-btn")) return;
-        var header = e.target.closest("#video-float-header");
+        if (e.target.closest(".float-minimize-btn") || e.target.closest(".float-dock-btn")) return;
+        var header = e.target.closest(".float-header");
         if (!header) return;
-        var panel = document.getElementById("video-section");
-        if (!panel || !panel.classList.contains("video-floating")) return;
+        var panel = header.closest(".float-panel");
+        if (!panel || !panel.classList.contains("floating")) return;
         var rect = panel.getBoundingClientRect();
         // Freeze the current on-screen position as explicit left/top,
         // canceling the CSS class's default top/right anchor so left/top
@@ -46,21 +47,21 @@
     });
 
     document.addEventListener("click", function (e) {
-        var minBtn = e.target.closest("#video-float-minimize-btn");
+        var minBtn = e.target.closest(".float-minimize-btn");
         if (minBtn) {
-            var panel = document.getElementById("video-section");
+            var panel = minBtn.closest(".float-panel");
             if (!panel) return;
-            var minimized = panel.classList.toggle("video-float-minimized");
+            var minimized = panel.classList.toggle("float-minimized");
             minBtn.textContent = minimized ? "+" : "-";
             return;
         }
 
-        var dockBtn = e.target.closest("#video-float-dock-btn");
+        var dockBtn = e.target.closest(".float-dock-btn");
         if (dockBtn) {
-            var panel2 = document.getElementById("video-section");
+            var panel2 = dockBtn.closest(".float-panel");
             if (!panel2) return;
-            var nowDocked = panel2.classList.toggle("video-docked");
-            panel2.classList.toggle("video-floating", !nowDocked);
+            var nowDocked = panel2.classList.toggle("docked");
+            panel2.classList.toggle("floating", !nowDocked);
             if (nowDocked) {
                 // Drop any position left over from dragging so a later
                 // re-float always restarts from the CSS default anchor

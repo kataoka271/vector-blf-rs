@@ -676,41 +676,59 @@ app.layout = dbc.Container(
                         ),
                         html.Div(
                             id="map-section",
-                            style={"display": "none"},
-                            children=dcc.Loading(
-                                type="circle",
-                                color=_ACCENT,
-                                children=dcc.Graph(
-                                    id="map-chart",
-                                    config={"displayModeBar": True, "scrollZoom": True},
-                                    style={"padding": "0 16px 16px"},
+                            className="float-panel map-panel docked",
+                            style={"display": "none"},  # Dash/Python only ever touches "display" here
+                            children=[
+                                html.Div(
+                                    id="map-float-header",
+                                    className="float-header",
+                                    children=[
+                                        html.Span("Map", className="float-title"),
+                                        html.Span(
+                                            "⇱",
+                                            id="map-float-dock-btn",
+                                            className="float-dock-btn",
+                                            title="Switch to floating mode",
+                                        ),
+                                        html.Span("-", id="map-float-minimize-btn", className="float-minimize-btn"),
+                                    ],
                                 ),
-                            ),
+                                html.Div(
+                                    id="map-float-body",
+                                    className="float-body",
+                                    children=dcc.Loading(
+                                        type="circle",
+                                        color=_ACCENT,
+                                        children=dcc.Graph(
+                                            id="map-chart",
+                                            config={"displayModeBar": True, "scrollZoom": True},
+                                        ),
+                                    ),
+                                ),
+                            ],
                         ),
                         html.Div(
                             id="video-section",
-                            className="video-float-panel video-docked",
+                            className="float-panel video-panel docked",
                             style={"display": "none"},  # Dash/Python only ever touches "display" here
                             children=[
                                 html.Div(
                                     id="video-float-header",
-                                    className="video-float-header",
+                                    className="float-header",
                                     children=[
-                                        html.Span("Video", className="video-float-title"),
+                                        html.Span("Video", className="float-title"),
                                         html.Span(
                                             "⇱",
                                             id="video-float-dock-btn",
-                                            className="video-float-dock-btn",
+                                            className="float-dock-btn",
                                             title="Switch to floating mode",
                                         ),
-                                        html.Span(
-                                            "-", id="video-float-minimize-btn", className="video-float-minimize-btn"
-                                        ),
+                                        html.Span("-", id="video-float-minimize-btn", className="float-minimize-btn"),
                                     ],
                                 ),
                                 html.Div(
                                     id="video-float-body",
-                                    className="video-float-body",
+                                    className="float-body",
                                     children=[
                                         html.Video(
                                             id="video-player",

@@ -1,23 +1,26 @@
-/* Video panel (video-section), switchable between two modes via a
- * .video-floating / .video-docked modifier class (toggled by video-float.js):
+/* Shared floating/docked panel chrome, used by both the video panel
+ * (video-section) and the map panel (map-section). Each panel switches
+ * between two modes via a .floating / .docked modifier class (toggled by
+ * float-panel.js):
  *   - floating: position: fixed, draggable, overlays the scrolling content.
  *   - docked: normal in-flow block, sits inline between the chart and the
  *     grid table like the original (pre-floating) layout.
  * Positioning/size lives here in CSS so the Python-side style Output can
  * keep touching only "display" without clobbering JS-driven left/top or the
- * floating/docked/minimized classes. */
+ * floating/docked/minimized classes.
+ *
+ * .video-panel / .map-panel are per-panel-type modifiers that set the
+ * default floating position/width -- distinct so both panels can float at
+ * once without landing on top of each other. */
 
-.video-float-panel {
+.float-panel {
   background-color: var(--bs-secondary-bg);
   border: 1px solid var(--bs-border-color);
   border-radius: 6px;
 }
 
-.video-float-panel.video-floating {
+.float-panel.floating {
   position: fixed;
-  top: 80px;
-  right: 20px;
-  width: 360px;
   /* Above the Genie dbc.Offcanvas's default (~1045) so it's never trapped
      behind the chat panel; below replot-toast (9999), which is transient. */
   z-index: 1060;
@@ -25,13 +28,25 @@
   overflow: hidden;
 }
 
-.video-float-panel.video-docked {
+.float-panel.docked {
   position: static;
   width: auto;
   margin: 0 16px 16px;
 }
 
-.video-float-header {
+.video-panel.floating {
+  top: 80px;
+  right: 20px;
+  width: 360px;
+}
+
+.map-panel.floating {
+  top: 340px;
+  right: 20px;
+  width: 460px;
+}
+
+.float-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -42,20 +57,20 @@
   user-select: none;
 }
 
-.video-floating .video-float-header {
+.floating .float-header {
   cursor: move;
   touch-action: none;
 }
 
-.video-float-title {
+.float-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--bs-body-color);
   flex: 1;
 }
 
-.video-float-dock-btn,
-.video-float-minimize-btn {
+.float-dock-btn,
+.float-minimize-btn {
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
@@ -64,16 +79,16 @@
   color: var(--bs-secondary-color);
 }
 
-.video-float-dock-btn:hover,
-.video-float-minimize-btn:hover {
+.float-dock-btn:hover,
+.float-minimize-btn:hover {
   background-color: var(--bs-border-color);
 }
 
-.video-float-body {
+.float-body {
   padding: 8px 10px 10px;
 }
 
-.video-float-panel.video-float-minimized .video-float-body {
+.float-panel.float-minimized .float-body {
   display: none;
 }
 
@@ -84,6 +99,6 @@
   background-color: #000;
 }
 
-.video-docked .video-float-video {
+.video-panel.docked .video-float-video {
   max-height: 480px;
 }

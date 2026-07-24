@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from pandas.core.groupby import DataFrameGroupBy
 
-from .config import _parse_key, _to_utc_naive
+from .config import MAPBOX_TOKEN, _parse_key, _to_utc_naive
 
 # ---------------------------------------------------------------------------
 # Theme
@@ -489,14 +489,25 @@ def _map_fig(lat: pd.Series, lon: pd.Series, dark: bool = True) -> go.Figure:
             ),
         ]
     )
+    if MAPBOX_TOKEN:
+        # Real Mapbox styles (need an access token) look better than the
+        # tokenless carto fallback, so prefer them whenever a token is configured.
+        mapbox_layout = {
+            "accesstoken": MAPBOX_TOKEN,
+            "style": "dark" if dark else "light",
+            "center": {"lat": center_lat, "lon": center_lon},
+            "zoom": 10,
+        }
+    else:
+        mapbox_layout = {
+            "style": "carto-darkmatter" if dark else "carto-positron",
+            "center": {"lat": center_lat, "lon": center_lon},
+            "zoom": 10,
+        }
     fig.update_layout(
         paper_bgcolor=palette["bg"],
         showlegend=False,
-        mapbox={
-            "style": "carto-darkmatter",
-            "center": {"lat": center_lat, "lon": center_lon},
-            "zoom": 10,
-        },
+        mapbox=mapbox_layout,
         height=500,
         margin={"l": 0, "r": 0, "t": 30, "b": 0},
     )

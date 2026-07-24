@@ -19,6 +19,16 @@ resources:
             name: "vehicle network signal analysis"
             space_id: ${var.genie_space_id}
             permission: CAN_RUN
+        - name: mapbox-token
+          # Requires the scope/key to already exist (e.g. `databricks secrets
+          # put-secret blf mapbox_token`); the deploying user needs MANAGE on
+          # the scope. If Mapbox isn't wanted, leave the secret key empty --
+          # MAPBOX_TOKEN then resolves empty and the GPS map falls back to
+          # the tokenless carto style.
+          secret:
+            scope: ${var.mapbox_secret_scope}
+            key: ${var.mapbox_secret_key}
+            permission: READ
         - name: video-volume
           # READ_VOLUME here is auto-granted to the app SP on deploy (unlike the
           # table access below). The volume itself is NOT created by this bundle --

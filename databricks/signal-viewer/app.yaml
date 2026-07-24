@@ -10,3 +10,5 @@ env:
     value: "blf_dev"
   - name: GENIE_SPACE_ID
     valueFrom: genie-space
+  - name: MAPBOX_TOKEN
+    valueFrom: mapbox-token

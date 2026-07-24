@@ -475,7 +475,7 @@ def _map_fig(lat: pd.Series, lon: pd.Series, dark: bool = True) -> go.Figure:
     fig.update_layout(
         paper_bgcolor=palette["bg"],
         mapbox={
-            "style": "open-street-map",
+            "style": "carto-darkmatter",
             "center": {"lat": center_lat, "lon": center_lon},
             "zoom": 10,
         },

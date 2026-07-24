@@ -390,10 +390,28 @@ app.clientside_callback(
         // source that sorts later (e.g. SOMEIP) isn't starved out by an
         // earlier source (e.g. CAN) filling the whole budget -- same
         // rationale as the per-source cap in _fetch_all_signals. Keyword-
-        // matched candidates (see _fetch_latlon_candidates) are folded in
-        // first and exempted from the cap, so a GPS signal always shows up
-        // even if it would otherwise be truncated within its own source.
+        // matched candidates (see _fetch_latlon_candidates) are pinned to
+        // the top of the list (own block, ahead of the backfill block) and
+        // exempted from the cap, so a GPS signal always shows up -- and
+        // shows up first -- even if it would otherwise be truncated or
+        // buried alphabetically within its own source.
         var LAT_LON_MAX = 200;
+        // Explicit priority, not string comparison: signal_source values
+        // don't reliably sort CAN < ETH < SOMEIP on their own (and toOpt()
+        // relabels SOMEIP as "ETH", which would otherwise read as two
+        // non-contiguous "ETH" blocks).
+        var SOURCE_ORDER = { CAN: 0, ETH: 1, SOMEIP: 2 };
+        function sourceRank(src) {
+            return Object.prototype.hasOwnProperty.call(SOURCE_ORDER, src)
+                ? SOURCE_ORDER[src]
+                : Object.keys(SOURCE_ORDER).length;
+        }
+        function bySourceChannelName(a, b) {
+            var ra = sourceRank(a.signal_source), rb = sourceRank(b.signal_source);
+            if (ra !== rb) return ra - rb;
+            if (a.channel !== b.channel) return a.channel < b.channel ? -1 : 1;
+            return a.signal_name < b.signal_name ? -1 : (a.signal_name > b.signal_name ? 1 : 0);
+        }
         var presentSources = new Set(byChannel.map(function(r) { return r.signal_source; }));
         var latLonPerSourceMax = Math.max(1, Math.floor(LAT_LON_MAX / Math.max(1, presentSources.size)));
         var candidateRows = (latlonCandidates || []).filter(function(r) {
@@ -403,13 +421,14 @@ app.clientside_callback(
         });
         var latLonCounts = {};
         var seenKeys = {};
-        var latLonRows = [];
+        var candidateList = [];
+        var backfillList = [];
         candidateRows.forEach(function(r) {
             var key = r.signal_source + r.channel + "::" + r.signal_name;
             if (seenKeys[key]) return;
             seenKeys[key] = true;
             latLonCounts[r.signal_source] = (latLonCounts[r.signal_source] || 0) + 1;
-            latLonRows.push(r);
+            candidateList.push(r);
         });
         byChannel.forEach(function(r) {
             var key = r.signal_source + r.channel + "::" + r.signal_name;
@@ -418,14 +437,11 @@ app.clientside_callback(
             if (n >= latLonPerSourceMax) return;
             seenKeys[key] = true;
             latLonCounts[r.signal_source] = n + 1;
-            latLonRows.push(r);
+            backfillList.push(r);
         });
-        latLonRows.sort(function(a, b) {
-            if (a.signal_source !== b.signal_source) return a.signal_source < b.signal_source ? -1 : 1;
-            if (a.channel !== b.channel) return a.channel < b.channel ? -1 : 1;
-            return a.signal_name < b.signal_name ? -1 : (a.signal_name > b.signal_name ? 1 : 0);
-        });
-        var latLonOpts = latLonRows.map(toOpt);
+        candidateList.sort(bySourceChannelName);
+        backfillList.sort(bySourceChannelName);
+        var latLonOpts = candidateList.concat(backfillList).map(toOpt);
 
         if (searchTriggered) {
             return [visibleOpts, no_update, statusMsg, NORMAL_STYLE, latLonOpts, latLonOpts, "", EMPTY_HIDDEN];

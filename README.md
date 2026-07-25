@@ -323,6 +323,15 @@ so an identical fit always produces identical ids. It is still not a durable key
 across a refresh whose input data changed — anchor dashboards and saved filters
 on `primary_action_label` and `blf_scene_clusters`, not on the raw id.
 
+**Exploring the output.** `databricks/scene-pipeline/scene_exploration_notebook.ipynb`
+is an interactive notebook for the results: overall summary, segmentation health
+checks (gaps/overlaps must be zero), label and cluster distributions, the anomaly
+ranking, a per-file scene timeline, a PCA view of the feature space, and a
+drill-down that plots the raw `blf_gold_signals` traces behind a chosen scene.
+Import it into the workspace and set the catalog/schema widgets. The last section
+maps common symptoms ("labels are all `idle`", "scenes are too short") to the
+parameter to change.
+
 ### Deploy with Databricks Asset Bundles
 
 `databricks.yml` at the repo root automates the full deploy workflow:

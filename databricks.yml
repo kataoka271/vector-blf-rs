@@ -35,6 +35,7 @@ bundle:
 include:
   - databricks/blf-pipeline/blf_ingestion.pipeline.yml
   - databricks/signal-docs-pipeline/signal_docs.pipeline.yml
+  - databricks/scene-pipeline/blf_scenes.pipeline.yml
   - databricks/signal-viewer/signal_viewer.app.yml
   - databricks/signal-importer/signal_importer.job.yml
 
@@ -155,6 +156,76 @@ variables:
       Set via: databricks bundle deploy --var="semantic_model_endpoint=databricks-claude-3-7-sonnet"
     default: ""
 
+  scene_window_seconds:
+    description: >
+      Base tumbling-window length, in seconds, for the blf_scenes pipeline.
+      Scene boundaries are this fixed grid merged with detected signal change
+      points. Larger values give fewer, coarser scenes.
+    default: "10.0"
+
+  scene_min_segment_seconds:
+    description: >
+      Minimum scene length in seconds. A candidate boundary closer than this to
+      the previous kept boundary is dropped, which is what stops a noisy signal
+      from shattering a log into thousands of scenes. Must not exceed
+      scene_window_seconds; the pipeline clamps it if it does.
+    default: "2.0"
+
+  scene_changepoint_signals:
+    description: >
+      Comma-separated signal names watched for change points. Empty means every
+      signal in scope, which is not recommended -- high-rate signals produce a
+      boundary almost everywhere. Names must match blf_gold_signals.signal_name
+      exactly.
+    default: VehicleSpeed_kmh,BrakePressure_bar,AccelPedal_pct,SteeringAngle_deg,ignition_status,AcRequest,FanSpeed_pct
+
+  scene_k:
+    description: >
+      Number of behaviour clusters for the blf_scenes pipeline. Set to 0 to pick
+      k automatically by silhouette score -- but note that an automatic sweep can
+      change the cluster count, and therefore every cluster id, between runs.
+    default: "8"
+
+  scene_baseline_scope:
+    description: >
+      Population that anomaly z-scores are measured against: "global" (default)
+      compares every scene to the whole corpus, "file" compares it only to its
+      own source file. Global is right for "find the unusual scene across my
+      logs"; file only makes sense for a catalog mixing very different vehicles.
+    default: global
+
+  scene_anomaly_weights:
+    description: >
+      Comma-separated weights for the anomaly score terms, in the order
+      distance-from-centroid, robust z magnitude, cluster rarity. Normalized to
+      sum to 1.
+    default: 0.45,0.40,0.15
+
+  scene_rules_path:
+    description: >
+      Unity Catalog Volume path to the scene action-labeling rules CSV.
+      If empty and scene_rules_table is unset, every scene falls back to the
+      default label.
+      Format: rule_id,condition_index,label,priority,signal_source,channel,
+      signal_name,feature,op,value_a,value_b,negate,description
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/scene_rules.csv
+
+  scene_rules_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) with scene labeling rules
+      (optional). Same columns as the scene_rules_path CSV. Takes precedence
+      over scene_rules_path when set.
+      Set via: databricks bundle deploy --var="scene_rules_table=main.blf_dev.scene_rules"
+    default: ""
+
+  scene_summary_min_score:
+    description: >
+      Minimum anomaly_score (0-100) a scene needs before blf_scenes spends an
+      ai_query call summarizing it. blf_scenes is a materialized view, so every
+      refresh re-runs every call it makes -- lower this with care.
+      Only has an effect when semantic_model_endpoint is set.
+    default: "60"
+
   excel_source_path:
     description: >
       UC Volume path to the Excel signal definition file.
@@ -222,6 +293,10 @@ targets:
           continuous:  true
           development: false
         signal_docs:
+          development: false
+        # Triggered, like signal_docs: clustering and the anomaly baseline are
+        # whole-corpus computations, so this must not inherit continuous: true.
+        blf_scenes:
           development: false
     variables:
       target_schema: blf

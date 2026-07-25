@@ -230,6 +230,99 @@ manually after uploading new documentation:
 databricks bundle run signal_docs
 ```
 
+### `blf_scenes` (triggered)
+
+`databricks/scene-pipeline/scene_pipeline.py` turns the per-sample telemetry in
+`blf_gold_signals` into described, labeled, scored *scenes*. It reads that table
+as a plain batch Delta table, so it needs no wheel and shares no lineage with
+`blf_ingestion`:
+
+```
+blf_gold_signals  (batch read, CAN + SOME/IP)
+         |
+         v
+blf_scene_signal_stats        -- robust per-(file, signal) scale, sets the change-point threshold
+         |
+         v
+blf_scene_boundaries          -- the segmentation: fixed grid merged with signal change points
+         |
+         v
+blf_scene_signal_features     -- one row per (scene, signal): mean/std/range/slope/duty/transitions
+         |
+         +--> blf_scene_feature_index -> blf_scene_vectors -> blf_scene_cluster_assignments
+         |                                                    (numpy k-means, one fit over all scenes)
+         +--> blf_scene_feature_z      -- robust z per (scene, feature)
+         +--> blf_scene_labels         -- rule-derived driver actions
+         |
+         v
+blf_scenes                    -- user-facing: labels, cluster, anomaly_score, top_features
+blf_scene_clusters            -- per-cluster profile (+ optional ai_query cluster_name)
+```
+
+**Segmentation** is a fixed tumbling grid (`scene_window_seconds`, default 10 s)
+merged with change points — a watched signal moving more than
+`scene_changepoint_k` robust sigmas, or any state change on an enum signal. A
+candidate boundary closer than `scene_min_segment_seconds` to the previous kept
+one is dropped, which is what stops a noisy signal from shattering a log into
+thousands of scenes.
+
+**Labeling** is deterministic and driven by `assets/scene_rules.csv`, one row per
+condition; a rule fires when all of its conditions match, and the lowest-priority
+firing rule becomes `primary_action_label`:
+
+```csv
+rule_id,condition_index,label,priority,signal_source,channel,signal_name,feature,op,value_a,value_b,negate,description
+came_to_stop,0,came to a stop,18,CAN,,VehicleSpeed_kmh,min_v,lt,0.5,,false,speed reached zero
+came_to_stop,1,came to a stop,18,CAN,,VehicleSpeed_kmh,first_v,gt,5,,false,after having been moving
+```
+
+Ops are `gt`, `ge`, `lt`, `le`, `eq`, `between`, `abs_gt`, `abs_ge`, `abs_lt`,
+`abs_le`. An empty `channel` matches any channel. Rules can also live in a Unity
+Catalog table via `scene_rules_table`, which takes precedence over the CSV path.
+
+**Anomaly scoring** blends three terms into a 0-100 `anomaly_score`: how far the
+scene sits from its cluster centroid (normalized within that cluster), the
+magnitude of its robust feature z-scores, and how rare its cluster is.
+`top_features` names the five signals driving the score, with signed z, so a
+high score is always explainable. `n_features_present` says how many features the
+score was computed from — a scene scored from four features is not comparable to
+one scored from two hundred.
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `blf.scene_window_seconds` | `10.0` | base tumbling grid |
+| `blf.scene_min_segment_seconds` | `2.0` | minimum scene length; clamped to the window |
+| `blf.scene_changepoint_signals` | curated list | signals watched for change points |
+| `blf.scene_k` | `8` | number of behaviour clusters; `0` picks k by silhouette |
+| `blf.scene_baseline_scope` | `global` | anomaly baseline: whole corpus, or per source file |
+| `blf.scene_anomaly_weights` | `0.45,0.40,0.15` | distance / z magnitude / cluster rarity |
+| `blf.scene_rules_path` | `/Volumes/.../signals/scene_rules.csv` | action-labeling rules |
+| `blf.scene_rules_table` | `""` | rules from a UC table; wins over the path |
+| `blf.scene_summary_min_score` | `60` | minimum score before a scene gets an `ai_query` summary |
+
+This pipeline is always `continuous: false` (both `dev` and `prod`) — clustering
+and the anomaly baseline are whole-corpus computations that have to recompute
+together. Run it after `blf_ingestion` has caught up:
+
+```bash
+databricks fs cp assets/scene_rules.csv dbfs:/Volumes/main/blf_dev/signals/scene_rules.csv --overwrite
+databricks bundle run blf_scenes
+```
+
+**Optional: AI scene summaries.** Setting `blf.semantic_model_endpoint` (the same
+variable `signal_docs` uses) adds a `scene_summary` column on `blf_scenes` and a
+`cluster_name` on `blf_scene_clusters`. Unlike `signal_docs`, whose Auto Loader
+source means each document is summarized exactly once, `blf_scenes` is a
+materialized view that **fully recomputes on every run** — so every refresh
+re-runs every call it makes. `blf.scene_summary_min_score` (default 60) and
+`blf.scene_summary_max_rows` (default 2000) bound that cost; without them a
+20 000-scene corpus would mean 20 000 model calls per run.
+
+**Note on `cluster_id`.** Clusters are renumbered canonically by descending size,
+so an identical fit always produces identical ids. It is still not a durable key
+across a refresh whose input data changed — anchor dashboards and saved filters
+on `primary_action_label` and `blf_scene_clusters`, not on the raw id.
+
 ### Deploy with Databricks Asset Bundles
 
 `databricks.yml` at the repo root automates the full deploy workflow:
@@ -245,6 +338,7 @@ databricks bundle deploy -t prod
 # Trigger a pipeline run
 databricks bundle run blf_ingestion   # continuous in prod; this just kicks off an update
 databricks bundle run signal_docs     # always triggered -- run after uploading new docs
+databricks bundle run blf_scenes      # always triggered -- run after blf_ingestion has caught up
 
 # Tear down managed resources
 databricks bundle destroy -t prod

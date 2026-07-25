@@ -148,9 +148,11 @@ PyO3 bindings exposed as the `vector_blf` Python extension module:
 | `databricks.yml` | Databricks Asset Bundle (DAB) config — defines the `vector_blf` wheel artifact, pipeline variables, and `dev`/`prod` targets |
 | `databricks/blf-pipeline/dlt_blf_pipeline.py` | Delta Live Tables pipeline (`blf_ingestion`, continuous streaming): `blf_bronze` → `blf_silver_can` / `blf_silver_eth` / `blf_silver_mf4_signals` / `blf_silver_diag` → signal tables (`blf_silver_can_signals`, `blf_silver_can_container_pdus`, `blf_silver_eth_signals`, `blf_silver_someip`, `blf_silver_someip_signals`) → `blf_gold_signals`; also lists video files (`blf_video_files`, from `blf.video_path`) for Signal Viewer playback sync, keyed by filename stem |
 | `databricks/signal-docs-pipeline/signal_docs_pipeline.py` | Separate, triggered DLT pipeline (`signal_docs`): ingests PDF/DOCX/PPTX/XLSX signal documentation from a Volume, extracting per-page/slide/sheet/document text into `blf_signal_doc_sections` (optionally enriched with an `ai_query()`-derived `semantic_summary` column) for Genie Space grounding. Shares no lineage with `blf_gold_signals`; kept separate so it doesn't inherit the main pipeline's `continuous: true` in prod |
+| `databricks/scene-pipeline/scene_pipeline.py` | Separate, triggered DLT pipeline (`blf_scenes`): cuts `blf_gold_signals` into time sections ("scenes") on a fixed grid merged with signal change points, extracts per-(scene, signal) features into `blf_scene_signal_features`, clusters the scenes (`blf_scene_cluster_assignments`, numpy k-means in a single `applyInPandas` group), labels each with rule-derived driver actions (`blf_scene_labels`, from `assets/scene_rules.csv`), and scores anomalies into the user-facing `blf_scenes` + `blf_scene_clusters`. Triggered, not continuous: clustering and the anomaly baseline are whole-corpus computations that must recompute together |
 | `databricks/signal-viewer/app.py` | Plotly Dash visualization app (Databricks App); reads from `blf_gold_signals`; features signal checklist, time-range slider, GPS map, AgGrid data table, and synced video playback (`blf_video_files`) with a live chart cursor |
 | `databricks/blf-pipeline/build_wheel.sh` | Builds a manylinux `aarch64` wheel inside Docker using `maturin` + `cargo-zigbuild`; output goes to `dist/` |
 | `assets/can_signals.csv` | Demo signal definitions CSV; upload to the `signals` volume before running the pipeline |
+| `assets/scene_rules.csv` | Demo scene action-labeling rules; upload to the `signals` volume before running `blf_scenes`. One row per condition; a rule fires when all its conditions match |
 
 **DAB workflow:**
 
@@ -160,14 +162,18 @@ databricks bundle deploy              # build wheel, upload, deploy (dev target)
 databricks bundle deploy -t prod      # deploy to production
 databricks bundle run blf_ingestion   # trigger a BLF ingestion pipeline run
 databricks bundle run signal_docs     # trigger a signal-doc ingestion pipeline run (after uploading new docs)
+databricks bundle run blf_scenes      # trigger a scene analysis run (after blf_ingestion has caught up)
 databricks bundle destroy             # tear down all managed resources
 
 # Upload signal definitions to the signals volume (dev)
 databricks fs cp assets/can_signals.csv       dbfs:/Volumes/main/blf_dev/signals/can_signals.csv       --overwrite
 databricks fs cp assets/someip_signals.csv dbfs:/Volumes/main/blf_dev/signals/someip_signals.csv --overwrite
+databricks fs cp assets/scene_rules.csv    dbfs:/Volumes/main/blf_dev/signals/scene_rules.csv    --overwrite
 ```
 
 The `blf_ingestion` pipeline reads `*.blf` files from a Unity Catalog Volume (set via `blf.source_path`), parses them with the `vector_blf` wheel using a pandas UDF, and writes partitioned Delta tables. Signal definitions live in the `signals` volume (`blf.signals_path` for CAN, `blf.someip_signals_path` for SOME/IP); when present, physical values are decoded into `blf_silver_can_signals` and `blf_silver_someip_signals` respectively. Optionally, `blf.video_path` points at a Volume of dashcam-style video files; the pipeline lists them (path/mtime/size only, no transcoding) into `blf_video_files`, keyed by filename stem, so Signal Viewer can find and play back the video matching a selected BLF file. The separate `signal_docs` pipeline (triggered, not continuous) reads `blf.signal_docs_path` independently and has no dependency on `blf_ingestion`.
+
+The separate `blf_scenes` pipeline (also triggered) reads `blf_gold_signals` as a plain batch Delta table — it needs no wheel and shares no lineage with `blf_ingestion`. It segments each log into scenes, clusters them, labels them from `blf.scene_rules_path`, and scores anomalies. Run it after `blf_ingestion` has caught up. `cluster_id` is canonicalized by descending cluster size so an identical fit yields identical ids, but it is not a durable key across a refresh whose input data changed — anchor on `primary_action_label` and `blf_scene_clusters` instead.
 
 **Volume layout (dev):**
 
@@ -176,6 +182,7 @@ The `blf_ingestion` pipeline reads `*.blf` files from a Unity Catalog Volume (se
 | `main.blf_dev.raw` | `/Volumes/main/blf_dev/raw/` | Source `*.blf` files (Auto Loader input) |
 | `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/can_signals.csv` | CAN signal definitions CSV |
 | `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/someip_signals.csv` | SOME/IP signal definitions CSV |
+| `main.blf_dev.signals` | `/Volumes/main/blf_dev/signals/scene_rules.csv` | Scene action-labeling rules CSV (read by `blf_scenes`) |
 | `main.blf_dev.docs` | `/Volumes/main/blf_dev/docs/*.{pdf,docx,pptx,xlsx}` | Signal documentation files (Auto Loader input for `blf_signal_doc_sections`) |
 | `main.blf_dev.video` | `/Volumes/main/blf_dev/video/*.{mp4,webm,mov}` | Video files (Auto Loader input for `blf_video_files`); matched to a BLF file by filename stem |
 

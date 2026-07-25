@@ -1,0 +1,43 @@
+resources:
+  pipelines:
+    blf_scenes:
+      name: vector-blf-scenes-${bundle.target}
+
+      # Unity Catalog output location (same catalog/schema as blf_ingestion)
+      catalog: ${var.target_catalog}
+      target: ${var.target_schema}
+
+      # Pipeline parameters -- consumed by spark.conf.get() in the Python file
+      configuration:
+        blf.target_catalog:            ${var.target_catalog}
+        blf.target_schema:             ${var.target_schema}
+        blf.scene_window_seconds:      ${var.scene_window_seconds}
+        blf.scene_min_segment_seconds: ${var.scene_min_segment_seconds}
+        blf.scene_changepoint_signals: ${var.scene_changepoint_signals}
+        blf.scene_k:                   ${var.scene_k}
+        blf.scene_baseline_scope:      ${var.scene_baseline_scope}
+        blf.scene_anomaly_weights:     ${var.scene_anomaly_weights}
+        blf.scene_rules_path:          ${var.scene_rules_path}
+        blf.scene_rules_table:         ${var.scene_rules_table}
+        blf.scene_summary_min_score:   ${var.scene_summary_min_score}
+        blf.semantic_model_endpoint:   ${var.semantic_model_endpoint}
+
+      libraries:
+        - file:
+            path: ./scene_pipeline.py
+
+      # No environment.dependencies: numpy/pandas/pyarrow ship in the serverless
+      # base image, and this pipeline never touches the vector_blf wheel -- it
+      # reads blf_gold_signals as a plain Delta table.
+
+      serverless: true
+
+      channel: CURRENT    # use the latest DLT runtime
+      edition: ADVANCED
+
+      # Clustering and the anomaly baseline are whole-corpus computations that
+      # have to recompute together, so this is triggered rather than continuous.
+      # Run it after blf_ingestion has caught up:
+      #   databricks bundle run blf_scenes
+      continuous:  false
+      development: true

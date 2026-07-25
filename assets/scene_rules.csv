@@ -1,0 +1,30 @@
+rule_id,condition_index,label,priority,signal_source,channel,signal_name,feature,op,value_a,value_b,negate,description
+fault_raised,0,a fault code was raised,1,CAN,,FaultCode,max_v,gt,0,,false,non-zero diagnostic fault code
+engine_overheat,0,the engine overheated,6,CAN,,EngineTemp_degC,max_v,gt,110,,false,coolant temperature above 110 C
+wheel_slip_fl,0,a wheel speed diverged,8,CAN,,WheelSpeed_FL_kmh,range_v,gt,15,,false,front-left wheel speed swung widely
+wheel_slip_fr,0,a wheel speed diverged,8,CAN,,WheelSpeed_FR_kmh,range_v,gt,15,,false,front-right wheel speed swung widely
+wheel_slip_rl,0,a wheel speed diverged,8,CAN,,WheelSpeed_RL_kmh,range_v,gt,15,,false,rear-left wheel speed swung widely
+battery_sag,0,the battery voltage sagged,9,CAN,,BattVoltage_V,min_v,lt,11,,false,pack voltage dropped below 11 V
+hard_brake,0,braked hard,10,CAN,,BrakePressure_bar,max_v,gt,40,,false,high brake pressure
+hard_brake,1,braked hard,10,CAN,,VehicleSpeed_kmh,slope_per_s,lt,-3,,false,and speed fell quickly
+close_following,0,closed on the vehicle ahead,12,CAN,,Radar_Distance_m,min_v,lt,5,,false,radar target within 5 m
+close_following,1,closed on the vehicle ahead,12,CAN,,Radar_Confidence_pct,mean_v,gt,50,,false,with a confident radar track
+brake_apply,0,pressed the brake,15,CAN,,BrakePressure_bar,max_v,gt,5,,false,brake pressure rose above 5 bar
+brake_apply,1,pressed the brake,15,CAN,,BrakePressure_bar,delta_v,gt,2,,false,and it was still rising at the end
+came_to_stop,0,came to a stop,18,CAN,,VehicleSpeed_kmh,min_v,lt,0.5,,false,speed reached zero
+came_to_stop,1,came to a stop,18,CAN,,VehicleSpeed_kmh,first_v,gt,5,,false,after having been moving
+pulled_away,0,pulled away from a stop,20,CAN,,VehicleSpeed_kmh,first_v,lt,0.5,,false,started from rest
+pulled_away,1,pulled away from a stop,20,CAN,,VehicleSpeed_kmh,last_v,gt,5,,false,and was moving by the end
+ignition_change,0,changed the ignition state,22,CAN,,ignition_status,n_transitions,ge,1,,false,ignition switch position changed
+ac_toggle,0,pushed the A/C switch,25,CAN,,AcRequest,n_transitions,ge,1,,false,A/C request line toggled
+fan_change,0,adjusted the blower fan,27,CAN,,FanSpeed_pct,n_transitions,ge,1,,false,fan speed setting changed
+cornering,0,cornered,30,CAN,,LateralAccel_mps2,max_v,abs_gt,2.5,,false,sustained lateral acceleration
+sharp_steering,0,steered sharply,32,CAN,,SteeringAngle_deg,range_v,gt,90,,false,large steering-angle excursion
+high_motor_torque,0,demanded high motor torque,34,SOMEIP,,MotorTorque_Nm,max_v,gt,200,,false,motor torque above 200 Nm
+accelerating,0,accelerated,36,CAN,,AccelPedal_pct,delta_v,gt,10,,false,accelerator pedal opened
+accelerating,1,accelerated,36,CAN,,VehicleSpeed_kmh,slope_per_s,gt,1,,false,and speed was rising
+coasting,0,coasted,40,CAN,,AccelPedal_pct,max_v,lt,2,,false,accelerator released
+coasting,1,coasted,40,CAN,,BrakePressure_bar,max_v,lt,1,,false,brake released
+coasting,2,coasted,40,CAN,,VehicleSpeed_kmh,min_v,gt,5,,false,while still moving
+idling,0,idled,45,CAN,,EngineSpeed_rpm,mean_v,between,500,1000,false,engine turning at idle speed
+idling,1,idled,45,CAN,,VehicleSpeed_kmh,max_v,lt,1,,false,while stationary

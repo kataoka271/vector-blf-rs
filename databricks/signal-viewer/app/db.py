@@ -29,7 +29,11 @@ from .dummy import _dummy_query
 
 
 def _log_token_info(token: str) -> None:
-    """Log non-sensitive metadata from the X-Forwarded-Access-Token."""
+    """Log non-sensitive metadata from the X-Forwarded-Access-Token.
+
+    Logs the subject, issuer, scope and expiry for a JWT, or just a short prefix
+    and the length for an opaque token. Never logs the token itself.
+    """
     parts = token.split(".")
     if len(parts) == 3:
         # JWT: decode the payload (no signature verification needed for logging)
@@ -59,7 +63,12 @@ def _log_token_info(token: str) -> None:
 
 
 def _run_query(stmt: str, params: list | dict | None, user_token: str | None = None) -> pd.DataFrame:
-    """Execute a SQL query and return the result as a pandas DataFrame."""
+    """Execute a SQL query on the configured warehouse and return the rows as a DataFrame.
+
+    `params` binds the statement's `?` markers, in placeholder order. Authenticates
+    as the end user when `user_token` is given, otherwise with the app's own
+    (service principal) credentials. Opens and closes a connection per call.
+    """
     assert cfg is not None, "Databricks config is not initialized."
     print(f"[_run_query] stmt={stmt!r} params={params!r}", flush=True)
     connect_kwargs = {"access_token": user_token} if user_token else {"credentials_provider": cfg.authenticate}
@@ -76,16 +85,16 @@ def _run_query(stmt: str, params: list | dict | None, user_token: str | None = N
 
 
 def _resolve_user_token() -> str | None:
-    """Read the X-Forwarded-Access-Token header from the current request context.
+    """Return the caller's X-Forwarded-Access-Token, or None in local dev.
 
-    Must be called from the thread handling the Flask request -- `flask.request`
-    is only valid there. Callers that fan out queries to worker threads (see
-    `_run_parallel`) must resolve the token once up front and pass it through
-    explicitly, rather than letting `_query` re-read `flask.request` from a
-    worker thread.
+    Must be called from the thread handling the Flask request. Raises RuntimeError
+    when the header is missing.
     """
     if _LOCAL_DEV:
         return None
+    # `flask.request` is only valid on the request thread, which is why callers that
+    # fan out to workers (see _run_parallel) resolve the token here once and pass it
+    # through explicitly instead of letting `_query` re-read the header downstream.
     user_token = flask.request.headers.get("X-Forwarded-Access-Token")
     if not user_token:
         raise RuntimeError("Missing X-Forwarded-Access-Token header.")
@@ -96,8 +105,9 @@ def _resolve_user_token() -> str | None:
 def _query(stmt: str, params=None, *, user_token: str | None = None) -> pd.DataFrame:
     """Run a parameterised SQL query using the request's user token or SP credentials.
 
-    `user_token`, if not given, is resolved from the current request context.
-    Pass it explicitly when calling from a worker thread (see `_run_parallel`).
+    `user_token`, if not given, is resolved from the current request context, so it
+    must be passed explicitly when calling from a worker thread (see `_run_parallel`).
+    In local dev this serves dummy data instead of reaching a warehouse.
     """
     if _LOCAL_DEV:
         return _dummy_query(stmt, params)
@@ -107,22 +117,27 @@ def _query(stmt: str, params=None, *, user_token: str | None = None) -> pd.DataF
 
 
 def _run_parallel(calls: list[Callable[[], Any]]) -> list[Any]:
-    """Run independent no-arg fetch callables concurrently, preserving call order.
+    """Run independent no-arg fetch callables concurrently, returning results in call order.
 
-    Each callable is expected to open its own SQL connection (see `_run_query`),
-    so this trades N sequential connect+round-trip waits for the slowest single
-    one. Callers must resolve any request-scoped state (e.g. the user token via
-    `_resolve_user_token`) before building these callables, since worker threads
-    cannot access `flask.request`.
+    Callers must resolve any request-scoped state (e.g. the user token via
+    `_resolve_user_token`) before building the callables; worker threads cannot
+    access `flask.request`. Exceptions propagate from the first failing callable,
+    so callables that need per-call error handling must catch and return it.
     """
     if len(calls) <= 1:
         return [c() for c in calls]
+    # Each callable opens its own SQL connection (see _run_query), so this trades N
+    # sequential connect+round-trip waits for the slowest single one.
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(calls)) as ex:
         futures = [ex.submit(c) for c in calls]
         return [f.result() for f in futures]
 
 
 def _fetch_filenames(user_token: str | None = None) -> list[str] | None:
+    """Fetch up to 200 ingested BLF source-file paths, sorted by path.
+
+    Returns None if the query fails.
+    """
     try:
         df = _query(
             f"SELECT _source_file FROM {_SOURCE_FILES_TABLE} ORDER BY _source_file LIMIT 200",
@@ -204,11 +219,13 @@ def _fetch_all_signals(
 
 
 def _fetch_all_channels(filenames: list[str] | None = None, user_token: str | None = None) -> list[dict] | None:
-    """Fetch the distinct (signal_source, channel) pairs, uncapped.
+    """Fetch the distinct (signal_source, channel) pairs, ordered and uncapped.
 
-    Kept separate from _fetch_all_signals so the channel-filter checklist isn't
-    limited to whatever channels happen to fall within the 500-row signal browse cache.
+    Restricted to `filenames` when given. Returns None if the query fails.
     """
+    # Kept separate from _fetch_all_signals so the channel-filter checklist isn't
+    # limited to the channels that happen to fall inside that function's
+    # per-source-capped browse cache.
     try:
         if filenames:
             placeholders = ", ".join(["?"] * len(filenames))
@@ -302,6 +319,11 @@ def _fetch_latlon_candidates(
 
 
 def _fetch_global_time_range(user_token: str | None = None) -> dict | None:
+    """Fetch the timestamp bounds covering every ingested signal.
+
+    Returns {"min": float, "max": float, "t0": ISO-8601 str | None}, where t0 is the
+    wall-clock time of the first sample, or None if the query fails.
+    """
     try:
         df = _query(f"SELECT t_min, t_max, t0 FROM {_TIME_RANGE_TABLE}", user_token=user_token)
         t0_raw = df["t0"].iloc[0] if "t0" in df.columns else None
@@ -323,10 +345,17 @@ def fetch_signal_data(
 ) -> tuple[pd.DataFrame | None, dict | object, str]:
     """Run the two-query fetch (unfiltered time-range + downsampled main query).
 
-    Returns (df, new_time_range, message). df is None only on the validation
-    guard paths (no source/no signal selected) and on a main-query error --
-    callers rely on this None-vs-not-None distinction to mean "a successful
-    query happened, even if it returned zero rows".
+    Fetches the signals named by `selected` plus `lat_key`/`lon_key` (keys in
+    `_parse_key` form), restricted to `filenames` when given, and to `time_range`
+    ([lo, hi] seconds) when `time_range_store` says a range is in effect. `sources`
+    only gates the fetch: an empty value returns early. Each signal is reduced to at
+    most 2 * `max_pts` points.
+
+    Returns (df, new_time_range, message). df is None only on the validation guard
+    paths (no source/no signal selected) and on a main-query error -- callers rely
+    on this None-vs-not-None distinction to mean "a successful query happened, even
+    if it returned zero rows". `new_time_range` is `dash.no_update` when the bounds
+    could not be refreshed.
     """
     if not sources:
         return None, dash.no_update, "No source selected."
@@ -436,7 +465,11 @@ def fetch_signal_data(
 
 
 def _fetch_video_for_file(filename: str) -> dict | None:
-    """Look up the video matching a BLF source file by filename stem (e.g. drive001.blf <-> drive001.mp4)."""
+    """Look up the video matching a BLF source file by filename stem (e.g. drive001.blf <-> drive001.mp4).
+
+    Returns {"video_path": str, "mtime": ISO-8601 str | None}, or None when no video
+    matches or the query fails.
+    """
     try:
         stmt = (
             f"SELECT _video_path, _video_mtime FROM {_VIDEO_FILES_TABLE}"

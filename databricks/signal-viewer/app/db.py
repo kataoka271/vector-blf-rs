@@ -135,58 +135,66 @@ def _fetch_filenames(user_token: str | None = None) -> list[str] | None:
         return None
 
 
+_CATALOG_COLS = "signal_name, signal_source, channel"
+
+
+def _catalog_query(
+    filenames: list[str] | None,
+    *,
+    match_clause: str = "",
+    match_params: list | None = None,
+    per_source_limit: int | None = None,
+) -> tuple[str, list | None]:
+    """Build a signal-catalog browse query, ordered by (signal_source, channel, signal_name).
+
+    Selects (signal_name, signal_source, channel) from the pre-aggregated catalog
+    table, or -- when `filenames` is given -- from the per-file catalog restricted
+    to those files and de-duplicated.
+
+    `match_clause` is an optional SQL predicate spliced in after WHERE, with
+    `match_params` supplying its parameters. `per_source_limit` caps how many rows
+    each signal_source may contribute; `None` leaves the result uncapped.
+
+    Returns (statement, params). `params` is in placeholder order -- filenames
+    first, then `match_params` -- or None if the statement takes no parameters.
+    """
+    params: list = []
+    if filenames:
+        # The per-file catalog is clustered on _source_file, so this stays cheap
+        # even though it holds one row per (file, signal). DISTINCT needs its own
+        # subquery: QUALIFY numbers rows before de-duplication.
+        placeholders = ", ".join(["?"] * len(filenames))
+        source = (
+            f"(SELECT DISTINCT {_CATALOG_COLS} FROM {_CATALOG_BY_FILE_TABLE} WHERE _source_file IN ({placeholders}))"
+        )
+        params += list(filenames)
+    else:
+        source = _CATALOG_TABLE
+    stmt = f"SELECT {_CATALOG_COLS} FROM {source}"
+    if match_clause:
+        stmt += f" WHERE {match_clause}"
+        params += match_params or []
+    if per_source_limit is not None:
+        # Capped per source rather than in total: `ORDER BY signal_source ... LIMIT n`
+        # would let an alphabetically-earlier source with many rows (e.g. CAN) crowd
+        # out a later one (e.g. SOMEIP) entirely once the row count exceeds the limit.
+        stmt += (
+            f" QUALIFY ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name)"
+            f" <= {per_source_limit}"
+        )
+    return stmt + " ORDER BY signal_source, channel, signal_name", params or None
+
+
 def _fetch_all_signals(
     filenames: list[str] | None = None, limit: int | None = 500, user_token: str | None = None
 ) -> list[dict] | None:
     """Fetch known signals, ordered by (signal_source, channel, signal_name).
 
-    `limit` caps rows per signal_source (not the total row count), via a
-    ROW_NUMBER() window partitioned by signal_source. A plain `ORDER BY
-    signal_source ... LIMIT n` would let an alphabetically-earlier source
-    with many rows (e.g. CAN) crowd out a later one (e.g. SOMEIP) entirely
-    once the true row count exceeds `limit`.
+    Returns at most `limit` // 3 signals per signal_source (see _catalog_query);
     `limit=None` fetches the full catalog uncapped.
     """
     try:
-        per_source_limit = max(1, limit // 3) if limit is not None else None
-        if filenames:
-            # File-filtered: query the small per-file catalog table (clustered on
-            # _source_file), not the per-sample gold table.
-            placeholders = ", ".join(["?"] * len(filenames))
-            if per_source_limit is not None:
-                stmt = (
-                    f"SELECT signal_name, signal_source, channel FROM ("
-                    f"  SELECT signal_name, signal_source, channel,"
-                    f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                    f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
-                    f"        WHERE _source_file IN ({placeholders}))"
-                    f") WHERE rn <= {per_source_limit}"
-                    f" ORDER BY signal_source, channel, signal_name"
-                )
-            else:
-                stmt = (
-                    f"SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
-                    f" WHERE _source_file IN ({placeholders})"
-                    f" ORDER BY signal_source, channel, signal_name"
-                )
-            params: list | None = list(filenames)
-        else:
-            # Unfiltered: query the pre-aggregated catalog table (fast, no gold table scan)
-            if per_source_limit is not None:
-                stmt = (
-                    f"SELECT signal_name, signal_source, channel FROM ("
-                    f"  SELECT signal_name, signal_source, channel,"
-                    f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                    f"  FROM {_CATALOG_TABLE}"
-                    f") WHERE rn <= {per_source_limit}"
-                    f" ORDER BY signal_source, channel, signal_name"
-                )
-            else:
-                stmt = (
-                    f"SELECT signal_name, signal_source, channel FROM {_CATALOG_TABLE}"
-                    f" ORDER BY signal_source, channel, signal_name"
-                )
-            params = None
+        stmt, params = _catalog_query(filenames, per_source_limit=max(1, limit // 3) if limit is not None else None)
         df = _query(stmt, params, user_token=user_token)
         print(f"[_fetch_all_signals] fetched {len(df)} signal(s)", flush=True)
         return df.to_dict("records")
@@ -226,39 +234,24 @@ def _fetch_signals_by_search(
 ) -> tuple[list[dict], bool]:
     """Search signals matching keyword server-side (not limited to the cached browse window).
 
-    Caps matches per signal_source (not the total), same rationale as
-    _fetch_all_signals: a keyword matching many CAN/ETH signal names must not
-    starve SOMEIP matches out of the result set via `ORDER BY signal_source
-    ... LIMIT n`.
+    A signal matches when its name contains every whitespace-separated word of
+    `keyword`, case-insensitively. Returns (rows, truncated): rows carries at most
+    `limit` // 3 matches per signal_source (see _catalog_query), and `truncated` is
+    True when that cap dropped matches.
     """
     try:
         words = keyword.split()
-        words_placeholders = ", ".join(["?"] * len(words))
-        match_clause = f"forall(array({words_placeholders}), w -> signal_name ILIKE concat('%', w, '%'))"
         per_source_limit = max(1, limit // 3)
-        fetch_cap = per_source_limit + 1  # one extra row per source, to detect truncation
-        if filenames:
-            placeholders = ", ".join(["?"] * len(filenames))
-            stmt = (
-                f"SELECT signal_name, signal_source, channel FROM ("
-                f"  SELECT signal_name, signal_source, channel,"
-                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
-                f"        WHERE _source_file IN ({placeholders}) AND {match_clause})"
-                f") WHERE rn <= {fetch_cap}"
-                f" ORDER BY signal_source, channel, signal_name"
-            )
-            params: list = [*filenames, *words]
-        else:
-            stmt = (
-                f"SELECT signal_name, signal_source, channel FROM ("
-                f"  SELECT signal_name, signal_source, channel,"
-                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                f"  FROM {_CATALOG_TABLE} WHERE {match_clause}"
-                f") WHERE rn <= {fetch_cap}"
-                f" ORDER BY signal_source, channel, signal_name"
-            )
-            params = words
+        # A chain of `ILIKE ?` rather than forall(array(...), w -> signal_name ILIKE
+        # concat('%', w, '%')): a bound parameter marker makes each pattern foldable,
+        # so Catalyst rewrites it to a vectorized Contains() and pushes it into the
+        # scan, whereas the lambda's pattern is per-row and compiles a regex.
+        stmt, params = _catalog_query(
+            filenames,
+            match_clause=" AND ".join(["signal_name ILIKE ?"] * len(words)),
+            match_params=[f"%{w}%" for w in words],
+            per_source_limit=per_source_limit + 1,  # one extra row per source, to detect truncation
+        )
         df = _query(stmt, params)
         truncated = not df.empty and bool((df["signal_source"].value_counts() > per_source_limit).any())
         if truncated:
@@ -276,39 +269,29 @@ def _fetch_signals_by_search(
 # Common name fragments for GPS position signals, used to pre-seed the Lat/Lon
 # pickers with likely candidates regardless of where they'd otherwise fall in
 # the (per-source-capped) browse cache -- see _fetch_all_signals.
-_LATLON_KEYWORDS = ["lat", "lon", "latitude", "longitude", "gps"]
+# "lat"/"lon" already subsume "latitude"/"longitude" as substrings.
+_LATLON_KEYWORDS = ["lat", "lon", "gps"]
 
 
 def _fetch_latlon_candidates(
     filenames: list[str] | None = None, limit: int = 100, user_token: str | None = None
 ) -> list[dict] | None:
-    """Fetch signals matching common GPS lat/lon keywords, capped per signal_source."""
+    """Fetch signals matching common GPS lat/lon keywords, capped per signal_source.
+
+    A signal matches when its name contains any of `_LATLON_KEYWORDS`,
+    case-insensitively. At most `limit` // 3 rows per signal_source (see
+    _catalog_query).
+    """
     try:
-        or_clause = " OR ".join(["LOWER(signal_name) LIKE ?"] * len(_LATLON_KEYWORDS))
-        like_params = [f"%{kw}%" for kw in _LATLON_KEYWORDS]
-        per_source_limit = max(1, limit // 3)
-        if filenames:
-            placeholders = ", ".join(["?"] * len(filenames))
-            stmt = (
-                f"SELECT signal_name, signal_source, channel FROM ("
-                f"  SELECT signal_name, signal_source, channel,"
-                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                f"  FROM (SELECT DISTINCT signal_name, signal_source, channel FROM {_CATALOG_BY_FILE_TABLE}"
-                f"        WHERE _source_file IN ({placeholders}) AND ({or_clause}))"
-                f") WHERE rn <= {per_source_limit}"
-                f" ORDER BY signal_source, channel, signal_name"
-            )
-            params: list = [*filenames, *like_params]
-        else:
-            stmt = (
-                f"SELECT signal_name, signal_source, channel FROM ("
-                f"  SELECT signal_name, signal_source, channel,"
-                f"    ROW_NUMBER() OVER (PARTITION BY signal_source ORDER BY channel, signal_name) AS rn"
-                f"  FROM {_CATALOG_TABLE} WHERE {or_clause}"
-                f") WHERE rn <= {per_source_limit}"
-                f" ORDER BY signal_source, channel, signal_name"
-            )
-            params = like_params
+        # `ILIKE ?` terms for the same reason as _fetch_signals_by_search: each bound
+        # pattern folds into a vectorized Contains(), where a single RLIKE alternation
+        # would stay a regex. Parenthesised so the OR cannot bind past this clause.
+        stmt, params = _catalog_query(
+            filenames,
+            match_clause="(" + " OR ".join(["signal_name ILIKE ?"] * len(_LATLON_KEYWORDS)) + ")",
+            match_params=[f"%{kw}%" for kw in _LATLON_KEYWORDS],
+            per_source_limit=max(1, limit // 3),
+        )
         df = _query(stmt, params, user_token=user_token)
         rows = df.to_dict("records")
         print(f"[_fetch_latlon_candidates] -> {len(rows)} row(s)", flush=True)
@@ -354,8 +337,13 @@ def fetch_signal_data(
         return None, dash.no_update, "No signal selected."
 
     key_triples = [_parse_key(key) for key in keys]
-    pair_filter = "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
-    pair_params = [part for triple in key_triples for part in triple]
+    # An OR of equality conjuncts, not `(signal_source, channel, signal_name) IN
+    # ((?, ?, ?), ...)`: Photon has no columnar path for a struct-typed IN, and this
+    # filter sits directly on the gold-table scan, so the fallback drags the whole
+    # window/aggregate pipeline above it onto row-based Spark. Plain =/AND/OR stays
+    # vectorized and reaches the scan as data filters, so Delta can skip files.
+    key_filter = "(" + " OR ".join(["(signal_source = ? AND channel = ? AND signal_name = ?)"] * len(key_triples)) + ")"
+    key_params = [part for triple in key_triples for part in triple]
 
     file_filter = ""
     file_params: list = []
@@ -370,30 +358,35 @@ def fetch_signal_data(
         time_filter = " AND timestamp_s BETWEEN ? AND ?"
         time_params = [t_lo, t_hi]
 
+    where = f"{key_filter}{file_filter}"
+    base_params = key_params + file_params
+
     new_time_range: dict | object = dash.no_update
     range_stmt = (
         f"SELECT MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max, MIN(event_time) AS t0 "
-        f"FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}"
+        f"FROM {_GOLD_TABLE} WHERE {where}"
     )
 
+    # Downsample: NTILE splits each signal into max_pts equal-count buckets, and each
+    # bucket contributes its lowest and highest sample so extremes survive. Carrying
+    # the sample as one struct keeps the column list in a single place, and inline()
+    # unpacks the (lo, hi) pair in one pass -- a UNION ALL of two SELECTs over `agg`
+    # makes the scan/window/aggregate pipeline a candidate for being run twice.
+    sample_cols = "event_time, timestamp_s, timestamp_ns, signal_value, signal_str"
     stmt = (
         f"WITH bucketed AS ("
-        f"  SELECT signal_source, channel, signal_name, event_time, timestamp_s, timestamp_ns, signal_value, signal_str,"
+        f"  SELECT signal_source, channel, signal_name, struct({sample_cols}) AS sample,"
         f"    NTILE({int(max_pts)}) OVER ("
         f"      PARTITION BY signal_source, channel, signal_name ORDER BY timestamp_ns"
         f"    ) AS bucket"
-        f"  FROM {_GOLD_TABLE} WHERE {pair_filter}{file_filter}{time_filter}"
+        f"  FROM {_GOLD_TABLE} WHERE {where}{time_filter}"
         f"), agg AS ("
-        f"  SELECT signal_source, channel, signal_name, bucket,"
-        f"    MIN_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS lo,"
-        f"    MAX_BY(struct(event_time, timestamp_s, timestamp_ns, signal_value, signal_str), signal_value) AS hi"
+        f"  SELECT signal_source, channel, signal_name,"
+        f"    MIN_BY(sample, sample.signal_value) AS lo, MAX_BY(sample, sample.signal_value) AS hi"
         f"  FROM bucketed GROUP BY signal_source, channel, signal_name, bucket"
-        f") SELECT * FROM ("
-        f"  SELECT signal_source, channel, signal_name, lo.event_time AS event_time, lo.timestamp_s AS timestamp_s,"
-        f"    lo.timestamp_ns AS timestamp_ns, lo.signal_value AS signal_value, lo.signal_str AS signal_str FROM agg"
-        f"  UNION ALL"
-        f"  SELECT signal_source, channel, signal_name, hi.event_time, hi.timestamp_s, hi.timestamp_ns, hi.signal_value, hi.signal_str FROM agg"
-        f") ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
+        f") SELECT signal_source, channel, signal_name, {sample_cols}"
+        f" FROM agg LATERAL VIEW inline(array(lo, hi)) AS {sample_cols}"
+        f" ORDER BY signal_source, channel, signal_name, event_time, timestamp_ns"
     )
 
     # Range and main queries are independent (the range query is deliberately
@@ -403,13 +396,13 @@ def fetch_signal_data(
 
     def _run_range() -> pd.DataFrame | Exception:
         try:
-            return _query(range_stmt, list(pair_params) + file_params, user_token=user_token)
+            return _query(range_stmt, base_params, user_token=user_token)
         except Exception as exc:
             return exc
 
     def _run_main() -> pd.DataFrame | Exception:
         try:
-            return _query(stmt, pair_params + file_params + time_params, user_token=user_token)
+            return _query(stmt, base_params + time_params, user_token=user_token)
         except Exception as exc:
             return exc
 

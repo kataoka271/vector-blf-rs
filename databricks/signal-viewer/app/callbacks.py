@@ -191,6 +191,53 @@ app.clientside_callback(
 
 
 app.clientside_callback(
+    """
+    function(filenames) {
+        if (!filenames || filenames.length === 0) return [];
+        var seen = {};
+        filenames.forEach(function(f) {
+            var parts = f.split('/');
+            parts.pop();
+            var dir = parts.join('/');
+            seen[dir] = true;
+        });
+        return Object.keys(seen).sort().map(function(dir) {
+            return { label: dir, value: dir };
+        });
+    }
+    """,
+    Output("folder-filter", "options"),
+    Input("filenames-cache", "data"),
+)
+
+
+# Selecting one or more folders bulk-fills the File dropdown with every file
+# under those folders, reusing the existing multi-file continuous-playback
+# machinery (see update_video_panel) unchanged. This is additive-only: clearing
+# the folder selection leaves the current File selection untouched rather than
+# wiping a selection the user built up manually.
+app.clientside_callback(
+    """
+    function(folders, filenames) {
+        if (!folders || folders.length === 0) return window.dash_clientside.no_update;
+        if (!filenames) return window.dash_clientside.no_update;
+        var folderSet = {};
+        folders.forEach(function(d) { folderSet[d] = true; });
+        return filenames.filter(function(f) {
+            var parts = f.split('/');
+            parts.pop();
+            return folderSet[parts.join('/')];
+        });
+    }
+    """,
+    Output("filename-filter", "value"),
+    Input("folder-filter", "value"),
+    State("filenames-cache", "data"),
+    prevent_initial_call=True,
+)
+
+
+app.clientside_callback(
     "function(v) { return [v, false, 0]; }",
     Output("filename-pending-store", "data"),
     Output("filename-debounce-interval", "disabled"),

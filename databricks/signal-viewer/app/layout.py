@@ -200,6 +200,18 @@ def _sidebar_header() -> list:
 def _source_filters() -> list:
     return [
         _section(
+            "Folder",
+            dcc.Dropdown(
+                id="folder-filter",
+                options=[],
+                value=[],
+                multi=True,
+                placeholder="Select a folder to load all its files...",
+                clearable=True,
+                style={"fontSize": "11px"},
+            ),
+        ),
+        _section(
             "File",
             dcc.Dropdown(
                 id="filename-filter",

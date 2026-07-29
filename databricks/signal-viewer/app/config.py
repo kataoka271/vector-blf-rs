@@ -29,6 +29,15 @@ MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", "")
 # video, so the sync UI can be exercised without a real Databricks deployment.
 DEV_SAMPLE_VIDEO = os.environ.get("BLF_DEV_SAMPLE_VIDEO", "")
 
+# Unity Catalog Volume directories the /upload screen writes new files into (see
+# app/upload.py). BLF_RAW_PATH matches databricks.yml's blf_source_path, so an upload
+# lands where blf_ingestion's Auto Loader is already watching; BLF_VIDEO_UPLOAD_PATH
+# matches video_path, so an uploaded video is matched to a BLF file by filename stem
+# the same way blf_video_files does. Empty disables that uploader (shown as
+# "not configured" rather than failing silently).
+BLF_RAW_PATH = os.environ.get("BLF_RAW_PATH", "")
+BLF_VIDEO_UPLOAD_PATH = os.environ.get("BLF_VIDEO_UPLOAD_PATH", "")
+
 # Databricks SDK config (None in local dev)
 cfg = None
 if not _LOCAL_DEV:

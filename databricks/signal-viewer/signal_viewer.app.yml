@@ -40,6 +40,21 @@ resources:
             securable_type: VOLUME
             securable_full_name: ${var.target_catalog}.${var.target_schema}.video
             permission: READ_VOLUME
+        # WRITE_VOLUME grants for the /upload screen (app/upload.py). Declared as
+        # separate resources from the READ_VOLUME grant above -- and from each other --
+        # since `permission` here is a single value per resource, not a list.
+        - name: video-volume-write
+          uc_securable:
+            securable_type: VOLUME
+            securable_full_name: ${var.target_catalog}.${var.target_schema}.video
+            permission: WRITE_VOLUME
+        - name: raw-volume-write
+          # `raw` is the same Auto Loader source volume as blf_source_path in
+          # databricks.yml; also NOT created by this bundle, create it manually first.
+          uc_securable:
+            securable_type: VOLUME
+            securable_full_name: ${var.target_catalog}.${var.target_schema}.raw
+            permission: WRITE_VOLUME
       # NOTE: DABs grants SQL warehouse CAN_USE automatically, but Unity Catalog
       # table access must be granted separately to the app service principal.
       # After first deploy, find the SP's application_id via:

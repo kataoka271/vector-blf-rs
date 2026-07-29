@@ -10,6 +10,13 @@ env:
     value: "blf_dev"
   - name: GENIE_SPACE_ID
     valueFrom: genie-space
+  # Destination volumes for the /upload screen (app/upload.py). Must match
+  # databricks.yml's blf_source_path / video_path for the pipelines to pick up what
+  # lands here -- see the "Volume layout (dev)" table in CLAUDE.md.
+  - name: BLF_RAW_PATH
+    value: "/Volumes/main/blf_dev/raw"
+  - name: BLF_VIDEO_UPLOAD_PATH
+    value: "/Volumes/main/blf_dev/video"
   # Opt-in; uncomment together with the mapbox-token resource in
   # signal_viewer.app.yml. Unset means the GPS map uses the tokenless carto style.
   # - name: MAPBOX_TOKEN

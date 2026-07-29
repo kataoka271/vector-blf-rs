@@ -133,6 +133,24 @@ app.clientside_callback(
 
 
 # ---------------------------------------------------------------------------
+# Routing -- /upload is a separate screen mounted alongside the dashboard (see
+# layout.py) rather than swapped into the DOM, so this only ever toggles which one
+# is visible; nothing is created, destroyed, or loses its in-progress state.
+# ---------------------------------------------------------------------------
+
+
+@callback(
+    Output("dashboard-page", "style"),
+    Output("upload-page", "style"),
+    Input("url", "pathname"),
+)
+def route_page(pathname):
+    if (pathname or "/") == "/upload":
+        return {"display": "none"}, {}
+    return {}, {"display": "none"}
+
+
+# ---------------------------------------------------------------------------
 # Signal list
 # ---------------------------------------------------------------------------
 

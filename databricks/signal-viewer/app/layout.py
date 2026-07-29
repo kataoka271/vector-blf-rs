@@ -21,7 +21,7 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from ._dash import app
-from .config import CATALOG, GENIE_SPACE_ID, SCHEMA
+from .config import BLF_RAW_PATH, BLF_VIDEO_UPLOAD_PATH, CATALOG, GENIE_SPACE_ID, SCHEMA
 from .figures import _ACCENT, _BG, _BORDER, _PANEL, _SIDEBAR_CONTENT_STYLE, _SIDEBAR_STYLE, _TEXT, _WARN, _empty_fig
 
 # ---------------------------------------------------------------------------
@@ -181,6 +181,15 @@ def _sidebar_header() -> list:
         children=[
             html.H3("Signal Viewer", style={"margin": "0", "color": _ACCENT, "fontSize": "16px", "flex": "1"}),
             _color_mode_toggle(),
+            # A dbc.Button (renders <button>) can't nest inside this <a> per the HTML5
+            # content model, so the anchor itself carries the button classes instead.
+            dcc.Link(
+                html.I(className="bi bi-upload"),
+                href="/upload",
+                className="btn btn-outline-secondary btn-sm me-2",
+                style={"fontSize": "12px", "padding": "4px 7px", "lineHeight": "1"},
+                title="Upload files",
+            ),
             dbc.Button(
                 "<",
                 id="sidebar-toggle",
@@ -771,6 +780,85 @@ def _genie_panel() -> dbc.Offcanvas:
 
 
 # ---------------------------------------------------------------------------
+# Upload screen -- separate route (/upload), mounted alongside the dashboard and
+# toggled by route_page in callbacks.py rather than swapped in/out of the DOM, the
+# same "always mounted, display toggled" approach _float_panel and _genie_panel use.
+# ---------------------------------------------------------------------------
+
+
+def _upload_dropzone(kind: str, label: str, accept: str, hint: str) -> html.Div:
+    """One drag-and-drop upload section; upload.js wires the drop/click/change handlers
+    and posts each file to `/upload-proxy/{kind}` (see app/upload.py).
+
+    dash.html has no `Input` component (it's reserved for dcc.Input), so the actual
+    `<input type="file">` isn't part of this tree -- upload.js creates one lazily
+    inside the dropzone on first click; drag-and-drop never needs one at all.
+    """
+    return html.Div(
+        className="upload-section",
+        children=[
+            dbc.Label(label, className="fw-semibold text-secondary d-block mb-1"),
+            html.Div(hint, className="text-muted mb-2", style={"fontSize": "12px"}),
+            html.Div(
+                id=f"{kind}-dropzone",
+                className="upload-dropzone",
+                **{"data-kind": kind, "data-accept": accept},
+                children=html.Div("Drag & drop files here, or click to browse", className="upload-dropzone-text"),
+            ),
+            html.Div(id=f"{kind}-upload-list", className="upload-list"),
+        ],
+    )
+
+
+def _upload_page() -> html.Div:
+    return html.Div(
+        id="upload-page",
+        className="upload-page",
+        # Only "display" is ever touched from Python (route_page in callbacks.py) --
+        # everything else about this screen's chrome lives in upload.css, the same
+        # split _float_panel uses for its docked/floating styling.
+        style={"display": "none"},
+        children=[
+            # Single column so upload.css's flex centering on .upload-page centers this
+            # whole block (header + dropzones) as one unit, not just the dropzones.
+            html.Div(
+                style={
+                    "width": "100%",
+                    "maxWidth": "560px",
+                    "display": "flex",
+                    "flexDirection": "column",
+                    "gap": "28px",
+                },
+                children=[
+                    html.Div(
+                        className="d-flex align-items-center mb-4",
+                        style={"gap": "12px"},
+                        children=[
+                            dcc.Link("< Back to Signal Viewer", href="/", className="text-decoration-none"),
+                            html.H3("Upload Files", style={"margin": "0", "color": _ACCENT, "fontSize": "18px"}),
+                        ],
+                    ),
+                    _upload_dropzone(
+                        "blf",
+                        "BLF Files",
+                        ".blf",
+                        f"Goes to {BLF_RAW_PATH or '(BLF_RAW_PATH not configured)'} -- picked up "
+                        "automatically by the blf_ingestion pipeline.",
+                    ),
+                    _upload_dropzone(
+                        "video",
+                        "Video Files",
+                        ".mp4,.webm,.mov",
+                        f"Goes to {BLF_VIDEO_UPLOAD_PATH or '(BLF_VIDEO_UPLOAD_PATH not configured)'} -- matched "
+                        "to a BLF file by filename stem, e.g. drive001.blf <-> drive001.mp4.",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # App layout
 # ---------------------------------------------------------------------------
 
@@ -781,9 +869,11 @@ app.layout = dbc.Container(
     children=[
         *_stores(),
         dbc.Row(
+            id="dashboard-page",
             className="h-100 flex-nowrap g-0",
             children=[_sidebar(), _sidebar_expand_strip(), _main_area()],
         ),
+        _upload_page(),
         _genie_panel(),
     ],
 )

@@ -9,7 +9,7 @@ import dash_bootstrap_components as dbc
 import flask
 import pandas as pd
 import plotly.graph_objects as go
-from dash import ALL, Input, Output, State, callback, dcc, html
+from dash import ALL, MATCH, Input, Output, State, callback, dcc, html
 
 from . import cache
 from ._dash import app
@@ -190,51 +190,92 @@ app.clientside_callback(
 )
 
 
-app.clientside_callback(
-    """
-    function(filenames) {
-        if (!filenames || filenames.length === 0) return [];
-        var seen = {};
-        filenames.forEach(function(f) {
-            var parts = f.split('/');
-            parts.pop();
-            var dir = parts.join('/');
-            seen[dir] = true;
-        });
-        return Object.keys(seen).sort().map(function(dir) {
-            return { label: dir, value: dir };
-        });
-    }
-    """,
-    Output("folder-filter", "options"),
+def _group_by_folder(filenames: list[str]) -> dict[str, list[str]]:
+    folders: dict[str, list[str]] = {}
+    for f in sorted(filenames):
+        folder = "/".join(f.split("/")[:-1])
+        folders.setdefault(folder, []).append(f)
+    return folders
+
+
+@callback(
+    Output("file-tree", "children"),
     Input("filenames-cache", "data"),
 )
-
-
-# Selecting one or more folders bulk-fills the File dropdown with every file
-# under those folders, reusing the existing multi-file continuous-playback
-# machinery (see update_video_panel) unchanged. This is additive-only: clearing
-# the folder selection leaves the current File selection untouched rather than
-# wiping a selection the user built up manually.
-app.clientside_callback(
+def render_file_tree(filenames):
+    """Render a folder/file tree: each folder is a collapsible node whose checkbox
+    selects/clears every file under it in one step (see toggle_folder_files below).
+    Individual files remain independently checkable within their folder.
     """
-    function(folders, filenames) {
-        if (!folders || folders.length === 0) return window.dash_clientside.no_update;
-        if (!filenames) return window.dash_clientside.no_update;
-        var folderSet = {};
-        folders.forEach(function(d) { folderSet[d] = true; });
-        return filenames.filter(function(f) {
-            var parts = f.split('/');
-            parts.pop();
-            return folderSet[parts.join('/')];
-        });
-    }
-    """,
-    Output("filename-filter", "value"),
-    Input("folder-filter", "value"),
-    State("filenames-cache", "data"),
+    if not filenames:
+        return html.Div("No files.", className="text-muted", style={"fontSize": "11px"})
+    blocks = []
+    for folder, files in sorted(_group_by_folder(filenames).items()):
+        blocks.append(
+            html.Details(
+                open=True,
+                style={"marginBottom": "2px"},
+                children=[
+                    html.Summary(
+                        [
+                            dbc.Checkbox(
+                                id={"type": "tree-folder-check", "folder": folder},
+                                value=False,
+                                className="d-inline-block me-1",
+                                style={"verticalAlign": "middle"},
+                            ),
+                            html.Span(
+                                folder,
+                                title=folder,
+                                style={
+                                    "overflow": "hidden",
+                                    "textOverflow": "ellipsis",
+                                    "whiteSpace": "nowrap",
+                                },
+                            ),
+                        ],
+                        style={"cursor": "pointer", "fontWeight": "600", "display": "flex", "alignItems": "center"},
+                    ),
+                    dbc.Checklist(
+                        id={"type": "tree-file-check", "folder": folder},
+                        options=[{"label": f.split("/")[-1], "value": f} for f in files],
+                        value=[],
+                        style={"marginLeft": "1.3em"},
+                        labelStyle={"whiteSpace": "nowrap"},
+                    ),
+                ],
+            )
+        )
+    return blocks
+
+
+# Checking/unchecking a folder's checkbox selects/clears every file listed in its own
+# Checklist. One-directional (the folder checkbox doesn't reflect partial selection
+# made by hand-picking individual files) -- that's enough to satisfy "select a folder
+# to load all its files" without the complexity of a tri-state indeterminate checkbox.
+@callback(
+    Output({"type": "tree-file-check", "folder": MATCH}, "value"),
+    Input({"type": "tree-folder-check", "folder": MATCH}, "value"),
+    State({"type": "tree-file-check", "folder": MATCH}, "options"),
     prevent_initial_call=True,
 )
+def toggle_folder_files(checked, options):
+    return [o["value"] for o in options] if checked else []
+
+
+# Folds every folder's checked files into filename-filter's value, the single
+# source of truth every other callback (fetch_and_render, update_video_panel, etc.)
+# already reads -- so the tree is a UI layer on top of unchanged downstream wiring.
+@callback(
+    Output("filename-filter", "value"),
+    Input({"type": "tree-file-check", "folder": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def sync_tree_selection(values_lists):
+    merged: list[str] = []
+    for vals in values_lists or []:
+        merged.extend(vals or [])
+    return merged
 
 
 app.clientside_callback(

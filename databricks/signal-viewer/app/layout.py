@@ -199,29 +199,16 @@ def _sidebar_header() -> list:
 
 def _source_filters() -> list:
     return [
+        # filename-filter is the single source of truth read by every other
+        # callback (fetch_and_render, update_video_panel, etc.); the file-tree
+        # below is purely a UI on top of it -- see sync_tree_selection in
+        # callbacks.py, which folds every folder's checked files into this
+        # dropdown's value. Kept mounted-but-hidden rather than removed so
+        # none of that existing wiring has to change.
+        dcc.Dropdown(id="filename-filter", options=[], value=[], multi=True, style={"display": "none"}),
         _section(
-            "Folder",
-            dcc.Dropdown(
-                id="folder-filter",
-                options=[],
-                value=[],
-                multi=True,
-                placeholder="Select a folder to load all its files...",
-                clearable=True,
-                style={"fontSize": "11px"},
-            ),
-        ),
-        _section(
-            "File",
-            dcc.Dropdown(
-                id="filename-filter",
-                options=[],
-                value=[],
-                multi=True,
-                placeholder="All files...",
-                clearable=True,
-                style={"fontSize": "11px"},
-            ),
+            "Files",
+            html.Div(id="file-tree", style={"maxHeight": "220px", "overflowY": "auto", "fontSize": "11px"}),
         ),
         _section(
             "Source",

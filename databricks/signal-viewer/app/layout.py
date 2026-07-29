@@ -577,12 +577,21 @@ def _video_panel() -> html.Div:
             ),
         ],
     )
-    return _float_panel(
-        "video",
-        "Video",
-        html.Video(id="video-player", controls=True, muted=True, className="video-float-video"),
-        offset_row,
-    )
+    # Two stacked players, only one visible at a time: while one plays, the other
+    # preloads the next segment so an end-of-file switch is a visibility swap
+    # instead of a cold fetch. window._videoSync owns which is which -- see
+    # show()/preload() in video-sync.js.
+    players = [
+        html.Video(
+            id=f"video-player-{suffix}",
+            controls=True,
+            muted=True,
+            preload="auto",
+            className="video-float-video" + ("" if suffix == "a" else " video-idle"),
+        )
+        for suffix in ("a", "b")
+    ]
+    return _float_panel("video", "Video", html.Div(children=players), offset_row)
 
 
 def _data_grid() -> dag.AgGrid:

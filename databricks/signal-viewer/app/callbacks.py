@@ -973,7 +973,6 @@ app.clientside_callback(
 
 
 @callback(
-    Output("video-player", "src"),
     Output("video-section", "style"),
     Output("video-cursor-interval", "disabled"),
     Output("video-playlist-store", "data"),
@@ -985,20 +984,21 @@ app.clientside_callback(
 )
 def update_video_panel(cache_data, selected, filenames, time_store):
     hidden = {"display": "none"}
-    # Clearing src (not just hiding via style) actually stops playback/download --
-    # otherwise the <video> element keeps running in the background behind the
-    # hidden panel. selected is checked so that clearing every signal tag (which
-    # resets the chart via redraw_chart without touching signal-data-cache) also
-    # tears down the now-orphaned video instead of leaving it playing.
+    # An empty playlist tears the players down client-side (window._videoSync.reset
+    # clears both srcs, which is what actually stops playback and any in-flight
+    # range requests -- hiding the panel alone leaves them running behind it).
+    # selected is checked so that clearing every signal tag (which resets the chart
+    # via redraw_chart without touching signal-data-cache) also tears down the
+    # now-orphaned video instead of leaving it playing.
     if not selected or cache_data is None or not filenames or time_store is None:
-        return None, hidden, True, None
+        return hidden, True, None
 
     if len(filenames) == 1:
         # Single file: reuse the already-fetched overall range instead of re-querying
         # per-file bounds -- identical to it since the range query was already
         # filtered to this one file.
         if _fetch_video_for_file(filenames[0]) is None:
-            return None, hidden, True, None
+            return hidden, True, None
         segments = [
             {
                 "file": filenames[0],
@@ -1031,43 +1031,50 @@ def update_video_panel(cache_data, selected, filenames, time_store):
         segments.sort(key=lambda s: s["t0"] or s["t_min"])
 
     if not segments:
-        return None, hidden, True, None
+        return hidden, True, None
 
     # Loading a new src always resets the <video> to paused (no autoplay); the
     # play/pause/ended listener wired up below re-enables the interval once
     # the user actually starts playback.
-    return segments[0]["src"], {}, True, {"segments": segments}
+    return {}, True, {"segments": segments}
 
 
-# video-player is a static element always present in the DOM (video-section is
+# Both players are static elements always present in the DOM (video-section is
 # only ever hidden via style, never unmounted), so listeners are attached once
 # at page load rather than re-attached on every src change. video-cursor-interval
 # should only tick while the video is actually advancing -- driving it off
 # play/pause/ended keeps the cursor synced without polling while paused/stopped.
-# 'ended' additionally auto-advances to the next segment of window._videoSync.playlist
-# (populated below from video-playlist-store), enabling continuous multi-file playback.
+# Events from the idle (preloading) element are ignored: only the active one is
+# on screen, and its own pause during a swap must not stop the cursor.
+# 'ended' auto-advances to the next segment of window._videoSync.playlist
+# (populated below from video-playlist-store), enabling continuous multi-file
+# playback; _videoSync.show() takes the preloaded element when one is ready.
 app.clientside_callback(
     """
     function(_pathname) {
-        var videoEl = document.getElementById('video-player');
-        if (!videoEl || videoEl._videoSyncBound) return '';
-        videoEl._videoSyncBound = true;
+        var vs = window._videoSync;
         function setIntervalDisabled(disabled) {
             window.dash_clientside.set_props('video-cursor-interval', { disabled: disabled });
         }
-        videoEl.addEventListener('play', function() { setIntervalDisabled(false); });
-        videoEl.addEventListener('pause', function() { setIntervalDisabled(true); });
-        videoEl.addEventListener('ended', function() {
-            var pl = window._videoSync.playlist || [];
-            var next = (window._videoSync.currentIndex || 0) + 1;
-            if (next < pl.length) {
-                window._videoSync.currentIndex = next;
-                videoEl.src = pl[next].src;
-                videoEl.currentTime = 0;
-                videoEl.play().catch(function() {});
-            } else {
-                setIntervalDisabled(true);
-            }
+        ['video-player-a', 'video-player-b'].forEach(function(id) {
+            var videoEl = document.getElementById(id);
+            if (!videoEl || videoEl._videoSyncBound) return;
+            videoEl._videoSyncBound = true;
+            videoEl.addEventListener('play', function() {
+                if (videoEl.id === vs.activeId) setIntervalDisabled(false);
+            });
+            videoEl.addEventListener('pause', function() {
+                if (videoEl.id === vs.activeId) setIntervalDisabled(true);
+            });
+            videoEl.addEventListener('ended', function() {
+                if (videoEl.id !== vs.activeId) return;
+                var next = (vs.currentIndex || 0) + 1;
+                if (next < (vs.playlist || []).length) {
+                    vs.show(next, 0, true);
+                } else {
+                    setIntervalDisabled(true);
+                }
+            });
         });
         return '';
     }
@@ -1076,13 +1083,15 @@ app.clientside_callback(
     Input("url", "pathname"),
 )
 
-# Resets window._videoSync.playlist/currentIndex whenever a new playlist is built
-# (update_video_panel already points video-player.src at segments[0]).
+# Rebinds window._videoSync to a new playlist: tears both players down, then loads
+# segments[0] into the active one and starts preloading segments[1] into the other.
 app.clientside_callback(
     """
     function(data) {
-        window._videoSync.playlist = (data && data.segments) || [];
-        window._videoSync.currentIndex = 0;
+        var vs = window._videoSync;
+        vs.reset();
+        vs.playlist = (data && data.segments) || [];
+        if (vs.playlist.length) vs.show(0, 0, false);
         return '';
     }
     """,
@@ -1090,9 +1099,9 @@ app.clientside_callback(
     Input("video-playlist-store", "data"),
 )
 
-# Locates the playlist segment covering the clicked chart x-value, switching
-# video-player.src to it if it differs from the currently playing segment, then
-# seeks within it. Runs entirely client-side (no Dash round-trip) since it needs
+# Locates the playlist segment covering the clicked chart x-value, switching to it
+# if it differs from the currently playing segment, then seeks within it. Runs
+# entirely client-side (no Dash round-trip) since it needs
 # window._videoSync.playlist, which is only tracked in the browser.
 app.clientside_callback(
     """
@@ -1123,19 +1132,10 @@ app.clientside_callback(
             segT0 !== null ? (target - segT0) / 1000 - offsetS : (parseFloat(x) - seg.t_min) - offsetS
         );
 
-        var videoEl = document.getElementById('video-player');
-        if (videoEl) {
-            if (window._videoSync.currentIndex !== idx) {
-                window._videoSync.currentIndex = idx;
-                videoEl.src = seg.src;
-                videoEl.addEventListener('loadedmetadata', function setT() {
-                    videoEl.currentTime = seconds;
-                    videoEl.removeEventListener('loadedmetadata', setT);
-                });
-            } else {
-                videoEl.currentTime = seconds;
-            }
-        }
+        // Carry the play state across a segment switch: seeking should never
+        // silently stop playback that was already running.
+        var videoEl = window._videoSync.active();
+        window._videoSync.show(idx, seconds, videoEl !== null && !videoEl.paused);
         // Draw the cursor at the clicked position immediately -- the interval-driven
         // callback below only updates it once the video is playing (n_intervals
         // ticks), which left a stale/no cursor right after a click-to-seek while paused.
@@ -1155,7 +1155,7 @@ app.clientside_callback(
 app.clientside_callback(
     """
     function(_n, offset, track) {
-        var videoEl = document.getElementById('video-player');
+        var videoEl = window._videoSync.active();
         if (!videoEl) return window.dash_clientside.no_update;
         var seg = (window._videoSync.playlist || [])[window._videoSync.currentIndex || 0];
         if (!seg) return window.dash_clientside.no_update;

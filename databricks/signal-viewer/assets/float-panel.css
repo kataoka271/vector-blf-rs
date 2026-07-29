@@ -102,3 +102,10 @@
 .video-panel.docked .video-float-video {
   max-height: 480px;
 }
+
+/* The preloading half of the double-buffered player (see video-sync.js). Hidden
+ * with display:none rather than unmounted -- a display:none <video> still
+ * buffers, which is the entire point of keeping it around. */
+.video-float-video.video-idle {
+  display: none;
+}

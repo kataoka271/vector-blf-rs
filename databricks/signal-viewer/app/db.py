@@ -487,3 +487,32 @@ def _fetch_video_for_file(filename: str) -> dict | None:
     except Exception as exc:
         print(f"[_fetch_video_for_file] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
         return None
+
+
+def _fetch_per_file_time_ranges(key_triples: list[tuple], filenames: list[str]) -> dict[str, dict]:
+    """MIN/MAX timestamp_s and MIN event_time per _source_file, restricted to the given
+    signal keys. Used to anchor each file's video to that file's own earliest sample when
+    building a multi-file playback playlist (see update_video_panel)."""
+    try:
+        pair_filter = "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
+        pair_params = [part for triple in key_triples for part in triple]
+        placeholders = ", ".join(["?"] * len(filenames))
+        stmt = (
+            f"SELECT _source_file AS source_file, MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max,"
+            f" MIN(event_time) AS t0 FROM {_GOLD_TABLE}"
+            f" WHERE {pair_filter} AND _source_file IN ({placeholders}) GROUP BY _source_file"
+        )
+        df = _query(stmt, pair_params + list(filenames))
+        out = {}
+        for _, row in df.iterrows():
+            t0_raw = row["t0"]
+            t0_ts = pd.Timestamp(t0_raw) if pd.notna(t0_raw) else None
+            out[row["source_file"]] = {
+                "t_min": float(row["t_min"]),
+                "t_max": float(row["t_max"]),
+                "t0": t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None,
+            }
+        return out
+    except Exception as exc:
+        print(f"[_fetch_per_file_time_ranges] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return {}

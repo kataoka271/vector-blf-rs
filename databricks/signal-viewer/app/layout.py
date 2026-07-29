@@ -113,8 +113,10 @@ def _stores() -> list:
         dcc.Store(id="time-range-store"),
         dcc.Store(id="filenames-cache"),
         dcc.Store(id="filename-pending-store"),
-        dcc.Store(id="video-meta-store"),
-        dcc.Store(id="video-seek-store"),
+        # {segments: [{file, src, t_min, t_max, t0}, ...]}, one segment per selected file
+        # that has a matching video, ordered by start time -- see update_video_panel and
+        # window._videoSync.playlist in video-sync.js for continuous multi-file playback.
+        dcc.Store(id="video-playlist-store"),
         # {t: [...], lat: [...], lon: [...]} GPS track for the video-synced map marker;
         # t entries match the chart's x-axis domain (event_time ISO strings, or
         # numeric timestamp_s) so they're directly comparable to the cursor xValue
@@ -122,6 +124,7 @@ def _stores() -> list:
         dcc.Store(id="gps-track-store"),
         html.Div(id="video-cursor-sink", style={"display": "none"}),
         html.Div(id="video-listener-sink", style={"display": "none"}),
+        html.Div(id="video-playlist-sink", style={"display": "none"}),
         html.Div(id="color-mode-sink", style={"display": "none"}),
         # max_intervals=1 caps this at exactly one fire per debounce cycle -- without
         # it, a slow SQL round-trip (filter_signals_by_file re-disabling this after

@@ -13,13 +13,14 @@ from dash import ALL, Input, Output, State, callback, dcc, html
 
 from . import cache
 from ._dash import app
-from .config import _LOCAL_DEV, GENIE_SPACE_ID, _parse_key, _to_utc_naive
+from .config import _LOCAL_DEV, GENIE_SPACE_ID, _parse_key
 from .db import (
     _fetch_all_channels,
     _fetch_all_signals,
     _fetch_filenames,
     _fetch_global_time_range,
     _fetch_latlon_candidates,
+    _fetch_per_file_time_ranges,
     _fetch_signals_by_search,
     _fetch_video_for_file,
     _log_token_info,
@@ -887,7 +888,7 @@ app.clientside_callback(
     Output("video-player", "src"),
     Output("video-section", "style"),
     Output("video-cursor-interval", "disabled"),
-    Output("video-meta-store", "data"),
+    Output("video-playlist-store", "data"),
     Input("signal-data-cache", "data"),
     Input("signal-select", "value"),
     State("filename-filter", "value"),
@@ -901,19 +902,53 @@ def update_video_panel(cache_data, selected, filenames, time_store):
     # hidden panel. selected is checked so that clearing every signal tag (which
     # resets the chart via redraw_chart without touching signal-data-cache) also
     # tears down the now-orphaned video instead of leaving it playing.
-    if not selected or cache_data is None or not filenames or len(filenames) != 1 or time_store is None:
+    if not selected or cache_data is None or not filenames or time_store is None:
         return None, hidden, True, None
 
-    info = _fetch_video_for_file(filenames[0])
-    if info is None:
+    if len(filenames) == 1:
+        # Single file: reuse the already-fetched overall range instead of re-querying
+        # per-file bounds -- identical to it since the range query was already
+        # filtered to this one file.
+        if _fetch_video_for_file(filenames[0]) is None:
+            return None, hidden, True, None
+        segments = [
+            {
+                "file": filenames[0],
+                "src": f"/video-proxy?file={quote(filenames[0])}",
+                "t_min": time_store["min"],
+                "t_max": time_store["max"],
+                "t0": time_store.get("t0"),
+            }
+        ]
+    else:
+        # Multiple files: each gets its own segment anchored to that file's own
+        # earliest sample, so a continuous playlist can play them back-to-back in
+        # sync with the shared timeline (see window._videoSync.playlist).
+        key_triples = [_parse_key(key) for key in selected]
+        ranges = _fetch_per_file_time_ranges(key_triples, filenames)
+        segments = []
+        for filename in filenames:
+            rng = ranges.get(filename)
+            if rng is None or _fetch_video_for_file(filename) is None:
+                continue
+            segments.append(
+                {
+                    "file": filename,
+                    "src": f"/video-proxy?file={quote(filename)}",
+                    "t_min": rng["t_min"],
+                    "t_max": rng["t_max"],
+                    "t0": rng["t0"],
+                }
+            )
+        segments.sort(key=lambda s: s["t0"] or s["t_min"])
+
+    if not segments:
         return None, hidden, True, None
 
-    src = f"/video-proxy?file={quote(filenames[0])}"
-    meta = {"t_min": time_store["min"], "t0": time_store.get("t0")}
     # Loading a new src always resets the <video> to paused (no autoplay); the
     # play/pause/ended listener wired up below re-enables the interval once
     # the user actually starts playback.
-    return src, {}, True, meta
+    return segments[0]["src"], {}, True, {"segments": segments}
 
 
 # video-player is a static element always present in the DOM (video-section is
@@ -921,6 +956,8 @@ def update_video_panel(cache_data, selected, filenames, time_store):
 # at page load rather than re-attached on every src change. video-cursor-interval
 # should only tick while the video is actually advancing -- driving it off
 # play/pause/ended keeps the cursor synced without polling while paused/stopped.
+# 'ended' additionally auto-advances to the next segment of window._videoSync.playlist
+# (populated below from video-playlist-store), enabling continuous multi-file playback.
 app.clientside_callback(
     """
     function(_pathname) {
@@ -932,7 +969,18 @@ app.clientside_callback(
         }
         videoEl.addEventListener('play', function() { setIntervalDisabled(false); });
         videoEl.addEventListener('pause', function() { setIntervalDisabled(true); });
-        videoEl.addEventListener('ended', function() { setIntervalDisabled(true); });
+        videoEl.addEventListener('ended', function() {
+            var pl = window._videoSync.playlist || [];
+            var next = (window._videoSync.currentIndex || 0) + 1;
+            if (next < pl.length) {
+                window._videoSync.currentIndex = next;
+                videoEl.src = pl[next].src;
+                videoEl.currentTime = 0;
+                videoEl.play().catch(function() {});
+            } else {
+                setIntervalDisabled(true);
+            }
+        });
         return '';
     }
     """,
@@ -940,62 +988,91 @@ app.clientside_callback(
     Input("url", "pathname"),
 )
 
-
-@callback(
-    Output("video-seek-store", "data"),
-    Input("chart", "clickData"),
-    State("video-meta-store", "data"),
-    State("video-offset-input", "value"),
-    prevent_initial_call=True,
-)
-def seek_video_from_chart_click(click_data, meta, offset):
-    if not click_data or not meta:
-        return dash.no_update
-    x = click_data["points"][0].get("x")
-    if x is None:
-        return dash.no_update
-    offset = float(offset or 0)
-    t0_raw = pd.Timestamp(meta["t0"]) if meta.get("t0") else None
-    if isinstance(t0_raw, pd.Timestamp):
-        t0 = _to_utc_naive(t0_raw)
-        t1 = pd.Timestamp(x)
-        video_seconds = (t1 - t0).total_seconds() - offset
-    else:
-        video_seconds = (float(x) - meta["t_min"]) - offset
-    return {"seconds": max(0.0, video_seconds), "x": x}
-
-
+# Resets window._videoSync.playlist/currentIndex whenever a new playlist is built
+# (update_video_panel already points video-player.src at segments[0]).
 app.clientside_callback(
     """
-    function(seek, track) {
-        if (!seek) return window.dash_clientside.no_update;
-        var videoEl = document.getElementById('video-player');
-        if (videoEl) { videoEl.currentTime = Math.max(0, seek.seconds); }
-        // Draw the cursor at the clicked position immediately -- the
-        // interval-driven callback below only updates it once the video
-        // is playing (n_intervals ticks), which left a stale/no cursor
-        // right after a click-to-seek while paused.
-        if (seek.x !== undefined) {
-            window._videoSync.setCursor('chart', seek.x);
-            window._videoSync.updateMapMarker('map-chart', track, seek.x);
+    function(data) {
+        window._videoSync.playlist = (data && data.segments) || [];
+        window._videoSync.currentIndex = 0;
+        return '';
+    }
+    """,
+    Output("video-playlist-sink", "children"),
+    Input("video-playlist-store", "data"),
+)
+
+# Locates the playlist segment covering the clicked chart x-value, switching
+# video-player.src to it if it differs from the currently playing segment, then
+# seeks within it. Runs entirely client-side (no Dash round-trip) since it needs
+# window._videoSync.playlist, which is only tracked in the browser.
+app.clientside_callback(
+    """
+    function(click_data, playlist, offset, track) {
+        if (!click_data || !playlist || !playlist.segments || !playlist.segments.length) {
+            return window.dash_clientside.no_update;
         }
+        var x = click_data.points && click_data.points[0] ? click_data.points[0].x : null;
+        if (x === null || x === undefined) return window.dash_clientside.no_update;
+
+        var segs = playlist.segments;
+        var target = new Date(x).getTime();
+        var idx = 0, bestDist = Infinity;
+        for (var i = 0; i < segs.length; i++) {
+            var segT0 = segs[i].t0 ? new Date(segs[i].t0).getTime() : null;
+            if (segT0 === null) continue;
+            var durMs = (segs[i].t_max - segs[i].t_min) * 1000;
+            if (target >= segT0 && target <= segT0 + durMs) { idx = i; bestDist = 0; break; }
+            var d = Math.min(Math.abs(target - segT0), Math.abs(target - (segT0 + durMs)));
+            if (d < bestDist) { bestDist = d; idx = i; }
+        }
+
+        var seg = segs[idx];
+        var offsetS = parseFloat(offset) || 0;
+        var segT0 = seg.t0 ? new Date(seg.t0).getTime() : null;
+        var seconds = Math.max(
+            0,
+            segT0 !== null ? (target - segT0) / 1000 - offsetS : (parseFloat(x) - seg.t_min) - offsetS
+        );
+
+        var videoEl = document.getElementById('video-player');
+        if (videoEl) {
+            if (window._videoSync.currentIndex !== idx) {
+                window._videoSync.currentIndex = idx;
+                videoEl.src = seg.src;
+                videoEl.addEventListener('loadedmetadata', function setT() {
+                    videoEl.currentTime = seconds;
+                    videoEl.removeEventListener('loadedmetadata', setT);
+                });
+            } else {
+                videoEl.currentTime = seconds;
+            }
+        }
+        // Draw the cursor at the clicked position immediately -- the interval-driven
+        // callback below only updates it once the video is playing (n_intervals
+        // ticks), which left a stale/no cursor right after a click-to-seek while paused.
+        window._videoSync.setCursor('chart', x);
+        window._videoSync.updateMapMarker('map-chart', track, x);
         return window.dash_clientside.no_update;
     }
     """,
     Output("video-cursor-sink", "children", allow_duplicate=True),
-    Input("video-seek-store", "data"),
+    Input("chart", "clickData"),
+    State("video-playlist-store", "data"),
+    State("video-offset-input", "value"),
     State("gps-track-store", "data"),
     prevent_initial_call=True,
 )
 
 app.clientside_callback(
     """
-    function(_n, meta, offset, track) {
-        if (!meta) return window.dash_clientside.no_update;
+    function(_n, offset, track) {
         var videoEl = document.getElementById('video-player');
         if (!videoEl) return window.dash_clientside.no_update;
+        var seg = (window._videoSync.playlist || [])[window._videoSync.currentIndex || 0];
+        if (!seg) return window.dash_clientside.no_update;
         var t = videoEl.currentTime + (parseFloat(offset) || 0);
-        var xValue = meta.t0 ? new Date(new Date(meta.t0).getTime() + t * 1000).toISOString() : meta.t_min + t;
+        var xValue = seg.t0 ? new Date(new Date(seg.t0).getTime() + t * 1000).toISOString() : seg.t_min + t;
         window._videoSync.setCursor('chart', xValue);
         window._videoSync.updateMapMarker('map-chart', track, xValue);
         return window.dash_clientside.no_update;
@@ -1003,7 +1080,6 @@ app.clientside_callback(
     """,
     Output("video-cursor-sink", "children", allow_duplicate=True),
     Input("video-cursor-interval", "n_intervals"),
-    State("video-meta-store", "data"),
     State("video-offset-input", "value"),
     State("gps-track-store", "data"),
     prevent_initial_call=True,

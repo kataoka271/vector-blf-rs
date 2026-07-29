@@ -15,6 +15,12 @@ from .config import MAPBOX_TOKEN, _parse_key, _to_utc_naive
 # Theme
 # ---------------------------------------------------------------------------
 
+
+def _display_src(src: str) -> str:
+    """Map the internal 'SOMEIP' signal_source to the user-facing 'ETH' label."""
+    return "ETH" if src == "SOMEIP" else src
+
+
 # DOM-facing styling (layout.py, AgGrid): reference the active Bootstrap
 # color-mode's CSS variables directly so the sidebar/panel chrome tracks the
 # dark/light toggle (see color-mode-switch) without any Python-side
@@ -184,9 +190,9 @@ def _overlay_fig(
     palette = _plotly_palette(dark)
     axis_box = _axis_box(palette)
     fig = go.Figure()
-    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
+    max_label = max((len(f"{_display_src(src)}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
     for i, (src, channel, name, x, y, y_str) in enumerate(traces):
-        label = f"{src}{channel}::{name}"
+        label = f"{_display_src(src)}{channel}::{name}"
         pad = "&nbsp;" * (max_label - len(label))
         y_plot = y_str if y_str is not None else y
         y_hover, y_hover_str = (original_traces[i][4], original_traces[i][5]) if original_traces else (y, y_str)
@@ -254,7 +260,7 @@ def _stacked_fig(
     n = len(traces)
     spacing = max(0.03, 0.20 / n) if xaxis_mode in ("synced", "free") else max(0.02, 0.20 / n)
     h = (1.0 - spacing * max(n - 1, 0)) / n
-    max_label = max((len(f"{src}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
+    max_label = max((len(f"{_display_src(src)}{channel}::{name}") for src, channel, name, _, _, _ in traces), default=0)
 
     fig = go.Figure()
     axes_kw: dict = {}
@@ -284,7 +290,7 @@ def _stacked_fig(
         else:
             xref = "x"
 
-        label = f"{src}{channel}::{name}"
+        label = f"{_display_src(src)}{channel}::{name}"
         pad = "&nbsp;" * (max_label - len(label))
         y_plot = y_str if y_str is not None else y
         fig.add_trace(
@@ -304,7 +310,7 @@ def _stacked_fig(
         axes_kw[ykey] = {"domain": [bottom, top], **axis_box}
         annotations.append(
             {
-                "text": _html.escape(f"{src}{channel}::{name}"),
+                "text": _html.escape(f"{_display_src(src)}{channel}::{name}"),
                 "xref": "paper",
                 "yref": "paper",
                 "x": 0,
@@ -402,8 +408,7 @@ def _pivot_table(traces: _Traces) -> tuple[list[dict], list[dict]]:
     parts = [traces[0][3].reset_index(drop=True).astype(str).rename("time")]
     categorical_cols: set[str] = set()
     for src, channel, name, _, y, y_str in traces:
-        display_src = "ETH" if src == "SOMEIP" else src
-        col_name = f"{display_src}{channel}::{name}"
+        col_name = f"{_display_src(src)}{channel}::{name}"
         col = (y_str if y_str is not None else y).reset_index(drop=True)
         parts.append(col.rename(col_name))
         if y_str is not None:

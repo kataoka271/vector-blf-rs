@@ -453,8 +453,9 @@ app.clientside_callback(
             filtered = searchPool.filter(function(r) {
                 var name = r.signal_name.toLowerCase();
                 var src = r.signal_source.toLowerCase();
+                var ch = String(r.channel);
                 return kwWords.every(function(w) {
-                    return name.indexOf(w) !== -1 || src.indexOf(w) !== -1;
+                    return name.indexOf(w) !== -1 || src.indexOf(w) !== -1 || ch.indexOf(w) !== -1;
                 });
             });
         }

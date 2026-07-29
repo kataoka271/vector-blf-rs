@@ -251,8 +251,9 @@ def _fetch_signals_by_search(
 ) -> tuple[list[dict], bool]:
     """Search signals matching keyword server-side (not limited to the cached browse window).
 
-    A signal matches when its name contains every whitespace-separated word of
-    `keyword`, case-insensitively. Returns (rows, truncated): rows carries at most
+    A signal matches when every whitespace-separated word of `keyword` is contained in
+    its name, its source, or its channel number, case-insensitively -- so "can 1" finds
+    the signals on CAN channel 1. Returns (rows, truncated): rows carries at most
     `limit` // 3 matches per signal_source (see _catalog_query), and `truncated` is
     True when that cap dropped matches.
     """
@@ -263,10 +264,11 @@ def _fetch_signals_by_search(
         # concat('%', w, '%')): a bound parameter marker makes each pattern foldable,
         # so Catalyst rewrites it to a vectorized Contains() and pushes it into the
         # scan, whereas the lambda's pattern is per-row and compiles a regex.
+        word_clause = "(signal_name ILIKE ? OR signal_source ILIKE ? OR CAST(channel AS STRING) LIKE ?)"
         stmt, params = _catalog_query(
             filenames,
-            match_clause=" AND ".join(["signal_name ILIKE ?"] * len(words)),
-            match_params=[f"%{w}%" for w in words],
+            match_clause=" AND ".join([word_clause] * len(words)),
+            match_params=[f"%{w}%" for w in words for _ in range(3)],
             per_source_limit=per_source_limit + 1,  # one extra row per source, to detect truncation
         )
         df = _query(stmt, params)

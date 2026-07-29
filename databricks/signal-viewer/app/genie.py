@@ -3,6 +3,7 @@
 import concurrent.futures
 import re
 import time as _time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -323,6 +324,12 @@ class GeniePreview:
     t_hi: float | None = None
     explanation: str = ""
     anomalies: list[dict] = field(default_factory=list)
+    # Keys in `signals` that no currently selected file contains, mapped to the file
+    # they should be read from instead (see db.fetch_signal_data's extra_scope).
+    extra_scope: dict[str, list[str]] = field(default_factory=dict)
+    # Keys Genie named that the signal catalog has no row for -- dropped from `signals`
+    # since no query could ever return them.
+    unknown_signals: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -332,13 +339,33 @@ class GeniePreview:
             "t_hi": self.t_hi,
             "explanation": self.explanation,
             "anomalies": self.anomalies,
+            "extra_scope": self.extra_scope,
+            "unknown_signals": self.unknown_signals,
         }
+
+
+def _extract_source_files(sql_rows: list[dict]) -> set[str]:
+    """Collect the _source_file values Genie's own query returned, if it selected any."""
+    return {str(r["_source_file"]) for r in sql_rows if r.get("_source_file")}
+
+
+def _pick_scope_file(candidates: list[str], preferred: set[str]) -> list[str]:
+    """Choose which file an out-of-scope signal is read from.
+
+    Prefers a file Genie's own query touched; otherwise takes the first candidate in
+    sorted order. Deliberately returns a single file: a signal logged across many files
+    would otherwise merge into one trace whose samples jump between logs, and the file
+    actually chosen is the one reported back in the chat.
+    """
+    match = sorted(preferred & set(candidates))
+    return match[:1] or candidates[:1]
 
 
 def interpret_genie_response(
     result: dict,
     all_signals: list[dict],
     time_store: dict | None,
+    resolve_file_scope: "Callable[[list[str]], tuple[dict[str, list[str]], list[str]]] | None" = None,
 ) -> "GeniePreview | None":
     """Map a Genie API result to a set of app actions.
 
@@ -346,6 +373,10 @@ def interpret_genie_response(
     automatic time-windowing around anomalies when no explicit range is given, and
     returns a GeniePreview describing the intended state change.  Returns None when
     the response contains nothing actionable.
+
+    `resolve_file_scope` is called with the extracted signal keys and returns
+    (out_of_scope, unknown) -- see db._fetch_signal_file_scopes. It is injected rather
+    than imported so this module stays free of DB access and directly testable.
     """
     if result["status"] != "done":
         return None
@@ -358,6 +389,16 @@ def interpret_genie_response(
     anomalies = _extract_anomalies(sql_rows)
     anomalous_signals = [a["signal_key"] for a in anomalies if a.get("signal_key")]
 
+    extra_scope: dict[str, list[str]] = {}
+    unknown_signals: list[str] = []
+    if signals and resolve_file_scope is not None:
+        out_of_scope, unknown_signals = resolve_file_scope(signals)
+        preferred = _extract_source_files(sql_rows)
+        extra_scope = {k: _pick_scope_file(files, preferred) for k, files in out_of_scope.items()}
+        unknown = set(unknown_signals)
+        signals = [s for s in signals if s not in unknown]
+        anomalous_signals = [s for s in anomalous_signals if s not in unknown]
+
     if time_range is None and anomalies and time_store:
         t_min = float(time_store.get("min", 0))
         t_max = float(time_store.get("max", 0))
@@ -367,7 +408,7 @@ def interpret_genie_response(
         if lo < hi:
             time_range = (lo, hi)
 
-    if not signals and time_range is None and not anomalies:
+    if not signals and time_range is None and not anomalies and not unknown_signals:
         return None
 
     return GeniePreview(
@@ -377,4 +418,6 @@ def interpret_genie_response(
         t_hi=time_range[1] if time_range else None,
         explanation=text,
         anomalies=anomalies,
+        extra_scope=extra_scope,
+        unknown_signals=unknown_signals,
     )

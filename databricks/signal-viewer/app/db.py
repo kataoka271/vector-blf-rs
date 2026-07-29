@@ -318,6 +318,90 @@ def _fetch_latlon_candidates(
         return None
 
 
+# An OR of equality conjuncts, not `(signal_source, channel, signal_name) IN ((?, ?, ?),
+# ...)`: Photon has no columnar path for a struct-typed IN, and this filter sits directly
+# on the gold-table scan, so the fallback drags the whole window/aggregate pipeline above
+# it onto row-based Spark. Plain =/AND/OR stays vectorized and reaches the scan as data
+# filters, so Delta can skip files.
+_KEY_PRED = "(signal_source = ? AND channel = ? AND signal_name = ?)"
+
+
+def _key_pred_block(keys: list[str]) -> tuple[str, list]:
+    """Build an OR of _KEY_PRED over `keys`, with its parameters in placeholder order."""
+    return "(" + " OR ".join([_KEY_PRED] * len(keys)) + ")", [part for k in keys for part in _parse_key(k)]
+
+
+def _file_pred_clause(filenames: list[str] | None) -> tuple[str, list]:
+    """Build the ` AND _source_file IN (...)` suffix for `filenames`, or ("", []) for no filter."""
+    if not filenames:
+        return "", []
+    return " AND _source_file IN (" + ", ".join(["?"] * len(filenames)) + ")", list(filenames)
+
+
+def _fetch_signal_file_scopes(
+    keys: list[str], filenames: list[str] | None, user_token: str | None = None
+) -> tuple[dict[str, list[str]], list[str]]:
+    """Split `keys` by whether they occur in the currently selected `filenames`.
+
+    Returns (out_of_scope, unknown). `out_of_scope` maps a key that the catalog knows
+    but that appears in none of `filenames` to every file that does contain it, sorted.
+    `unknown` lists keys the catalog has no row for at all. A key found in at least one
+    selected file appears in neither -- callers need no entry for the ordinary case.
+
+    An empty `filenames` means "no file filter is in effect", so nothing can be out of
+    scope and no query is issued. A failed query degrades the same way, reporting
+    everything as in scope rather than blocking the caller.
+    """
+    if not keys or not filenames:
+        return {}, []
+    try:
+        key_block, key_params = _key_pred_block(keys)
+        stmt = (
+            f"SELECT DISTINCT signal_source, channel, signal_name, _source_file"
+            f" FROM {_CATALOG_BY_FILE_TABLE} WHERE {key_block}"
+        )
+        df = _query(stmt, key_params, user_token=user_token)
+        files_by_key: dict[str, set[str]] = {}
+        for row in df.to_dict("records"):
+            key = f"{row['signal_source']}{row['channel']}::{row['signal_name']}"
+            files_by_key.setdefault(key, set()).add(row["_source_file"])
+        selected = set(filenames)
+        out_of_scope: dict[str, list[str]] = {}
+        unknown: list[str] = []
+        for key in keys:
+            found = files_by_key.get(key)
+            if not found:
+                unknown.append(key)
+            elif not (found & selected):
+                out_of_scope[key] = sorted(found)
+        print(
+            f"[_fetch_signal_file_scopes] {len(keys)} key(s) -> "
+            f"{len(out_of_scope)} out of scope, {len(unknown)} unknown",
+            flush=True,
+        )
+        return out_of_scope, unknown
+    except Exception as exc:
+        print(f"[_fetch_signal_file_scopes] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
+        return {}, []
+
+
+def _time_bounds(df: pd.DataFrame) -> tuple[float, float] | None:
+    """Read (t_min, t_max) out of a single-row bounds query, or None when there are none.
+
+    A MIN()/MAX() over zero matching rows still returns one row, holding NULL --
+    which arrives here as NaN. Passing that on would put NaN in time-range-store,
+    where Dash serializes it to JSON null and every later `t_max - t_min` raises
+    TypeError, so callers get None and keep the bounds they already had.
+    """
+    if df.empty:
+        return None
+    t_min_raw = df["t_min"].iloc[0]
+    t_max_raw = df["t_max"].iloc[0]
+    if pd.isna(t_min_raw) or pd.isna(t_max_raw):
+        return None
+    return float(t_min_raw), float(t_max_raw)
+
+
 def _fetch_global_time_range(user_token: str | None = None) -> dict | None:
     """Fetch the timestamp bounds covering every ingested signal.
 
@@ -326,13 +410,18 @@ def _fetch_global_time_range(user_token: str | None = None) -> dict | None:
     """
     try:
         df = _query(f"SELECT t_min, t_max, t0 FROM {_TIME_RANGE_TABLE}", user_token=user_token)
+        bounds = _time_bounds(df)
+        if bounds is None:
+            print("[_fetch_global_time_range] table holds no usable bounds", flush=True)
+            return None
+        t_min, t_max = bounds
         t0_raw = df["t0"].iloc[0] if "t0" in df.columns else None
         if t0_raw is not None and pd.isna(t0_raw):
             t0_raw = None
         t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
         return {
-            "min": float(df["t_min"].iloc[0]),
-            "max": float(df["t_max"].iloc[0]),
+            "min": t_min,
+            "max": t_max,
             "t0": t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None,
         }
     except Exception as exc:
@@ -341,7 +430,7 @@ def _fetch_global_time_range(user_token: str | None = None) -> dict | None:
 
 
 def fetch_signal_data(
-    sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames
+    sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames, extra_scope=None
 ) -> tuple[pd.DataFrame | None, dict | object, str]:
     """Run the two-query fetch (unfiltered time-range + downsampled main query).
 
@@ -350,6 +439,10 @@ def fetch_signal_data(
     ([lo, hi] seconds) when `time_range_store` says a range is in effect. `sources`
     only gates the fetch: an empty value returns early. Each signal is reduced to at
     most 2 * `max_pts` points.
+
+    `extra_scope` maps a key to the files it should be read from instead of
+    `filenames`; those keys are fetched from their own files and every other key
+    still honours the sidebar's file selection.
 
     Returns (df, new_time_range, message). df is None only on the validation guard
     paths (no source/no signal selected) and on a main-query error -- callers rely
@@ -365,20 +458,25 @@ def fetch_signal_data(
     if not keys:
         return None, dash.no_update, "No signal selected."
 
-    key_triples = [_parse_key(key) for key in keys]
-    # An OR of equality conjuncts, not `(signal_source, channel, signal_name) IN
-    # ((?, ?, ?), ...)`: Photon has no columnar path for a struct-typed IN, and this
-    # filter sits directly on the gold-table scan, so the fallback drags the whole
-    # window/aggregate pipeline above it onto row-based Spark. Plain =/AND/OR stays
-    # vectorized and reaches the scan as data filters, so Delta can skip files.
-    key_filter = "(" + " OR ".join(["(signal_source = ? AND channel = ? AND signal_name = ?)"] * len(key_triples)) + ")"
-    key_params = [part for triple in key_triples for part in triple]
+    # Genie can name a signal that no selected file contains (see
+    # _fetch_signal_file_scopes). Giving those keys their own file scope lets them plot
+    # alongside the rest instead of silently contributing zero rows, without widening
+    # the file filter that the other keys -- and the sidebar -- are working under.
+    per_key_scope = {k: v for k, v in (extra_scope or {}).items() if k in keys and v}
+    scoped_keys = sorted(keys - set(per_key_scope))
 
-    file_filter = ""
-    file_params: list = []
-    if filenames:
-        file_filter = " AND _source_file IN (" + ", ".join(["?"] * len(filenames)) + ")"
-        file_params = list(filenames)
+    blocks: list[str] = []
+    base_params: list = []
+    if scoped_keys:
+        key_block, key_params = _key_pred_block(scoped_keys)
+        file_clause, file_params = _file_pred_clause(filenames)
+        blocks.append(f"({key_block}{file_clause})")
+        base_params += key_params + file_params
+    for key in sorted(per_key_scope):
+        file_clause, file_params = _file_pred_clause(per_key_scope[key])
+        blocks.append(f"({_KEY_PRED}{file_clause})")
+        base_params += list(_parse_key(key)) + file_params
+    where = "(" + " OR ".join(blocks) + ")"
 
     time_filter = ""
     time_params: list = []
@@ -386,9 +484,6 @@ def fetch_signal_data(
         t_lo, t_hi = float(time_range[0]), float(time_range[1])
         time_filter = " AND timestamp_s BETWEEN ? AND ?"
         time_params = [t_lo, t_hi]
-
-    where = f"{key_filter}{file_filter}"
-    base_params = key_params + file_params
 
     new_time_range: dict | object = dash.no_update
     range_stmt = (
@@ -441,16 +536,18 @@ def fetch_signal_data(
         print(f"[fetch_signal_data] time-range query error: {range_result}", flush=True)
     else:
         range_df = range_result
-        t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
-        if t0_raw is not None and pd.isna(t0_raw):
-            t0_raw = None
-        t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
-        t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
-        new_time_range = {
-            "min": float(range_df["t_min"].iloc[0]),
-            "max": float(range_df["t_max"].iloc[0]),
-            "t0": t0_iso,
-        }
+        bounds = _time_bounds(range_df)
+        if bounds is None:
+            # No row matched the key/file filter at all, so there are no bounds to
+            # move the slider to -- leave it on the range it already shows.
+            print("[fetch_signal_data] time-range query matched no rows; keeping current bounds", flush=True)
+        else:
+            t0_raw = range_df["t0"].iloc[0] if "t0" in range_df.columns else None
+            if t0_raw is not None and pd.isna(t0_raw):
+                t0_raw = None
+            t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
+            t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
+            new_time_range = {"min": bounds[0], "max": bounds[1], "t0": t0_iso}
 
     if isinstance(main_result, Exception):
         msg = f"Query error: {main_result}"

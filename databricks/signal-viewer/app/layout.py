@@ -105,6 +105,7 @@ def _stores() -> list:
         dcc.Store(id="genie-insight-store"),
         dcc.Store(id="genie-anomaly-markers-store"),
         dcc.Store(id="genie-flagged-signals-store"),
+        dcc.Store(id="genie-extra-scope-store"),
         dcc.Store(id="genie-history-store"),
         dcc.Store(id="all-channels-cache"),
         dcc.Store(id="latlon-candidates-cache"),

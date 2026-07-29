@@ -53,6 +53,26 @@ def _dummy_values(src: str, channel: int, name: str) -> list[float]:
     return [offset + amp * math.sin(2 * math.pi * freq * t + seed * 0.001) for t in _DUMMY_T]
 
 
+def _requested_signals(stmt: str, params) -> list[tuple[str, int, str]] | None:
+    """Pick the (source, channel, name) triples a key-filtered query asked for.
+
+    Matched by scanning `params` for any window of three that names a catalog signal,
+    rather than by slicing the leading `3 * N` values: the key triples and the file
+    paths they are scoped by interleave in the real statements (each out-of-scope
+    signal carries its own `_source_file IN (...)` list), so position alone no longer
+    says which parameter is a channel.
+
+    Returns None -- not [] -- when the statement carries no key filter at all, so
+    callers can tell "asked for everything" from "asked for signals that don't exist".
+    """
+    if not params or "signal_source = ? AND channel = ? AND signal_name = ?" not in stmt:
+        return None
+    known = set(_DUMMY_CATALOG)
+    p = list(params)
+    requested = {(p[i], p[i + 1], p[i + 2]) for i in range(len(p) - 2)} & known
+    return [triple for triple in _DUMMY_CATALOG if triple in requested]
+
+
 def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
     print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
     if "_video_path" in stmt:
@@ -77,24 +97,28 @@ def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
                 "t0": [_DUMMY_T0] * len(files),
             }
         )
+    # Keyed off the key filter, not just the table: the file-scoped browse query hits the
+    # same table but selects no _source_file column and filters by name, not by key.
+    if "blf_signal_catalog_by_file" in stmt and "signal_source = ? AND channel = ? AND signal_name = ?" in stmt:
+        # Which files hold a given signal. Dummy signals carry no file dimension, so
+        # every requested signal reports every file -- meaning nothing is ever out of
+        # the selected file scope, and the Genie out-of-scope path can only be
+        # exercised against a real workspace.
+        rows = [
+            {"signal_name": n, "signal_source": s, "channel": c, "_source_file": f}
+            for s, c, n in _requested_signals(stmt, params) or []
+            for f in _DUMMY_FILES
+        ]
+        return pd.DataFrame(rows)
     if "blf_signal_catalog" in stmt or "DISTINCT" in stmt:
         rows = [{"signal_name": n, "signal_source": s, "channel": c} for s, c, n in _DUMMY_CATALOG]
         return pd.DataFrame(rows).sort_values(["signal_source", "channel", "signal_name"]).reset_index(drop=True)
     if "t_min" in stmt:
         return pd.DataFrame({"t_min": [0.0], "t_max": [_DUMMY_DURATION], "t0": [_DUMMY_T0]})
     if "PARTITION BY signal_source, channel, signal_name" in stmt:
-        # params = [src, ch, name] * N + optional [file, ...] + optional [t_lo, t_hi].
-        # Only the leading triples pick which signals to synthesize, and N comes from the
-        # SQL rather than len(params) // 3: the trailing file params are not a multiple
-        # of 3, so slicing by length alone reads a filename where a channel is expected.
         # The file filter itself is ignored -- dummy signals exist in every file.
-        n_triples = stmt.count("signal_source = ? AND channel = ? AND signal_name = ?")
-        if params and n_triples:
-            p = list(params)[: n_triples * 3]
-            requested = {(str(p[i * 3]), int(p[i * 3 + 1]), str(p[i * 3 + 2])) for i in range(n_triples)}
-            catalog = [(s, c, n) for s, c, n in _DUMMY_CATALOG if (s, c, n) in requested]
-        else:
-            catalog = _DUMMY_CATALOG
+        requested = _requested_signals(stmt, params)
+        catalog = _DUMMY_CATALOG if requested is None else requested
         rows = []
         for src, ch, name in catalog:
             vals = _dummy_values(src, ch, name)

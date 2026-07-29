@@ -21,6 +21,7 @@ from .db import (
     _fetch_global_time_range,
     _fetch_latlon_candidates,
     _fetch_per_file_time_ranges,
+    _fetch_signal_file_scopes,
     _fetch_signals_by_search,
     _fetch_video_for_file,
     _log_token_info,
@@ -39,6 +40,7 @@ from .figures import (
     render_chart_and_grid,
 )
 from .genie import (
+    GeniePreview,
     _genie_executor,
     _genie_futures,
     _genie_query,
@@ -49,6 +51,12 @@ from .genie import (
 from .perfetto import build_perfetto_trace
 
 _MAX_VISIBLE_TAGS = 20  # cap pattern-matched button registrations in signal-tags
+
+
+def _display_key(key: str) -> str:
+    """Render a signal key for display, relabeling the SOMEIP source as ETH."""
+    src, channel, name = _parse_key(key)
+    return f"{'ETH' if src == 'SOMEIP' else src}{channel}::{name}"
 
 
 def _fmt_s(seconds: float) -> str:
@@ -293,6 +301,7 @@ app.clientside_callback(
     Output("all-channels-cache", "data", allow_duplicate=True),
     Output("filename-debounce-interval", "disabled", allow_duplicate=True),
     Output("latlon-candidates-cache", "data", allow_duplicate=True),
+    Output("genie-extra-scope-store", "data", allow_duplicate=True),
     Input("filename-debounce-interval", "n_intervals"),
     State("filename-pending-store", "data"),
     prevent_initial_call=True,
@@ -307,7 +316,10 @@ def filter_signals_by_file(_, filenames):
             lambda: _fetch_latlon_candidates(scope, user_token=token),
         ]
     )
-    return signals, channels, True, latlon
+    # Whichever signals Genie put outside the old file scope were classified against it,
+    # so that mapping no longer describes the new selection -- drop it and let the next
+    # Genie response re-derive one.
+    return signals, channels, True, latlon, None
 
 
 app.clientside_callback(
@@ -592,9 +604,7 @@ def render_signal_tags(selected, anomalous_signals):
     anomalous_set = set(anomalous_signals or [])
     tags = []
     for key in selected[:_MAX_VISIBLE_TAGS]:
-        src, channel, name = _parse_key(key)
-        display_src = "ETH" if src == "SOMEIP" else src
-        label = f"{display_src}{channel}::{name}"
+        label = _display_key(key)
         is_anomalous = key in anomalous_set
         tags.append(
             html.Span(
@@ -697,6 +707,7 @@ app.clientside_callback(
     State("genie-anomaly-markers-store", "data"),
     State("session-id-store", "data"),
     State("color-mode-switch", "value"),
+    State("genie-extra-scope-store", "data"),
     prevent_initial_call=True,
     running=[
         (
@@ -723,6 +734,7 @@ def fetch_and_render(
     anomalies_raw,
     session_id,
     dark,
+    extra_scope,
 ):
     # Self-heal: prefetch_signals should have already set this at page load; fall back
     # if a click somehow raced ahead of it, so later redraws still have a valid key.
@@ -731,7 +743,7 @@ def fetch_and_render(
     map_hidden = {"display": "none"}
 
     df, new_time_range, msg = fetch_signal_data(
-        sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames
+        sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames, extra_scope
     )
 
     if df is None:
@@ -1303,12 +1315,13 @@ def toggle_genie_panel(n, _close, is_open):
     Output("genie-preview-store", "data", allow_duplicate=True),
     Output("genie-anomaly-markers-store", "data", allow_duplicate=True),
     Output("genie-flagged-signals-store", "data", allow_duplicate=True),
+    Output("genie-extra-scope-store", "data", allow_duplicate=True),
     Output("genie-input", "value"),
     Input("genie-new-conv-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def new_genie_conversation(_):
-    return None, [], None, None, None, ""
+    return None, [], None, None, None, None, ""
 
 
 @callback(
@@ -1355,6 +1368,29 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sour
     return {"request_id": request_id, "status": "pending", "question": question.strip()}, False, new_log, True, ""
 
 
+def _file_scope_note(preview: GeniePreview) -> "html.Div | None":
+    """Chat bubble naming the signals Genie returned that the selected files don't hold.
+
+    Out-of-scope signals still plot: apply_genie_preview hands their per-signal file
+    scope to fetch_signal_data, so this reports where each one is read from rather than
+    warning that something was dropped. Unknown signals are the ones actually dropped --
+    the catalog has no row for them, so no query could return them.
+    """
+    if not preview.extra_scope and not preview.unknown_signals:
+        return None
+    lines: list[str] = []
+    if preview.extra_scope:
+        lines.append("Not in the selected file(s) -- loaded from their own:")
+        lines += [
+            f"  {_display_key(key)}  <-  {', '.join(f.rsplit('/', 1)[-1] for f in files)}"
+            for key, files in sorted(preview.extra_scope.items())
+        ]
+    if preview.unknown_signals:
+        lines.append("Not in the signal catalog -- skipped:")
+        lines += [f"  {_display_key(key)}" for key in sorted(preview.unknown_signals)]
+    return html.Div("\n".join(lines), className="genie-bubble genie-note")
+
+
 @callback(
     Output("genie-request-store", "data", allow_duplicate=True),
     Output("genie-poll-interval", "disabled", allow_duplicate=True),
@@ -1370,9 +1406,12 @@ def submit_genie_query(n_clicks, question, conv_store, chat_log, filenames, sour
     State("all-signals-cache", "data"),
     State("time-range-store", "data"),
     State("genie-history-store", "data"),
+    State("filename-filter", "value"),
     prevent_initial_call=True,
 )
-def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw):
+def poll_genie_result(
+    n_intervals, req_store, conv_store, chat_log, all_signals_raw, time_store, history_raw, filenames
+):
     _prune_stale_genie_futures()
     print(
         f"[poll_genie_result] called n_intervals={n_intervals} status={req_store.get('status') if req_store else None}",
@@ -1444,8 +1483,18 @@ def poll_genie_result(n_intervals, req_store, conv_store, chat_log, all_signals_
     # tables), so a signal outside the capped all-signals-cache browse window (see
     # _fetch_all_signals) still matches -- no separate DB lookup needed here.
     cached_signals = all_signals_raw if isinstance(all_signals_raw, list) else []
-    preview_obj = interpret_genie_response(result, cached_signals, time_store)
+    token = _resolve_user_token()
+    preview_obj = interpret_genie_response(
+        result,
+        cached_signals,
+        time_store,
+        resolve_file_scope=lambda keys: _fetch_signal_file_scopes(keys, filenames, user_token=token),
+    )
     preview = preview_obj.to_dict() if preview_obj is not None else None
+    if preview_obj is not None:
+        scope_note = _file_scope_note(preview_obj)
+        if scope_note is not None:
+            log = log + [scope_note]
 
     question = req_store.get("question", "")
     history = list(history_raw or [])
@@ -1530,6 +1579,7 @@ app.clientside_callback(
     Output("genie-preview-store", "data", allow_duplicate=True),
     Output("genie-anomaly-markers-store", "data"),
     Output("genie-flagged-signals-store", "data"),
+    Output("genie-extra-scope-store", "data"),
     Input("genie-apply-btn", "n_clicks"),
     State("genie-preview-store", "data"),
     State("signal-select", "value"),
@@ -1539,17 +1589,12 @@ app.clientside_callback(
 )
 def apply_genie_preview(n_clicks, preview, current_signals, current_range, plot_n):
     if not preview:
-        return (
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-        )
+        return (dash.no_update,) * 8
     new_signals = preview["signals"] if preview.get("signals") else current_signals
     new_range = [preview["t_lo"], preview["t_hi"]] if preview.get("t_lo") is not None else current_range
+    # Signals no selected file contains are kept in the selection and given their own
+    # file scope, so they plot alongside the rest instead of quietly returning no rows.
+    # The chat already names them (see _file_scope_note).
     return (
         new_signals,
         new_range,
@@ -1558,6 +1603,7 @@ def apply_genie_preview(n_clicks, preview, current_signals, current_range, plot_
         None,
         preview.get("anomalies"),
         preview.get("anomalous_signals"),
+        preview.get("extra_scope") or None,
     )
 
 

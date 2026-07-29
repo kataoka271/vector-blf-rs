@@ -23,6 +23,17 @@
   border: 1px solid var(--bs-info-border-subtle);
 }
 
+/* Signals Genie named that the selected file(s) don't hold -- informational, so it sits
+   between the plain AI bubble and an outright error in weight. */
+.genie-note {
+  background-color: var(--bs-warning-bg-subtle);
+  color: var(--bs-warning-text-emphasis);
+  align-self: flex-start;
+  border: 1px solid var(--bs-warning-border-subtle);
+  font-size: 11px;
+  font-family: var(--bs-font-monospace);
+}
+
 .genie-chat-log {
   display: flex;
   flex-direction: column;

@@ -10,5 +10,7 @@ env:
     value: "blf_dev"
   - name: GENIE_SPACE_ID
     valueFrom: genie-space
-  - name: MAPBOX_TOKEN
-    valueFrom: mapbox-token
+  # Opt-in; uncomment together with the mapbox-token resource in
+  # signal_viewer.app.yml. Unset means the GPS map uses the tokenless carto style.
+  # - name: MAPBOX_TOKEN
+  #   valueFrom: mapbox-token

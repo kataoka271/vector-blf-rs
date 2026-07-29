@@ -263,8 +263,10 @@ variables:
   mapbox_secret_scope:
     description: >
       Databricks secret scope that holds the Mapbox access token used by the
-      Signal Viewer's GPS map. Optional -- if the key is missing/empty, the
-      map falls back to the tokenless carto style.
+      Signal Viewer's GPS map. Only read once the mapbox-token resource is
+      uncommented in signal_viewer.app.yml; the scope must already exist by
+      then or the app deploy fails. Left commented out, the map uses the
+      tokenless carto style.
     default: "blf"
 
   mapbox_secret_key:

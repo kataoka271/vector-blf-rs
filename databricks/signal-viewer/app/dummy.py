@@ -64,16 +64,33 @@ def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
         return pd.DataFrame({"_video_path": [], "_video_mtime": []})
     if "_source_file" in stmt and "signal_name" not in stmt:
         return pd.DataFrame({"_source_file": _DUMMY_FILES})
+    if "GROUP BY _source_file" in stmt:
+        # Per-file time ranges anchoring each video segment. Dummy samples carry no file
+        # dimension, so every selected file reports the same span -- enough for the
+        # playlist to be built with the right number of segments in the right order.
+        files = list(params)[stmt.count("(?, ?, ?)") * 3 :] if params else list(_DUMMY_FILES)
+        return pd.DataFrame(
+            {
+                "source_file": files,
+                "t_min": [0.0] * len(files),
+                "t_max": [_DUMMY_DURATION] * len(files),
+                "t0": [_DUMMY_T0] * len(files),
+            }
+        )
     if "blf_signal_catalog" in stmt or "DISTINCT" in stmt:
         rows = [{"signal_name": n, "signal_source": s, "channel": c} for s, c, n in _DUMMY_CATALOG]
         return pd.DataFrame(rows).sort_values(["signal_source", "channel", "signal_name"]).reset_index(drop=True)
     if "t_min" in stmt:
         return pd.DataFrame({"t_min": [0.0], "t_max": [_DUMMY_DURATION], "t0": [_DUMMY_T0]})
     if "PARTITION BY signal_source, channel, signal_name" in stmt:
-        # params = [src, ch, name, src, ch, name, ...] + optional [t_lo, t_hi]
-        if params:
-            p = list(params)
-            n_triples = len(p) // 3
+        # params = [src, ch, name] * N + optional [file, ...] + optional [t_lo, t_hi].
+        # Only the leading triples pick which signals to synthesize, and N comes from the
+        # SQL rather than len(params) // 3: the trailing file params are not a multiple
+        # of 3, so slicing by length alone reads a filename where a channel is expected.
+        # The file filter itself is ignored -- dummy signals exist in every file.
+        n_triples = stmt.count("signal_source = ? AND channel = ? AND signal_name = ?")
+        if params and n_triples:
+            p = list(params)[: n_triples * 3]
             requested = {(str(p[i * 3]), int(p[i * 3 + 1]), str(p[i * 3 + 2])) for i in range(n_triples)}
             catalog = [(s, c, n) for s, c, n in _DUMMY_CATALOG if (s, c, n) in requested]
         else:

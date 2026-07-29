@@ -414,10 +414,12 @@ app.clientside_callback(
 
         var sourceSet = new Set(sources);
 
+        // Mirrors figures._display_src -- the label the user actually reads.
+        function displaySrc(src) { return src === 'SOMEIP' ? 'ETH' : src; }
+
         function toOpt(r) {
             var key = r.signal_source + r.channel + "::" + r.signal_name;
-            var src = r.signal_source === 'SOMEIP' ? 'ETH' : r.signal_source;
-            var label = src + r.channel + "::" + r.signal_name;
+            var label = displaySrc(r.signal_source) + r.channel + "::" + r.signal_name;
             return { label: label, value: key };
         }
 
@@ -453,10 +455,14 @@ app.clientside_callback(
         if (kwWords.length > 0) {
             filtered = searchPool.filter(function(r) {
                 var name = r.signal_name.toLowerCase();
+                // Both spellings: the stored source and the displayed one, so a SOMEIP
+                // signal shown as "ETH0::..." is found by typing either.
                 var src = r.signal_source.toLowerCase();
+                var shown = displaySrc(r.signal_source).toLowerCase();
                 var ch = String(r.channel);
                 return kwWords.every(function(w) {
-                    return name.indexOf(w) !== -1 || src.indexOf(w) !== -1 || ch.indexOf(w) !== -1;
+                    return name.indexOf(w) !== -1 || src.indexOf(w) !== -1
+                        || shown.indexOf(w) !== -1 || ch.indexOf(w) !== -1;
                 });
             });
         }

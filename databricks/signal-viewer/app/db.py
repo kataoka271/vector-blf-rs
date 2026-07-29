@@ -152,6 +152,12 @@ def _fetch_filenames(user_token: str | None = None) -> list[str] | None:
 
 _CATALOG_COLS = "signal_name, signal_source, channel"
 
+# The picker labels a SOMEIP signal as ETH (see figures._display_src), so search has to
+# match the label on screen as well as the stored value -- otherwise typing what you can
+# read finds nothing. The client-side filter in callbacks.py checks both spellings too;
+# the two must agree, or rows this query returns get dropped again in the browser.
+_DISPLAY_SOURCE_SQL = "IF(signal_source = 'SOMEIP', 'ETH', signal_source)"
+
 
 def _catalog_query(
     filenames: list[str] | None,
@@ -264,11 +270,14 @@ def _fetch_signals_by_search(
         # concat('%', w, '%')): a bound parameter marker makes each pattern foldable,
         # so Catalyst rewrites it to a vectorized Contains() and pushes it into the
         # scan, whereas the lambda's pattern is per-row and compiles a regex.
-        word_clause = "(signal_name ILIKE ? OR signal_source ILIKE ? OR CAST(channel AS STRING) LIKE ?)"
+        word_clause = (
+            f"(signal_name ILIKE ? OR signal_source ILIKE ? OR {_DISPLAY_SOURCE_SQL} ILIKE ?"
+            f" OR CAST(channel AS STRING) LIKE ?)"
+        )
         stmt, params = _catalog_query(
             filenames,
             match_clause=" AND ".join([word_clause] * len(words)),
-            match_params=[f"%{w}%" for w in words for _ in range(3)],
+            match_params=[f"%{w}%" for w in words for _ in range(4)],
             per_source_limit=per_source_limit + 1,  # one extra row per source, to detect truncation
         )
         df = _query(stmt, params)

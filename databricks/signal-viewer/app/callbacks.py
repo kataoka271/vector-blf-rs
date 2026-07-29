@@ -35,6 +35,7 @@ from .figures import (
     _SIDEBAR_CONTENT_STYLE,
     _SIDEBAR_STYLE,
     _TEXT,
+    _display_src,
     _empty_fig,
     _XaxisMode,
     render_chart_and_grid,
@@ -56,7 +57,7 @@ _MAX_VISIBLE_TAGS = 20  # cap pattern-matched button registrations in signal-tag
 def _display_key(key: str) -> str:
     """Render a signal key for display, relabeling the SOMEIP source as ETH."""
     src, channel, name = _parse_key(key)
-    return f"{'ETH' if src == 'SOMEIP' else src}{channel}::{name}"
+    return f"{_display_src(src)}{channel}::{name}"
 
 
 def _fmt_s(seconds: float) -> str:

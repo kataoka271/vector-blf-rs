@@ -960,7 +960,10 @@ app.clientside_callback(
         if (!value || !store) return window.dash_clientside.no_update;
         var lo = value[0], hi = value[1];
         var tMin = store.min;
-        var t0 = store.t0 ? new Date(store.t0) : null;
+        // store.t0 is a tz-naive string representing a UTC instant (see db.py) --
+        // native `new Date()` would otherwise parse it as browser-local time, not UTC.
+        var t0Ms = store.t0 ? window._videoSync.toUtcMs(store.t0) : null;
+        var t0 = t0Ms !== null ? new Date(t0Ms) : null;
 
         function fmtHms(totalSec) {
             var totalMs = Math.round(Math.abs(totalSec) * 1000);
@@ -1151,10 +1154,10 @@ app.clientside_callback(
         if (x === null || x === undefined) return window.dash_clientside.no_update;
 
         var segs = playlist.segments;
-        var target = new Date(x).getTime();
+        var target = window._videoSync.toUtcMs(x);
         var idx = 0, bestDist = Infinity;
         for (var i = 0; i < segs.length; i++) {
-            var segT0 = segs[i].t0 ? new Date(segs[i].t0).getTime() : null;
+            var segT0 = segs[i].t0 ? window._videoSync.toUtcMs(segs[i].t0) : null;
             if (segT0 === null) continue;
             var durMs = (segs[i].t_max - segs[i].t_min) * 1000;
             if (target >= segT0 && target <= segT0 + durMs) { idx = i; bestDist = 0; break; }
@@ -1164,7 +1167,7 @@ app.clientside_callback(
 
         var seg = segs[idx];
         var offsetS = parseFloat(offset) || 0;
-        var segT0 = seg.t0 ? new Date(seg.t0).getTime() : null;
+        var segT0 = seg.t0 ? window._videoSync.toUtcMs(seg.t0) : null;
         var seconds = Math.max(
             0,
             segT0 !== null ? (target - segT0) / 1000 - offsetS : (parseFloat(x) - seg.t_min) - offsetS
@@ -1198,7 +1201,7 @@ app.clientside_callback(
         var seg = (window._videoSync.playlist || [])[window._videoSync.currentIndex || 0];
         if (!seg) return window.dash_clientside.no_update;
         var t = videoEl.currentTime + (parseFloat(offset) || 0);
-        var xValue = seg.t0 ? new Date(new Date(seg.t0).getTime() + t * 1000).toISOString() : seg.t_min + t;
+        var xValue = seg.t0 ? new Date(window._videoSync.toUtcMs(seg.t0) + t * 1000).toISOString() : seg.t_min + t;
         window._videoSync.setCursor('chart', xValue);
         window._videoSync.updateMapMarker('map-chart', track, xValue);
         return window.dash_clientside.no_update;

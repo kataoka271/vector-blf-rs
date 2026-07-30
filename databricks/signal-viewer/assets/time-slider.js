@@ -3,9 +3,11 @@ window.dccFunctions._fmtSliderTime = function(value) {
     var store = window._timeRangeStore;
     if (!store) return value.toFixed(3);
     var tMin = store.tMin;
-    var t0 = store.t0 ? new Date(store.t0) : null;
-    if (t0) {
-        var dt = new Date(t0.getTime() + (value - tMin) * 1000);
+    // store.t0 is a tz-naive string representing a UTC instant (see db.py) -- native
+    // `new Date()` would otherwise parse it as browser-local time, not UTC.
+    var t0Ms = store.t0 ? new Date(/Z$|[+-]\d\d:?\d\d$/.test(store.t0) ? store.t0 : store.t0 + 'Z').getTime() : null;
+    if (t0Ms !== null) {
+        var dt = new Date(t0Ms + (value - tMin) * 1000);
         var hms = [dt.getUTCHours(), dt.getUTCMinutes(), dt.getUTCSeconds()]
             .map(function(v) { return v.toString().padStart(2, '0'); }).join(':');
         return hms + '.' + dt.getUTCMilliseconds().toString().padStart(3, '0');

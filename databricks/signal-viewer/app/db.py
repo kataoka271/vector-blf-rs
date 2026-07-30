@@ -23,6 +23,7 @@ from .config import (
     _VIDEO_FILES_TABLE,
     USE_USER_TOKEN,
     _parse_key,
+    _to_utc_naive,
     cfg,
 )
 from .dummy import _dummy_query
@@ -433,7 +434,11 @@ def _fetch_global_time_range(user_token: str | None = None) -> dict | None:
         return {
             "min": t_min,
             "max": t_max,
-            "t0": t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None,
+            # Normalized to tz-naive UTC to match figures._plot_x's chart x-values --
+            # otherwise the browser's new Date() parses this offset-bearing string as
+            # UTC but the tz-stripped chart x-values as local time, and video-sync.js's
+            # click-to-seek math comes out off by the browser's UTC offset.
+            "t0": _to_utc_naive(t0_ts).isoformat() if isinstance(t0_ts, pd.Timestamp) else None,
         }
     except Exception as exc:
         print(f"[_fetch_global_time_range] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
@@ -557,7 +562,9 @@ def fetch_signal_data(
             if t0_raw is not None and pd.isna(t0_raw):
                 t0_raw = None
             t0_ts = pd.Timestamp(t0_raw) if t0_raw is not None else None
-            t0_iso = t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None
+            # See _fetch_global_time_range for why this must match figures._plot_x's
+            # tz-naive-UTC chart x-values rather than keeping the SQL session's tzinfo.
+            t0_iso = _to_utc_naive(t0_ts).isoformat() if isinstance(t0_ts, pd.Timestamp) else None
             new_time_range = {"min": bounds[0], "max": bounds[1], "t0": t0_iso}
 
     if isinstance(main_result, Exception):
@@ -618,7 +625,9 @@ def _fetch_per_file_time_ranges(key_triples: list[tuple], filenames: list[str]) 
             out[row["source_file"]] = {
                 "t_min": float(row["t_min"]),
                 "t_max": float(row["t_max"]),
-                "t0": t0_ts.isoformat() if isinstance(t0_ts, pd.Timestamp) else None,
+                # See _fetch_global_time_range for why this must match figures._plot_x's
+                # tz-naive-UTC chart x-values rather than keeping the SQL session's tzinfo.
+                "t0": _to_utc_naive(t0_ts).isoformat() if isinstance(t0_ts, pd.Timestamp) else None,
             }
         return out
     except Exception as exc:

@@ -10,6 +10,17 @@ window._videoSync = {
     // Index the *idle* element is preloading, if any.
     bufferedIndex: null,
 
+    // Chart x-values (figures._plot_x) and segment/store t0 fields (db.py) are both
+    // serialized as tz-naive strings that represent a UTC instant with no zone marker.
+    // Native `new Date()` parses an unmarked string as browser-local time, not UTC, so
+    // every naive-string comparison here must go through this instead of `new Date(v)`
+    // directly -- otherwise math involving them is off by the browser's UTC offset.
+    toUtcMs: function(v) {
+        if (typeof v !== 'string') return v;
+        var hasZone = /Z$|[+-]\d\d:?\d\d$/.test(v);
+        return new Date(hasZone ? v : v + 'Z').getTime();
+    },
+
     active: function() { return document.getElementById(this.activeId); },
 
     idle: function() {
@@ -125,10 +136,8 @@ window._videoSync = {
         var gd = document.querySelector("#" + gdId + " .js-plotly-plot");
         if (!gd || !gd.data || gd.data.length < 2) return;
 
-        var toNum = (typeof track.t[0] === "string")
-            ? function(v) { return new Date(v).getTime(); }
-            : function(v) { return v; };
-        var target = (typeof xValue === "string") ? new Date(xValue).getTime() : xValue;
+        var toNum = this.toUtcMs;
+        var target = this.toUtcMs(xValue);
 
         var tArr = track.t;
         var lo = 0, hi = tArr.length - 1;

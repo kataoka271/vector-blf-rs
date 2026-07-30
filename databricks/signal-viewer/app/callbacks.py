@@ -1081,42 +1081,33 @@ def update_video_panel(cache_data, selected, filenames, time_store):
     if not selected or cache_data is None or not filenames or time_store is None:
         return hidden, True, None
 
-    if len(filenames) == 1:
-        # Single file: reuse the already-fetched overall range instead of re-querying
-        # per-file bounds -- identical to it since the range query was already
-        # filtered to this one file.
-        if _fetch_video_for_file(filenames[0]) is None:
-            return hidden, True, None
-        segments = [
+    # Each file gets its own segment anchored to the selected signal(s)' own earliest
+    # sample, so a continuous playlist can play them back-to-back in sync with the
+    # shared timeline (see window._videoSync.playlist).
+    key_triples = [_parse_key(key) for key in selected]
+    ranges = _fetch_per_file_time_ranges(filenames, key_triples)
+    missing = [f for f in filenames if f not in ranges]
+    if missing:
+        # A file can have a video but none of the currently selected signal(s) --
+        # fall back to that file's own overall time span so its video still plays,
+        # aligned by time alone instead of being dropped from the playlist.
+        ranges = {**_fetch_per_file_time_ranges(missing), **ranges}
+
+    segments = []
+    for filename in filenames:
+        rng = ranges.get(filename)
+        if rng is None or _fetch_video_for_file(filename) is None:
+            continue
+        segments.append(
             {
-                "file": filenames[0],
-                "src": f"/video-proxy?file={quote(filenames[0])}",
-                "t_min": time_store["min"],
-                "t_max": time_store["max"],
-                "t0": time_store.get("t0"),
+                "file": filename,
+                "src": f"/video-proxy?file={quote(filename)}",
+                "t_min": rng["t_min"],
+                "t_max": rng["t_max"],
+                "t0": rng["t0"],
             }
-        ]
-    else:
-        # Multiple files: each gets its own segment anchored to that file's own
-        # earliest sample, so a continuous playlist can play them back-to-back in
-        # sync with the shared timeline (see window._videoSync.playlist).
-        key_triples = [_parse_key(key) for key in selected]
-        ranges = _fetch_per_file_time_ranges(key_triples, filenames)
-        segments = []
-        for filename in filenames:
-            rng = ranges.get(filename)
-            if rng is None or _fetch_video_for_file(filename) is None:
-                continue
-            segments.append(
-                {
-                    "file": filename,
-                    "src": f"/video-proxy?file={quote(filename)}",
-                    "t_min": rng["t_min"],
-                    "t_max": rng["t_max"],
-                    "t0": rng["t0"],
-                }
-            )
-        segments.sort(key=lambda s: s["t0"] or s["t_min"])
+        )
+    segments.sort(key=lambda s: s["t0"] or s["t_min"])
 
     if not segments:
         return hidden, True, None

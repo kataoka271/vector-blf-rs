@@ -649,20 +649,30 @@ def _fetch_video_for_file(filename: str) -> dict | None:
         return None
 
 
-def _fetch_per_file_time_ranges(key_triples: list[tuple], filenames: list[str]) -> dict[str, dict]:
-    """MIN/MAX timestamp_s and MIN event_time per _source_file, restricted to the given
-    signal keys. Used to anchor each file's video to that file's own earliest sample when
-    building a multi-file playback playlist (see update_video_panel)."""
+def _fetch_per_file_time_ranges(filenames: list[str], key_triples: list[tuple] | None = None) -> dict[str, dict]:
+    """MIN/MAX timestamp_s and MIN event_time per _source_file, optionally restricted to
+    the given signal keys. Used to anchor each file's video segment when building a
+    playback playlist (see update_video_panel): callers pass key_triples first to anchor
+    to the selected signal(s)' own span, then re-query with key_triples=None for any file
+    that comes back empty, falling back to that file's overall span (across every signal)
+    so its video can still be aligned and played by time alone even when it holds none of
+    the currently selected signals."""
     try:
-        pair_filter = "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
-        pair_params = [part for triple in key_triples for part in triple]
-        placeholders = ", ".join(["?"] * len(filenames))
+        where = f"_source_file IN ({', '.join(['?'] * len(filenames))})"
+        params: list = list(filenames)
+        if key_triples:
+            pair_filter = (
+                "(signal_source, channel, signal_name) IN (" + ", ".join(["(?, ?, ?)"] * len(key_triples)) + ")"
+            )
+            pair_params = [part for triple in key_triples for part in triple]
+            where = f"{pair_filter} AND {where}"
+            params = pair_params + params
         stmt = (
             f"SELECT _source_file AS source_file, MIN(timestamp_s) AS t_min, MAX(timestamp_s) AS t_max,"
             f" MIN(event_time) AS t0 FROM {_GOLD_TABLE}"
-            f" WHERE {pair_filter} AND _source_file IN ({placeholders}) GROUP BY _source_file"
+            f" WHERE {where} GROUP BY _source_file"
         )
-        df = _query(stmt, pair_params + list(filenames))
+        df = _query(stmt, params)
         out = {}
         for _, row in df.iterrows():
             t0_raw = row["t0"]

@@ -722,6 +722,7 @@ app.clientside_callback(
     Output("gps-track-store", "data", allow_duplicate=True),
     Output("plot-btn", "disabled", allow_duplicate=True),
     Output("session-id-store", "data", allow_duplicate=True),
+    Output("time-range-slider", "value", allow_duplicate=True),
     Input("plot-btn", "n_clicks"),
     State("source-filter", "value"),
     State("signal-select", "value"),
@@ -773,9 +774,24 @@ def fetch_and_render(
     map_empty = go.Figure()
     map_hidden = {"display": "none"}
 
-    df, new_time_range, msg = fetch_signal_data(
+    df, new_time_range, msg, widened = fetch_signal_data(
         sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames, extra_scope
     )
+
+    # update_time_slider() preserves the user's current slider position across a
+    # replot as long as it still fits inside the (possibly wider) bounds -- which
+    # would otherwise silently hide a just-added signal whose data sits entirely
+    # outside that position (see the matching widen step in fetch_signal_data).
+    # Push the slider out to the new bounds ourselves so what's plotted and what
+    # the slider shows stay in sync, but only when fetch_signal_data actually had
+    # to widen -- an unrelated re-plot of the same selection under a manually
+    # narrowed window must not get silently un-zoomed.
+    slider_value = dash.no_update
+    if widened and isinstance(new_time_range, dict):
+        range_min = new_time_range.get("min")
+        range_max = new_time_range.get("max")
+        if isinstance(range_min, (int, float)) and isinstance(range_max, (int, float)):
+            slider_value = [range_min, range_max]
 
     if df is None:
         return (
@@ -790,6 +806,7 @@ def fetch_and_render(
             None,
             False,
             session_id,
+            slider_value,
         )
 
     cache.put_df(session_id, df)
@@ -825,6 +842,7 @@ def fetch_and_render(
         gps_track,
         False,
         session_id,
+        slider_value,
     )
 
 

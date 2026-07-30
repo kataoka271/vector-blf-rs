@@ -450,7 +450,7 @@ def _fetch_global_time_range(user_token: str | None = None) -> dict | None:
 
 def fetch_signal_data(
     sources, selected, max_pts, time_range, time_range_store, lat_key, lon_key, filenames, extra_scope=None
-) -> tuple[pd.DataFrame | None, dict | object, str]:
+) -> tuple[pd.DataFrame | None, dict | object, str, bool]:
     """Run the two-query fetch (unfiltered time-range + downsampled main query).
 
     Fetches the signals named by `selected` plus `lat_key`/`lon_key` (keys in
@@ -463,19 +463,23 @@ def fetch_signal_data(
     `filenames`; those keys are fetched from their own files and every other key
     still honours the sidebar's file selection.
 
-    Returns (df, new_time_range, message). df is None only on the validation guard
-    paths (no source/no signal selected) and on a main-query error -- callers rely
-    on this None-vs-not-None distinction to mean "a successful query happened, even
-    if it returned zero rows". `new_time_range` is `dash.no_update` when the bounds
-    could not be refreshed.
+    Returns (df, new_time_range, message, widened). df is None only on the
+    validation guard paths (no source/no signal selected) and on a main-query
+    error -- callers rely on this None-vs-not-None distinction to mean "a
+    successful query happened, even if it returned zero rows". `new_time_range`
+    is `dash.no_update` when the bounds could not be refreshed. `widened` is True
+    when a requested key was missing under the active `time_range` filter and
+    got pulled in by dropping that filter -- callers should push the time-range
+    slider out to `new_time_range` so it isn't left showing a window narrower
+    than what's now plotted.
     """
     if not sources:
-        return None, dash.no_update, "No source selected."
+        return None, dash.no_update, "No source selected.", False
 
     keys = set(selected or [])
     keys.update(k for k in (lat_key, lon_key) if k)
     if not keys:
-        return None, dash.no_update, "No signal selected."
+        return None, dash.no_update, "No signal selected.", False
 
     # Genie can name a signal that no selected file contains (see
     # _fetch_signal_file_scopes). Giving those keys their own file scope lets them plot
@@ -574,12 +578,50 @@ def fetch_signal_data(
         msg = f"Query error: {main_result}"
         tb = "".join(traceback.format_exception(type(main_result), main_result, main_result.__traceback__))
         print(f"[fetch_signal_data] ERROR: {main_result}\n{tb}", flush=True)
-        return None, new_time_range, msg
+        return None, new_time_range, msg, False
     df = main_result
+
+    # A signal added to `selected` this call can have all of its data outside the
+    # still-active time window from a previous, narrower selection -- e.g. the window
+    # was fit to CAN1/CAN2/ETH1 (~0.8-48.8s) and the newly added ETH4 signal only has
+    # samples at ~100-110s. That signal would then always come back as zero rows, no
+    # matter how many times Plot is clicked, with nothing telling the user why.
+    #
+    # Only retry when a *requested* key is entirely absent from `df` -- not merely
+    # whenever the unfiltered bounds exceed the window -- so a plain re-plot of an
+    # unchanged selection under a manually narrowed window (fewer rows per signal,
+    # but every signal still present) is left alone rather than silently un-zoomed.
+    widened = False
+    if time_filter:
+        present = set(zip(df["signal_source"], df["channel"], df["signal_name"])) if not df.empty else set()
+        requested = {_parse_key(k) for k in keys}
+        if requested - present:
+            try:
+                wide_df = _query(stmt.replace(time_filter, "", 1), base_params, user_token=user_token)
+            except Exception as exc:
+                tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+                print(f"[fetch_signal_data] ERROR widening time filter: {exc}\n{tb}", flush=True)
+            else:
+                wide_present = (
+                    set(zip(wide_df["signal_source"], wide_df["channel"], wide_df["signal_name"]))
+                    if not wide_df.empty
+                    else set()
+                )
+                # Only actually widen if it recovered a key the filtered query
+                # missed -- otherwise the key has no data anywhere and the narrow
+                # result already reflects that correctly.
+                if wide_present - present:
+                    print(
+                        f"[fetch_signal_data] widening time filter: {requested - present} "
+                        f"missing under current window, found under full range",
+                        flush=True,
+                    )
+                    df = wide_df
+                    widened = True
 
     signal_count = df["signal_name"].nunique() if not df.empty else 0
     print(f"[fetch_signal_data] {len(df):,} rows, {signal_count} signal(s)", flush=True)
-    return df, new_time_range, f"Fetched {len(df):,} pts, {signal_count} signal(s)."
+    return df, new_time_range, f"Fetched {len(df):,} pts, {signal_count} signal(s).", widened
 
 
 def _fetch_video_for_file(filename: str) -> dict | None:

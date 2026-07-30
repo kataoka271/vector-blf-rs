@@ -478,9 +478,14 @@ app.clientside_callback(
                 var src = r.signal_source.toLowerCase();
                 var shown = displaySrc(r.signal_source).toLowerCase();
                 var ch = String(r.channel);
+                // Also match the concatenated source+channel label (e.g. "CAN3", "ETH0")
+                // so a single no-space token finds the same signals "can 3" would.
+                var srcCh = src + ch;
+                var shownCh = shown + ch;
                 return kwWords.every(function(w) {
                     return name.indexOf(w) !== -1 || src.indexOf(w) !== -1
-                        || shown.indexOf(w) !== -1 || ch.indexOf(w) !== -1;
+                        || shown.indexOf(w) !== -1 || ch.indexOf(w) !== -1
+                        || srcCh.indexOf(w) !== -1 || shownCh.indexOf(w) !== -1;
                 });
             });
         }

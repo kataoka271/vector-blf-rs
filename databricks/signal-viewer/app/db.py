@@ -259,10 +259,11 @@ def _fetch_signals_by_search(
     """Search signals matching keyword server-side (not limited to the cached browse window).
 
     A signal matches when every whitespace-separated word of `keyword` is contained in
-    its name, its source, or its channel number, case-insensitively -- so "can 1" finds
-    the signals on CAN channel 1. Returns (rows, truncated): rows carries at most
-    `limit` // 3 matches per signal_source (see _catalog_query), and `truncated` is
-    True when that cap dropped matches.
+    its name, its source, its channel number, or its source+channel label (e.g. "CAN3"
+    or "ETH0", matching what's shown on screen), case-insensitively -- so both "can 1"
+    and "can1" find the signals on CAN channel 1. Returns (rows, truncated): rows
+    carries at most `limit` // 3 matches per signal_source (see _catalog_query), and
+    `truncated` is True when that cap dropped matches.
     """
     try:
         words = keyword.split()
@@ -273,12 +274,14 @@ def _fetch_signals_by_search(
         # scan, whereas the lambda's pattern is per-row and compiles a regex.
         word_clause = (
             f"(signal_name ILIKE ? OR signal_source ILIKE ? OR {_DISPLAY_SOURCE_SQL} ILIKE ?"
-            f" OR CAST(channel AS STRING) LIKE ?)"
+            f" OR CAST(channel AS STRING) LIKE ?"
+            f" OR CONCAT(signal_source, CAST(channel AS STRING)) ILIKE ?"
+            f" OR CONCAT({_DISPLAY_SOURCE_SQL}, CAST(channel AS STRING)) ILIKE ?)"
         )
         stmt, params = _catalog_query(
             filenames,
             match_clause=" AND ".join([word_clause] * len(words)),
-            match_params=[f"%{w}%" for w in words for _ in range(4)],
+            match_params=[f"%{w}%" for w in words for _ in range(6)],
             per_source_limit=per_source_limit + 1,  # one extra row per source, to detect truncation
         )
         df = _query(stmt, params)

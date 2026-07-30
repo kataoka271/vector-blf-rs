@@ -270,6 +270,7 @@ def render_file_tree(filenames):
                         style={"marginLeft": "1.3em"},
                         labelStyle={"whiteSpace": "nowrap"},
                     ),
+                    dcc.Store(id={"type": "tree-folder-sync-guard", "folder": folder}, data=False),
                 ],
             )
         )
@@ -277,17 +278,40 @@ def render_file_tree(filenames):
 
 
 # Checking/unchecking a folder's checkbox selects/clears every file listed in its own
-# Checklist. One-directional (the folder checkbox doesn't reflect partial selection
-# made by hand-picking individual files) -- that's enough to satisfy "select a folder
-# to load all its files" without the complexity of a tri-state indeterminate checkbox.
+# Checklist. A per-folder guard Store breaks the cycle with sync_folder_checkbox below:
+# when that callback drives the folder checkbox from child selections, it flips the
+# guard so this callback skips the cascade instead of clobbering a partial selection.
 @callback(
     Output({"type": "tree-file-check", "folder": MATCH}, "value"),
+    Output({"type": "tree-folder-sync-guard", "folder": MATCH}, "data", allow_duplicate=True),
     Input({"type": "tree-folder-check", "folder": MATCH}, "value"),
     State({"type": "tree-file-check", "folder": MATCH}, "options"),
+    State({"type": "tree-folder-sync-guard", "folder": MATCH}, "data"),
     prevent_initial_call=True,
 )
-def toggle_folder_files(checked, options):
-    return [o["value"] for o in options] if checked else []
+def toggle_folder_files(checked, options, guard):
+    if guard:
+        return dash.no_update, False
+    return ([o["value"] for o in options] if checked else []), dash.no_update
+
+
+# Reflects child selection back onto the folder checkbox: checked once every file in
+# the folder is selected, unchecked otherwise. Sets the guard above so the resulting
+# folder-checkbox change doesn't re-cascade through toggle_folder_files.
+@callback(
+    Output({"type": "tree-folder-check", "folder": MATCH}, "value"),
+    Output({"type": "tree-folder-sync-guard", "folder": MATCH}, "data"),
+    Input({"type": "tree-file-check", "folder": MATCH}, "value"),
+    State({"type": "tree-file-check", "folder": MATCH}, "options"),
+    State({"type": "tree-folder-check", "folder": MATCH}, "value"),
+    prevent_initial_call=True,
+)
+def sync_folder_checkbox(selected, options, folder_checked):
+    all_files = {o["value"] for o in options or []}
+    all_selected = bool(all_files) and set(selected or []) == all_files
+    if all_selected == bool(folder_checked):
+        return dash.no_update, dash.no_update
+    return all_selected, True
 
 
 # Folds every folder's checked files into filename-filter's value, the single

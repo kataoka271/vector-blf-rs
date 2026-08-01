@@ -9,14 +9,16 @@ resources:
 
       # Pipeline parameters -- consumed by spark.conf.get() in the Python file
       configuration:
-        blf.target_catalog:                  ${var.target_catalog}
-        blf.target_schema:                    ${var.target_schema}
-        blf.bus_mapping_ecu_bus_path:         ${var.bus_mapping_ecu_bus_path}
-        blf.bus_mapping_ecu_bus_table:        ${var.bus_mapping_ecu_bus_table}
-        blf.bus_mapping_message_sender_path:  ${var.bus_mapping_message_sender_path}
-        blf.bus_mapping_message_sender_table: ${var.bus_mapping_message_sender_table}
-        blf.bus_mapping_beta:                 ${var.bus_mapping_beta}
-        blf.bus_mapping_min_score:            ${var.bus_mapping_min_score}
+        blf.target_catalog:                          ${var.target_catalog}
+        blf.target_schema:                            ${var.target_schema}
+        blf.bus_mapping_ecu_bus_path:                 ${var.bus_mapping_ecu_bus_path}
+        blf.bus_mapping_ecu_bus_table:                ${var.bus_mapping_ecu_bus_table}
+        blf.bus_mapping_message_sender_path:          ${var.bus_mapping_message_sender_path}
+        blf.bus_mapping_message_sender_table:         ${var.bus_mapping_message_sender_table}
+        blf.bus_mapping_someip_service_sender_path:   ${var.bus_mapping_someip_service_sender_path}
+        blf.bus_mapping_someip_service_sender_table:  ${var.bus_mapping_someip_service_sender_table}
+        blf.bus_mapping_beta:                         ${var.bus_mapping_beta}
+        blf.bus_mapping_min_score:                    ${var.bus_mapping_min_score}
 
       libraries:
         - file:

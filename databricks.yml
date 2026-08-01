@@ -261,6 +261,24 @@ variables:
       Set via: databricks bundle deploy --var="bus_mapping_message_sender_table=main.blf_dev.message_sender"
     default: ""
 
+  bus_mapping_someip_service_sender_path:
+    description: >
+      Unity Catalog Volume path to the SOME/IP service-id-to-sender-ECU CSV,
+      used by the blf_bus_mapping pipeline. Format: service_id,sender_ecu
+      (service_id accepts 0x-prefixed hex or decimal). Keyed by service_id
+      alone, not (service_id, method_id): a service is provided by exactly
+      one ECU, so use the serving ECU, not a calling client.
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/someip_service_sender.csv
+
+  bus_mapping_someip_service_sender_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) with the SOME/IP
+      service-id-to-sender mapping (optional). Same columns as the
+      bus_mapping_someip_service_sender_path CSV. Takes precedence over
+      bus_mapping_someip_service_sender_path when set.
+      Set via: databricks bundle deploy --var="bus_mapping_someip_service_sender_table=main.blf_dev.someip_service_sender"
+    default: ""
+
   bus_mapping_beta:
     description: >
       F-beta value the blf_bus_mapping pipeline uses to blend recall and

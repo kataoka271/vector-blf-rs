@@ -36,6 +36,7 @@ include:
   - databricks/blf-pipeline/blf_ingestion.pipeline.yml
   - databricks/signal-docs-pipeline/signal_docs.pipeline.yml
   - databricks/scene-pipeline/blf_scenes.pipeline.yml
+  - databricks/bus-mapping-pipeline/blf_bus_mapping.pipeline.yml
   - databricks/signal-viewer/signal_viewer.app.yml
   - databricks/signal-importer/signal_importer.job.yml
 
@@ -226,6 +227,54 @@ variables:
       Only has an effect when semantic_model_endpoint is set.
     default: "60"
 
+  bus_mapping_ecu_bus_path:
+    description: >
+      Unity Catalog Volume path to the ECU-to-bus mapping CSV, used by the
+      blf_bus_mapping pipeline. If empty and bus_mapping_ecu_bus_table is
+      unset, blf_bus_mapping has no candidate buses and produces no rows.
+      Format: ecu,bus_name (a gateway ECU bridging multiple buses gets one row
+      per bus).
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/ecu_bus.csv
+
+  bus_mapping_ecu_bus_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) with the ECU-to-bus mapping
+      (optional). Same columns as the bus_mapping_ecu_bus_path CSV. Takes
+      precedence over bus_mapping_ecu_bus_path when set.
+      Set via: databricks bundle deploy --var="bus_mapping_ecu_bus_table=main.blf_dev.ecu_bus"
+    default: ""
+
+  bus_mapping_message_sender_path:
+    description: >
+      Unity Catalog Volume path to the message-id-to-sender-ECU CSV, used by
+      the blf_bus_mapping pipeline. Format: message_id,sender_ecu (message_id
+      accepts 0x-prefixed hex or decimal). Use each message's true originating
+      ECU, not a relay/gateway, so a relayed message doesn't pollute its own
+      bus's expected set.
+    default: /Volumes/${var.target_catalog}/${var.target_schema}/signals/message_sender.csv
+
+  bus_mapping_message_sender_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) with the message-id-to-sender
+      mapping (optional). Same columns as the bus_mapping_message_sender_path
+      CSV. Takes precedence over bus_mapping_message_sender_path when set.
+      Set via: databricks bundle deploy --var="bus_mapping_message_sender_table=main.blf_dev.message_sender"
+    default: ""
+
+  bus_mapping_beta:
+    description: >
+      F-beta value the blf_bus_mapping pipeline uses to blend recall and
+      precision into the channel<->bus match score. Beta > 1 weights recall
+      over precision, appropriate here since gateway relaying depresses
+      precision without changing a channel's native traffic.
+    default: "2.0"
+
+  bus_mapping_min_score:
+    description: >
+      Minimum match score (0-1) below which blf_bus_mapping flags a channel's
+      assignment as needing manual review.
+    default: "0.3"
+
   excel_source_path:
     description: >
       UC Volume path to the Excel signal definition file.
@@ -299,6 +348,10 @@ targets:
         # Triggered, like signal_docs: clustering and the anomaly baseline are
         # whole-corpus computations, so this must not inherit continuous: true.
         blf_scenes:
+          development: false
+        # Triggered, like blf_scenes: the channel<->bus assignment needs every
+        # channel's observed set at once, so this must not inherit continuous: true.
+        blf_bus_mapping:
           development: false
     variables:
       target_schema: blf

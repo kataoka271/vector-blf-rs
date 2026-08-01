@@ -1,0 +1,42 @@
+resources:
+  pipelines:
+    blf_bus_mapping:
+      name: vector-blf-bus-mapping-${bundle.target}
+
+      # Unity Catalog output location (same catalog/schema as blf_ingestion)
+      catalog: ${var.target_catalog}
+      target: ${var.target_schema}
+
+      # Pipeline parameters -- consumed by spark.conf.get() in the Python file
+      configuration:
+        blf.target_catalog:                  ${var.target_catalog}
+        blf.target_schema:                    ${var.target_schema}
+        blf.bus_mapping_ecu_bus_path:         ${var.bus_mapping_ecu_bus_path}
+        blf.bus_mapping_ecu_bus_table:        ${var.bus_mapping_ecu_bus_table}
+        blf.bus_mapping_message_sender_path:  ${var.bus_mapping_message_sender_path}
+        blf.bus_mapping_message_sender_table: ${var.bus_mapping_message_sender_table}
+        blf.bus_mapping_beta:                 ${var.bus_mapping_beta}
+        blf.bus_mapping_min_score:            ${var.bus_mapping_min_score}
+
+      libraries:
+        - file:
+            path: ./bus_mapping_pipeline.py
+
+      # scipy (Hungarian assignment) does not ship in the serverless base image,
+      # unlike numpy/pandas -- see blf_scenes.pipeline.yml for the contrast.
+      environment:
+        dependencies:
+          - scipy
+
+      serverless: true
+
+      channel: CURRENT    # use the latest DLT runtime
+      edition: ADVANCED
+
+      # The channel<->bus assignment is a whole-corpus computation -- every
+      # channel's observed set has to be seen at once to solve it -- so this is
+      # triggered rather than continuous, same as blf_scenes. Run it after
+      # blf_ingestion has caught up:
+      #   databricks bundle run blf_bus_mapping
+      continuous:  false
+      development: true

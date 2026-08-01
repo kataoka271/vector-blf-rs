@@ -26,6 +26,7 @@ databricks = [
     "pandas>=2.0.0,<3.0.0",
     "plotly>=5.20.0,<6.0.0",
     "pyarrow>=14.0.0",
+    "scipy>=1.15.3",
 ]
 dev = [
     "autosar-data>=0.10.1",

@@ -1,0 +1,10 @@
+ecu,bus_name
+ECU_ENGINE,Powertrain
+ECU_TRANS,Powertrain
+ECU_GATEWAY,Powertrain
+ECU_GATEWAY,Body
+ECU_GATEWAY,Chassis
+ECU_BCM,Body
+ECU_DOOR,Body
+ECU_ABS,Chassis
+ECU_EPS,Chassis

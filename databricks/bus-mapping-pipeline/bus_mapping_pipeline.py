@@ -6,7 +6,7 @@ Infers which physical bus (Powertrain, Body, Chassis, ...) each logged CAN
 or SOME/IP channel corresponds to, by comparing the message IDs (CAN) or
 service IDs (SOME/IP) actually observed on each channel against the IDs a
 bus is expected to carry given its connected ECUs. Formerly a standalone
-script (databricks/infer-bus-mapping/); this is the same
+script (scripts/infer-bus-mapping/); this is the same
 set-similarity-matching algorithm wired into the pipeline graph so it runs
 against every ingested log instead of one CSV at a time.
 

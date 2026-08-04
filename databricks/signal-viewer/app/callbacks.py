@@ -271,7 +271,6 @@ def render_file_tree(filenames):
                         style={"marginLeft": "1.3em"},
                         labelStyle={"whiteSpace": "nowrap"},
                     ),
-                    dcc.Store(id={"type": "tree-folder-sync-guard", "folder": folder}, data=False),
                 ],
             )
         )
@@ -279,40 +278,51 @@ def render_file_tree(filenames):
 
 
 # Checking/unchecking a folder's checkbox selects/clears every file listed in its own
-# Checklist. A per-folder guard Store breaks the cycle with sync_folder_checkbox below:
-# when that callback drives the folder checkbox from child selections, it flips the
-# guard so this callback skips the cascade instead of clobbering a partial selection.
+# Checklist. This is the only Dash-declared writer of tree-file-check.value that
+# reads tree-folder-check.value, so it's one-directional in the callback graph --
+# the reverse reflection (files -> folder) below deliberately stays out of Dash's
+# graph (see that callback's comment) rather than pairing with this one, which
+# would recreate the two-node cycle Dash's dev-tools used to flag here.
 @callback(
     Output({"type": "tree-file-check", "folder": MATCH}, "value"),
-    Output({"type": "tree-folder-sync-guard", "folder": MATCH}, "data", allow_duplicate=True),
     Input({"type": "tree-folder-check", "folder": MATCH}, "value"),
     State({"type": "tree-file-check", "folder": MATCH}, "options"),
-    State({"type": "tree-folder-sync-guard", "folder": MATCH}, "data"),
     prevent_initial_call=True,
 )
-def toggle_folder_files(checked, options, guard):
-    if guard:
-        return dash.no_update, False
-    return ([o["value"] for o in options] if checked else []), dash.no_update
+def toggle_folder_files(checked, options):
+    return [o["value"] for o in options] if checked else []
 
 
 # Reflects child selection back onto the folder checkbox: checked once every file in
-# the folder is selected, unchecked otherwise. Sets the guard above so the resulting
-# folder-checkbox change doesn't re-cascade through toggle_folder_files.
-@callback(
-    Output({"type": "tree-folder-check", "folder": MATCH}, "value"),
-    Output({"type": "tree-folder-sync-guard", "folder": MATCH}, "data"),
-    Input({"type": "tree-file-check", "folder": MATCH}, "value"),
-    State({"type": "tree-file-check", "folder": MATCH}, "options"),
-    State({"type": "tree-folder-check", "folder": MATCH}, "value"),
-    prevent_initial_call=True,
+# the folder is selected, indeterminate if some (but not all) are, unchecked
+# otherwise. Declaring this as a normal Output({"type": "tree-folder-check", ...},
+# "value") Input/Output pair would form a two-node cycle with toggle_folder_files
+# above in Dash's dependency graph (regardless of a runtime guard preventing an
+# actual infinite loop -- the graph is built from the declarations alone). Instead
+# this writes the checkbox's checked/indeterminate DOM state directly and outputs
+# to a disconnected sink, the same technique the theme-toggle callback above uses
+# for its Plotly.relayout side effect.
+app.clientside_callback(
+    """
+    function(valuesLists) {
+        var inputs = dash_clientside.callback_context.inputs_list[0] || [];
+        valuesLists.forEach(function(selected, i) {
+            var folder = inputs[i] && inputs[i].id && inputs[i].id.folder;
+            if (folder === undefined) return;
+            var fileWrapper = document.getElementById(JSON.stringify({folder: folder, type: "tree-file-check"}));
+            var folderCheckbox = document.getElementById(JSON.stringify({folder: folder, type: "tree-folder-check"}));
+            if (!fileWrapper || !folderCheckbox) return;
+            var total = fileWrapper.querySelectorAll('input[type="checkbox"]').length;
+            var selectedCount = (selected || []).length;
+            folderCheckbox.checked = total > 0 && selectedCount === total;
+            folderCheckbox.indeterminate = selectedCount > 0 && selectedCount < total;
+        });
+        return "";
+    }
+    """,
+    Output("tree-folder-sync-sink", "children"),
+    Input({"type": "tree-file-check", "folder": ALL}, "value"),
 )
-def sync_folder_checkbox(selected, options, folder_checked):
-    all_files = {o["value"] for o in options or []}
-    all_selected = bool(all_files) and set(selected or []) == all_files
-    if all_selected == bool(folder_checked):
-        return dash.no_update, dash.no_update
-    return all_selected, True
 
 
 # Folds every folder's checked files into filename-filter's value, the single

@@ -127,6 +127,7 @@ def _stores() -> list:
         html.Div(id="video-listener-sink", style={"display": "none"}),
         html.Div(id="video-playlist-sink", style={"display": "none"}),
         html.Div(id="color-mode-sink", style={"display": "none"}),
+        html.Div(id="time-range-sink", style={"display": "none"}),
         # max_intervals=1 caps this at exactly one fire per debounce cycle -- without
         # it, a slow SQL round-trip (filter_signals_by_file re-disabling this after
         # the query returns) leaves the 600ms tick free to fire again in the

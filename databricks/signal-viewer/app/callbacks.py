@@ -1048,12 +1048,11 @@ app.clientside_callback(
     function(store) {
         if (!store) return window.dash_clientside.no_update;
         window._timeRangeStore = { tMin: store.min, t0: store.t0 || null };
-        return window.dash_clientside.no_update;
+        return "";
     }
     """,
-    Output("time-range-store", "data", allow_duplicate=True),
+    Output("time-range-sink", "children"),
     Input("time-range-store", "data"),
-    prevent_initial_call=True,
 )
 
 # ---------------------------------------------------------------------------

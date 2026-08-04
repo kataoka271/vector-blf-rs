@@ -1,16 +1,4 @@
-/* /upload screen chrome. Kept out of layout.py's inline styles so the Python-side
- * route_page callback (callbacks.py) can toggle visibility by touching only
- * "display", the same split float-panel.css documents for _float_panel. */
-
-.upload-page {
-  height: 100vh;
-  overflow-y: auto;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
+/* Upload modal chrome (see layout.py's _upload_modal / _upload_dropzone). */
 
 .upload-dropzone {
   border: 2px dashed var(--bs-border-color);

@@ -133,21 +133,22 @@ app.clientside_callback(
 
 
 # ---------------------------------------------------------------------------
-# Routing -- /upload is a separate screen mounted alongside the dashboard (see
-# layout.py) rather than swapped into the DOM, so this only ever toggles which one
-# is visible; nothing is created, destroyed, or loses its in-progress state.
+# Upload modal -- overlays the dashboard in place rather than navigating to a
+# separate route, the same open/close toggle pattern as toggle_genie_panel below.
 # ---------------------------------------------------------------------------
 
 
 @callback(
-    Output("dashboard-page", "style"),
-    Output("upload-page", "style"),
-    Input("url", "pathname"),
+    Output("upload-modal", "is_open"),
+    Input("upload-toggle-btn", "n_clicks"),
+    Input("upload-close-btn", "n_clicks"),
+    State("upload-modal", "is_open"),
+    prevent_initial_call=True,
 )
-def route_page(pathname):
-    if (pathname or "/") == "/upload":
-        return {"display": "none"}, {}
-    return {}, {"display": "none"}
+def toggle_upload_modal(_open, _close, is_open):
+    if dash.ctx.triggered_id == "upload-close-btn":
+        return False
+    return not (is_open or False)
 
 
 # ---------------------------------------------------------------------------

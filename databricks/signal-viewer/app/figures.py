@@ -365,6 +365,44 @@ def _stacked_fig(
     return fig
 
 
+def _live_metrics_fig(df: pd.DataFrame, dark: bool = True) -> go.Figure:
+    """Build the Live Testbench overlay chart: one line per (signal_source, channel, signal_name).
+
+    Unlike _overlay_fig, this shows Plotly's own legend -- the live panel has no
+    sidebar tag list to identify traces by.
+    """
+    if df.empty:
+        return _empty_fig("Waiting for data...", dark=dark)
+    palette = _plotly_palette(dark)
+    axis_box = _axis_box(palette)
+    fig = go.Figure()
+    for key, sub in df.groupby(["signal_source", "channel", "signal_name"], sort=False):
+        src, channel, name = cast(tuple, key)
+        fig.add_trace(
+            go.Scattergl(
+                x=_plot_x(sub["time"]),
+                y=sub["signal_value"],
+                mode="lines+markers",
+                line=dict(shape="hv"),
+                name=f"{_display_src(src)}{channel}::{name}",
+            )
+        )
+    fig.update_layout(
+        template=palette["template"],
+        paper_bgcolor=palette["bg"],
+        plot_bgcolor=palette["bg"],
+        height=420,
+        hovermode="x unified",
+        xaxis_title="Time",
+        hoverlabel={"font_family": "monospace"},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
+        margin={"l": 60, "r": 20, "t": 60, "b": 60},
+    )
+    fig.update_xaxes(**axis_box)
+    fig.update_yaxes(**axis_box)
+    return fig
+
+
 def _group_by_key(df_all: pd.DataFrame) -> "DataFrameGroupBy | None":
     """Group df_all by (signal_source, channel, signal_name) once.
 

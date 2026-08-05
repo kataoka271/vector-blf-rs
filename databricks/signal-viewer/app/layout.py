@@ -21,7 +21,15 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from ._dash import app
-from .config import BLF_RAW_PATH, BLF_VIDEO_UPLOAD_PATH, CATALOG, GENIE_SPACE_ID, SCHEMA
+from .config import (
+    BLF_RAW_PATH,
+    BLF_VIDEO_UPLOAD_PATH,
+    CATALOG,
+    GENIE_SPACE_ID,
+    LIVE_MONITOR_ENABLED,
+    LIVE_POLL_MS,
+    SCHEMA,
+)
 from .figures import _ACCENT, _BG, _BORDER, _PANEL, _SIDEBAR_CONTENT_STYLE, _SIDEBAR_STYLE, _TEXT, _WARN, _empty_fig
 
 # ---------------------------------------------------------------------------
@@ -468,6 +476,14 @@ def _sidebar_footer() -> html.Div:
                 className="w-100",
                 style={"display": "block" if GENIE_SPACE_ID else "none"},
             ),
+            dbc.Button(
+                "Live Testbench",
+                id="live-toggle-panel-btn",
+                n_clicks=0,
+                **_SMALL_OUTLINE_BTN,
+                className="w-100",
+                style={"display": "block" if LIVE_MONITOR_ENABLED else "none"},
+            ),
             dbc.Button("Plot", id="plot-btn", n_clicks=0, color="info", className="w-100 fw-bold"),
             html.Div(id="avail-msg", style={"fontSize": "12px", "color": _TEXT, "minHeight": "16px"}),
             html.Div(
@@ -781,6 +797,77 @@ def _genie_panel() -> dbc.Offcanvas:
 
 
 # ---------------------------------------------------------------------------
+# Live Testbench offcanvas -- polls examples/testing's Zerobus-uploaded metrics
+# table for a selected run_id while open (see live-poll-interval in callbacks.py).
+# ---------------------------------------------------------------------------
+
+
+def _live_run_row() -> html.Div:
+    return html.Div(
+        className="d-flex align-items-center gap-2",
+        children=[
+            dcc.Dropdown(
+                id="live-run-id",
+                options=[],
+                placeholder="Select run_id...",
+                clearable=False,
+                style={"fontSize": "12px", "flex": "1"},
+            ),
+            dbc.Button(
+                "↻",
+                id="live-refresh-runs-btn",
+                **_SMALL_OUTLINE_BTN,
+                style={"fontSize": "11px", "padding": "4px 7px"},
+                title="Refresh run_id list",
+            ),
+        ],
+    )
+
+
+def _live_panel() -> dbc.Offcanvas:
+    return dbc.Offcanvas(
+        id="live-panel-collapse",
+        title="Live Testbench",
+        is_open=False,
+        placement="end",
+        backdrop=False,
+        scrollable=True,
+        close_button=True,
+        style={"width": "640px", "backgroundColor": _PANEL, "color": _TEXT},
+        children=[
+            html.Div(
+                "Polls examples/testing's Zerobus-uploaded metrics table for the selected "
+                "run_id while this panel is open.",
+                className="text-muted mb-2",
+                style={"fontSize": "11px"},
+            ),
+            _live_run_row(),
+            html.Div(
+                className="d-flex align-items-center gap-2 mt-2",
+                children=[
+                    dbc.Button("Start", id="live-toggle-btn", color="info", size="sm"),
+                    html.Div(id="live-status-msg", className="text-muted", style={"fontSize": "11px", "flex": "1"}),
+                ],
+            ),
+            html.Div(
+                className="mt-2",
+                children=dcc.Loading(
+                    type="dot",
+                    color=_ACCENT,
+                    children=dcc.Graph(
+                        id="live-chart",
+                        config={"displayModeBar": True},
+                        figure=_empty_fig("Select a run_id and click Start"),
+                    ),
+                ),
+            ),
+            dcc.Store(id="live-metrics-store"),
+            dcc.Interval(id="live-poll-interval", interval=LIVE_POLL_MS, n_intervals=0, disabled=True),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Upload modal -- overlays the dashboard in place (toggle_upload_modal in
 # callbacks.py flips is_open) instead of navigating to a separate route/page, the
 # same pattern _genie_panel uses for its offcanvas.
@@ -878,5 +965,6 @@ app.layout = dbc.Container(
         ),
         _upload_modal(),
         _genie_panel(),
+        _live_panel(),
     ],
 )

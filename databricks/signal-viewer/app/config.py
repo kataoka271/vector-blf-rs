@@ -38,6 +38,22 @@ DEV_SAMPLE_VIDEO = os.environ.get("BLF_DEV_SAMPLE_VIDEO", "")
 BLF_RAW_PATH = os.environ.get("BLF_RAW_PATH", "")
 BLF_VIDEO_UPLOAD_PATH = os.environ.get("BLF_VIDEO_UPLOAD_PATH", "")
 
+# Live Testbench monitor: polls the OTLP metrics table examples/testing/uploader.py
+# writes to via Zerobus Ingest. Must match that run's config.yaml zerobus.table_prefix
+# -- the "_otel_metrics" suffix itself comes from the OTLP ingestion contract, see
+# https://docs.databricks.com/aws/en/ingestion/opentelemetry/configure.
+BENCHTEST_TABLE_PREFIX = os.environ.get("BLF_BENCHTEST_TABLE_PREFIX", "")
+# Shown in local dev even without a configured prefix (like the rest of the app's dummy
+# data paths), so the panel is exercisable without a real deployment.
+LIVE_MONITOR_ENABLED = bool(BENCHTEST_TABLE_PREFIX) or _LOCAL_DEV
+_LIVE_METRICS_TABLE = (
+    f"`{CATALOG}`.`{SCHEMA}`.`{BENCHTEST_TABLE_PREFIX or 'blf_benchtest'}_otel_metrics`"
+    if LIVE_MONITOR_ENABLED
+    else None
+)
+# Poll cadence; matches config.yaml's zerobus.export_interval_ms default (5000).
+LIVE_POLL_MS = int(os.environ.get("BLF_LIVE_POLL_MS", "5000"))
+
 # Databricks SDK config (None in local dev)
 cfg = None
 if not _LOCAL_DEV:

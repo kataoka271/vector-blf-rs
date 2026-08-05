@@ -20,6 +20,7 @@ from .db import (
     _fetch_filenames,
     _fetch_global_time_range,
     _fetch_latlon_candidates,
+    _fetch_live_run_ids,
     _fetch_per_file_time_ranges,
     _fetch_signal_file_scopes,
     _fetch_signals_by_search,
@@ -27,6 +28,7 @@ from .db import (
     _log_token_info,
     _resolve_user_token,
     _run_parallel,
+    fetch_live_metrics,
     fetch_signal_data,
 )
 from .figures import (
@@ -37,6 +39,7 @@ from .figures import (
     _TEXT,
     _display_src,
     _empty_fig,
+    _live_metrics_fig,
     _XaxisMode,
     render_chart_and_grid,
 )
@@ -1725,3 +1728,88 @@ app.clientside_callback(
     Output("genie-history-arrow", "children"),
     Input("genie-history-collapse", "is_open"),
 )
+
+
+# ---------------------------------------------------------------------------
+# Live Testbench -- polls examples/testing's Zerobus-uploaded metrics table for a
+# selected run_id while the panel is open (see dcc.Interval("live-poll-interval")).
+# ---------------------------------------------------------------------------
+
+_LIVE_MAX_POINTS = 3000  # rolling window cap across all signals combined, oldest points dropped first
+
+
+@callback(
+    Output("live-panel-collapse", "is_open"),
+    Input("live-toggle-panel-btn", "n_clicks"),
+    State("live-panel-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_live_panel(_n, is_open):
+    return not (is_open or False)
+
+
+@callback(
+    Output("live-run-id", "options"),
+    Input("live-panel-collapse", "is_open"),
+    Input("live-refresh-runs-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def refresh_live_run_ids(is_open, _n):
+    if dash.ctx.triggered_id == "live-panel-collapse" and not is_open:
+        return dash.no_update
+    return _fetch_live_run_ids() or []
+
+
+@callback(
+    Output("live-poll-interval", "disabled"),
+    Output("live-poll-interval", "n_intervals"),
+    Output("live-toggle-btn", "children"),
+    Output("live-metrics-store", "data", allow_duplicate=True),
+    Output("live-status-msg", "children", allow_duplicate=True),
+    Input("live-toggle-btn", "n_clicks"),
+    State("live-poll-interval", "disabled"),
+    State("live-run-id", "value"),
+    prevent_initial_call=True,
+)
+def toggle_live_polling(_n, currently_disabled, run_id):
+    if currently_disabled or currently_disabled is None:
+        if not run_id:
+            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, "Select a run_id first."
+        # Reset n_intervals along with the accumulator: a Stop/Start cycle must not carry
+        # over a stale tick count that would otherwise make the interval fire immediately
+        # on re-enable and race the reset store.
+        return False, 0, "Stop", None, "Started."
+    return True, dash.no_update, "Start", dash.no_update, "Stopped."
+
+
+@callback(
+    Output("live-chart", "figure"),
+    Output("live-metrics-store", "data"),
+    Output("live-status-msg", "children"),
+    Input("live-poll-interval", "n_intervals"),
+    State("live-run-id", "value"),
+    State("live-metrics-store", "data"),
+    State("color-mode-switch", "value"),
+    prevent_initial_call=True,
+)
+def poll_live_metrics(_n, run_id, store: dict | None, dark):
+    if not run_id:
+        return dash.no_update, dash.no_update, "Select a run_id first."
+    store = store or {"rows": [], "last_time": None}
+    df_new = fetch_live_metrics(run_id, store.get("last_time"))
+    if df_new is None:
+        return dash.no_update, dash.no_update, "Query error -- see server logs."
+    rows: list[dict] = store["rows"]
+    if not df_new.empty:
+        # Stored as strings (not the store's native JSON types) so the dict round-trips
+        # through dcc.Store without pandas Timestamps needing custom serialization.
+        rows = rows + df_new.assign(time=df_new["time"].astype(str)).to_dict("records")
+        rows = rows[-_LIVE_MAX_POINTS:]
+        last_time = df_new["time"].max()
+        store = {"rows": rows, "last_time": last_time.isoformat()}
+    df_all = pd.DataFrame(rows)
+    if not df_all.empty:
+        df_all["time"] = pd.to_datetime(df_all["time"])
+    fig = _live_metrics_fig(df_all, dark=dark)
+    msg = f"{len(rows):,} pt(s) buffered (window capped at {_LIVE_MAX_POINTS:,})."
+    return fig, store, msg

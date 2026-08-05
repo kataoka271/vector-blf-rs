@@ -73,8 +73,50 @@ def _requested_signals(stmt: str, params) -> list[tuple[str, int, str]] | None:
     return [triple for triple in _DUMMY_CATALOG if triple in requested]
 
 
+_DUMMY_LIVE_RUN_IDS = ["dummy-run-0001", "dummy-run-0002"]
+_DUMMY_LIVE_SIGNALS = [
+    ("CAN", "1", "EngineSpeed_rpm"),
+    ("CAN", "1", "VehicleSpeed_kph"),
+    ("CAN", "1", "BatteryVoltage_V"),
+]
+
+
+def _dummy_live_metrics(since: str | None) -> pd.DataFrame:
+    """Synthesize new samples per signal for the (since, now] window, anchored to wall-clock time.
+
+    Local dev has no testbench actually writing to a live table, so this uses real
+    time.time() as the x-axis: each poll's `since` is the previous poll's `now`, so
+    every call naturally returns only points past what was already returned.
+    """
+    now = pd.Timestamp.now(tz="UTC")
+    start = pd.Timestamp(since) if since else now - pd.Timedelta(seconds=30)
+    if start.tzinfo is None:
+        start = start.tz_localize("UTC")
+    times = pd.date_range(start + pd.Timedelta(seconds=1), now, freq="1s") if start < now else pd.DatetimeIndex([])
+    rows = []
+    for t in times:
+        elapsed = t.timestamp()
+        for src, channel, name in _DUMMY_LIVE_SIGNALS:
+            seed = hash(f"{src}{channel}::{name}") & 0xFFFF
+            freq = 0.05 + (seed % 20) * 0.01
+            amp = 10 + (seed % 90)
+            offset = (seed % 100) - 50
+            value = offset + amp * math.sin(2 * math.pi * freq * elapsed + seed * 0.001)
+            rows.append(
+                {"time": t, "signal_source": src, "channel": channel, "signal_name": name, "signal_value": value}
+            )
+    return pd.DataFrame(rows)
+
+
 def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
     print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
+    if "GROUP BY run_id" in stmt:
+        return pd.DataFrame(
+            {"run_id": _DUMMY_LIVE_RUN_IDS, "last_seen": [pd.Timestamp.now(tz="UTC")] * len(_DUMMY_LIVE_RUN_IDS)}
+        )
+    if "gauge.value" in stmt:
+        since = params[2] if params and len(params) > 2 else None
+        return _dummy_live_metrics(since)
     if "_video_path" in stmt:
         # No video Volume in local dev. If BLF_DEV_SAMPLE_VIDEO points at a local file,
         # report it as a match for any file so the sync UI can be exercised; otherwise

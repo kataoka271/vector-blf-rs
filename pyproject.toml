@@ -52,7 +52,7 @@ line-length = 120
 reportMissingImports = "warning"
 
 [tool.pytest.ini_options]
-testpaths = ["databricks", "scripts"]
+testpaths = ["databricks", "scripts", "examples/bench"]
 
 [tool.ty.environment]
-root = ["./src", "./databricks", "./scripts"]
+root = ["./src", "./databricks", "./scripts", "./examples/bench"]

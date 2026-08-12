@@ -1,0 +1,57 @@
+// Zerobus Ingest record schema for examples/bench -- the single definition every
+// producer (ReceiverEcu's upload leg) uses. Field-for-field copy of
+// examples/testing/vecu_sdk/record.proto, kept as its own copy so examples/bench has no
+// runtime dependency on examples/testing (see the plan's "copy, don't import" decision).
+//
+// The fields must line up 1:1 with the columns of the target Delta table -- see
+// examples/testing/README.md's "アップロード先テーブルと proto スキーマ" section for the
+// CREATE TABLE statement (same schema; examples/bench does not duplicate that doc).
+//
+// The generated record_pb2 module is a build artifact and is not checked in. Generate it
+// with:
+//
+//   cd examples/bench/transport && uv run --group testing python -m grpc_tools.protoc \
+//       --python_out=. --proto_path=. record.proto
+
+syntax = "proto2";
+
+message TestbenchFrame {
+    // Identifies one test-bench run, so downstream comparisons can group its uploads.
+    optional string run_id = 1;
+    // Synthetic BLF path, "testbench/<run_id>.blf". Becomes blf_bronze._source_file, which
+    // every downstream pipeline uses as an opaque per-log grouping key.
+    optional string source_file = 2;
+    // Nanoseconds since the start of this run. Matches blf_bronze's log-relative
+    // timestamp_ns convention -- NOT an epoch value.
+    optional int64 timestamp_ns = 3;
+    // Absolute wall-clock time in nanoseconds since the epoch, re-stamped at each hop;
+    // becomes event_time. The difference between two hops' values is the hop latency.
+    optional int64 observed_ns = 4;
+    // Bus segment number, carried into blf_bronze.channel.
+    optional int32 channel = 5;
+    // --- CAN / CAN-FD variant (unset for Ethernet) ---
+    optional int64 can_id = 6;
+    optional bool is_ext_id = 7;
+    // 0=Tx 1=Rx 2=TxRq. int32 rather than a narrower type because protobuf has no 8-bit
+    // integer; the pipeline casts this (and dlc) down to blf_bronze's TINYINT columns.
+    optional int32 dir = 8;
+    optional bool rtr = 9;
+    optional int32 dlc = 10;
+    // Payload bytes. For Ethernet this is the payload after the Ethernet header, matching
+    // what blf_silver_eth exposes as `data`.
+    optional bytes data = 11;
+    optional bool is_fd = 12;
+    // --- discriminator ---
+    // "CAN" | "CAN_FD" | "ETH" | "ETH_EX". Copied verbatim into blf_bronze.message_type,
+    // which is what routes a row to blf_silver_can vs blf_silver_eth.
+    optional string message_type = 13;
+    // --- Ethernet variant (unset for CAN) ---
+    // 6-byte MAC addresses.
+    optional bytes src_addr = 14;
+    optional bytes dst_addr = 15;
+    optional int32 ether_type = 16;
+    // 802.1Q / 802.1AD tag; set only when message_type is "ETH_EX".
+    optional int32 vlan_tpid = 17;
+    optional int32 vlan_cos = 18;
+    optional int32 vlan_id = 19;
+}

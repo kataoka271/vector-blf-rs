@@ -15,6 +15,10 @@ __pycache__/
 # Data / generated files
 /data
 
+# protoc output for examples/bench/transport/record.proto (generated on first use; see
+# examples/bench/transport/zerobus.py)
+/examples/bench/transport/record_pb2.py
+
 # IDE / tooling
 /.claude
 /.cursor

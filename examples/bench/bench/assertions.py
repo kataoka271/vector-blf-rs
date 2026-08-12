@@ -23,7 +23,7 @@ from collections.abc import Callable, Sequence
 
 from databricks.sdk.core import Config
 
-from bench.db import ReplayConfig, _connect
+from bench.db import ReplayConfig, connect
 
 RANGE = "range"
 PERIOD = "period"
@@ -262,7 +262,7 @@ def evaluate(
         return
 
     dbx_cfg = dbx_cfg or Config()
-    with _connect(dbx_cfg) as conn:
+    with connect(dbx_cfg) as conn:
         for stmt in statements:
             with conn.cursor() as cur:
                 cur.execute(stmt)

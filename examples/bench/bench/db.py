@@ -110,7 +110,13 @@ class ReplayConfig:
         return cls(filter=filter_spec, **kwargs)
 
 
-def _connect(dbx_cfg: Config):
+def connect(dbx_cfg: Config):
+    """Open a Databricks SQL Connector connection for `dbx_cfg`'s warehouse.
+
+    Public: used by this module's own query functions and by `bench.assertions.evaluate`
+    -- not just an internal helper, so it isn't underscore-prefixed. Raises RuntimeError
+    if no SQL warehouse is configured.
+    """
     if not dbx_cfg.warehouse_id:
         raise RuntimeError(
             "DATABRICKS_WAREHOUSE_ID is not set (or missing from the active .databrickscfg "
@@ -153,7 +159,7 @@ def fetch_replay_frames(cfg: ReplayConfig, dbx_cfg: Config | None = None) -> pd.
         f" ORDER BY s.timestamp_ns"
     )
     print(f"[fetch_replay_frames] stmt={stmt!r} params={params!r}", flush=True)
-    with _connect(dbx_cfg) as conn:
+    with connect(dbx_cfg) as conn:
         with conn.cursor() as cur:
             cur.execute(stmt, params or None)
             df = cur.fetchall_arrow().to_pandas()
@@ -165,7 +171,7 @@ def _count_source_file_rows(cfg: ReplayConfig, source_file: str, dbx_cfg: Config
     """Return how many blf_gold_signals rows currently exist for source_file."""
     dbx_cfg = dbx_cfg or Config()
     stmt = f"SELECT count(*) FROM {cfg.gold_table} WHERE _source_file = ?"
-    with _connect(dbx_cfg) as conn:
+    with connect(dbx_cfg) as conn:
         with conn.cursor() as cur:
             cur.execute(stmt, [source_file])
             return cur.fetchone()[0]

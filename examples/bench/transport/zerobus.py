@@ -17,8 +17,14 @@ import pathlib
 import subprocess
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from bench.frame import Frame
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from bench.bus import Bus
 
 _ZEROBUS_HOST_SUFFIX = {"aws": "cloud.databricks.com", "azure": "azuredatabricks.net"}
 
@@ -196,3 +202,24 @@ class ZerobusRx:
 
     def close(self) -> None:
         pass
+
+
+def open_tx(bus: Bus) -> ZerobusTx:
+    """Registered as this transport's Bus.open_tx() -- see bench.bus.register_transport."""
+    assert isinstance(bus.config, ZerobusConfig)
+    return ZerobusTx(config=bus.config)
+
+
+def open_rx(
+    bus: Bus,
+    *,
+    run_id: str,
+    can_ids: Sequence[int] | None = None,
+    message_types: Sequence[str] | None = None,
+    source_file: str | None = None,
+    run_epoch_ns: int | None = None,
+) -> ZerobusRx:
+    """Registered as this transport's Bus.open_rx() -- see bench.bus.register_transport.
+    Always returns a ZerobusRx, whose poll() raises -- see its docstring.
+    """
+    return ZerobusRx()

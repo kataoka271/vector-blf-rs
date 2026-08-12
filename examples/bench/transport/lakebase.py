@@ -26,6 +26,7 @@ from bench.frame import FRAME_COLUMNS, Frame, accepts
 
 if TYPE_CHECKING:
     import psycopg
+    from bench.bus import Bus
 
 DEFAULT_DATABASE = "databricks_postgres"
 
@@ -356,3 +357,37 @@ class LakebaseRx:
             if accepts(frame, can_ids=self._can_ids, message_types=self._message_types):
                 self._queue.put(frame)
             self._watermark = max(self._watermark, row_id)
+
+
+def on_construct(bus: Bus) -> None:
+    """Registered as this transport's Bus on_construct hook -- see
+    bench.bus.register_transport. Resolves an unset LakebaseConfig.table from the
+    owning Bus's generated name, so two independently-constructed Lakebase() buses
+    never silently share a table just because neither caller named one.
+    """
+    assert isinstance(bus.config, LakebaseConfig)
+    bus.config.table = bus.config.table or bus.name
+
+
+def open_tx(bus: Bus) -> LakebaseTx:
+    """Registered as this transport's Bus.open_tx() -- see bench.bus.register_transport."""
+    assert isinstance(bus.config, LakebaseConfig)
+    return LakebaseTx(config=bus.config)
+
+
+def open_rx(
+    bus: Bus,
+    *,
+    run_id: str,
+    can_ids: Sequence[int] | None = None,
+    message_types: Sequence[str] | None = None,
+    source_file: str | None = None,
+    run_epoch_ns: int | None = None,
+) -> LakebaseRx:
+    """Registered as this transport's Bus.open_rx() -- see bench.bus.register_transport.
+
+    `source_file`/`run_epoch_ns` are unused: a sender already stamped them onto the
+    Frame before it was inserted.
+    """
+    assert isinstance(bus.config, LakebaseConfig)
+    return LakebaseRx(config=bus.config, run_id=run_id, can_ids=can_ids, message_types=message_types)

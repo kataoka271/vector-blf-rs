@@ -14,8 +14,12 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from bench.frame import Frame, accepts
+
+if TYPE_CHECKING:
+    from bench.bus import Bus
 
 # Frames retained per segment for late subscribers.
 BACKLOG_LIMIT = 10_000
@@ -118,3 +122,25 @@ class LoopbackRx:
         with self._segment.lock:
             if self in self._segment.receivers:
                 self._segment.receivers.remove(self)
+
+
+def open_tx(bus: Bus) -> LoopbackTx:
+    """Registered as this transport's Bus.open_tx() -- see bench.bus.register_transport."""
+    return LoopbackTx(table=bus.name)
+
+
+def open_rx(
+    bus: Bus,
+    *,
+    run_id: str,
+    can_ids: Sequence[int] | None = None,
+    message_types: Sequence[str] | None = None,
+    source_file: str | None = None,
+    run_epoch_ns: int | None = None,
+) -> LoopbackRx:
+    """Registered as this transport's Bus.open_rx() -- see bench.bus.register_transport.
+
+    `source_file`/`run_epoch_ns` are unused: a sender already stamped them onto the
+    Frame before it reached the segment.
+    """
+    return LoopbackRx(table=bus.name, run_id=run_id, can_ids=can_ids, message_types=message_types)

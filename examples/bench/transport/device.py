@@ -8,8 +8,14 @@ module level, so constructing a `CanDeviceConfig` never requires it to be instal
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from bench.frame import CAN, CAN_FD, DIR_RX, Frame
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from bench.bus import Bus
 
 
 @dataclass
@@ -141,3 +147,38 @@ class CanDeviceRx:
         self._notifier.stop()
         self._reader.stop()
         self._bus.shutdown()
+
+
+def open_tx(bus: Bus) -> CanDeviceTx:
+    """Registered as this transport's Bus.open_tx() -- see bench.bus.register_transport."""
+    assert isinstance(bus.config, CanDeviceConfig)
+    return CanDeviceTx(config=bus.config)
+
+
+def open_rx(
+    bus: Bus,
+    *,
+    run_id: str,
+    can_ids: Sequence[int] | None = None,
+    message_types: Sequence[str] | None = None,
+    source_file: str | None = None,
+    run_epoch_ns: int | None = None,
+) -> CanDeviceRx:
+    """Registered as this transport's Bus.open_rx() -- see bench.bus.register_transport.
+
+    Unlike the other transports, a CAN device has to stamp `source_file`/`run_epoch_ns`
+    onto every received Frame itself (the sender is an external process, not another
+    BusHandle that already stamped them), so both are required here.
+    """
+    assert isinstance(bus.config, CanDeviceConfig)
+    if bus.channel is None:
+        raise RuntimeError(f"bus {bus.name!r} has no channel assigned; add it via TestBench.add_bus() first")
+    if source_file is None or run_epoch_ns is None:
+        raise ValueError("CAN device rx needs source_file and run_epoch_ns")
+    return CanDeviceRx(
+        config=bus.config,
+        run_id=run_id,
+        source_file=source_file,
+        channel=bus.channel,
+        run_epoch_ns=run_epoch_ns,
+    )

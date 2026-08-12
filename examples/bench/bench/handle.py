@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from bench.clock import WallClock
+from bench.clock import Clock
 from bench.frame import DIR_RX, Frame, make_can_frame, make_eth_frame
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ class BusHandle:
         return self.bus.channel
 
     @property
-    def _clock(self) -> WallClock:
+    def _clock(self) -> Clock:
         if self._ecu.clock is None:
             raise RuntimeError(f"Ecu {self._ecu.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
         return self._ecu.clock

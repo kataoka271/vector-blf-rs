@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 
 from bench.bus import Bus
-from bench.clock import WallClock
+from bench.clock import WALL, Clock, make_clock
 from bench.frame import Frame, source_file_for
 from bench.handle import BusHandle
 
@@ -31,13 +31,20 @@ class Ecu:
     Construct with the Bus objects it talks to (subclasses take them as named args,
     e.g. `GatewayEcu(ch1=bus1, ch2=bus2)`); `run_id`/the clock are not resolved until
     the owning TestBench calls `_bind()` from `start()`.
+
+    `clock` (`bench.clock.WALL` or `.LOGICAL`) and `tick_hz` select which Clock this
+    Ecu gets once bound -- `LOGICAL` is what makes a signal-generating Ecu's output
+    byte-reproducible across runs regardless of scheduling jitter; see bench/clock.py.
+    `tick_hz` also sets the rate `run(on_tick=...)` fires at.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, clock: str = WALL, tick_hz: float = 1.0) -> None:
         self.name = name
         self.run_id: str = ""
         self.source_file: str = ""
-        self.clock: WallClock | None = None
+        self.clock: Clock | None = None
+        self._clock_kind = clock
+        self._tick_hz = tick_hz
         # Keyed by id(bus) rather than bus.name so passing the same Bus object twice
         # (e.g. GatewayEcu(ch1=bus, ch2=bus)) still resolves to one handle.
         self._buses: dict[int, BusHandle] = {}
@@ -48,7 +55,7 @@ class Ecu:
         """
         self.run_id = run_id
         self.source_file = source_file_for(run_id)
-        self.clock = WallClock(run_epoch_ns=run_epoch_ns)
+        self.clock = make_clock(self._clock_kind, run_epoch_ns=run_epoch_ns, tick_hz=self._tick_hz)
 
     def handle(self, bus: Bus) -> BusHandle:
         """Return this Ecu's BusHandle for `bus`, creating it on first use."""
@@ -61,14 +68,18 @@ class Ecu:
         self,
         *,
         duration: float | None = None,
+        on_tick: Callable[[Ecu], None] | None = None,
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,
         should_stop: Callable[[], bool] = lambda: False,
     ) -> None:
         """Drive this Ecu until it is time to stop, then tear it down.
 
         Each iteration drains every subscribed bus and dispatches to the handlers
-        registered via `BusHandle.on()`. Stops on `duration` elapsing, `should_stop()`
-        returning True, or KeyboardInterrupt.
+        registered via `BusHandle.on()`, then fires `on_tick(self)` if the clock's tick
+        rate says one is due -- typically used by an Ecu that generates its own signals
+        (via `BusHandle.send_can()`/`.send_eth()`) rather than replaying or forwarding
+        traffic. Stops on `duration` elapsing, `should_stop()` returning True, or
+        KeyboardInterrupt.
         """
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
@@ -81,9 +92,12 @@ class Ecu:
                     break
                 for handle in self._buses.values():
                     handle.drain(poll_timeout)
-                if not self._buses:
+                if on_tick is not None and time.time_ns() >= self.clock.next_tick_due_ns():
+                    self.clock.tick()
+                    on_tick(self)
+                if on_tick is None and not self._buses:
                     # Each drain() already blocks up to poll_timeout waiting for a
-                    # frame, so this only matters when there is nothing to poll at all.
+                    # frame, so this only matters when there is nothing to poll or tick.
                     time.sleep(poll_timeout)
         except KeyboardInterrupt:
             pass
@@ -101,8 +115,17 @@ class GatewayEcu(Ecu):
     drain, matching the reference Gateway ECU pattern.
     """
 
-    def __init__(self, ch1: Bus, ch2: Bus, *, bidirectional: bool = False, name: str = "gateway") -> None:
-        super().__init__(name)
+    def __init__(
+        self,
+        ch1: Bus,
+        ch2: Bus,
+        *,
+        bidirectional: bool = False,
+        name: str = "gateway",
+        clock: str = WALL,
+        tick_hz: float = 1.0,
+    ) -> None:
+        super().__init__(name, clock=clock, tick_hz=tick_hz)
         h1, h2 = self.handle(ch1), self.handle(ch2)
 
         @h1.on()
@@ -127,8 +150,16 @@ class ReceiverEcu(Ecu):
     and uploads, in-process.
     """
 
-    def __init__(self, ch: Bus, *, zerobus: Bus | None = None, name: str = "receiver") -> None:
-        super().__init__(name)
+    def __init__(
+        self,
+        ch: Bus,
+        *,
+        zerobus: Bus | None = None,
+        name: str = "receiver",
+        clock: str = WALL,
+        tick_hz: float = 1.0,
+    ) -> None:
+        super().__init__(name, clock=clock, tick_hz=tick_hz)
         self._ch = self.handle(ch)
         self._zerobus = self.handle(zerobus) if zerobus is not None else None
         self.captured: list[Frame] = []
@@ -151,8 +182,17 @@ class ProxyEcu(Ecu):
     since there is a socket to poll instead of a bus to drain.
     """
 
-    def __init__(self, ch: Bus, port: int, *, host: str = "0.0.0.0", name: str = "proxy") -> None:
-        super().__init__(name)
+    def __init__(
+        self,
+        ch: Bus,
+        port: int,
+        *,
+        host: str = "0.0.0.0",
+        name: str = "proxy",
+        clock: str = WALL,
+        tick_hz: float = 1.0,
+    ) -> None:
+        super().__init__(name, clock=clock, tick_hz=tick_hz)
         self._ch = self.handle(ch)
         self._host = host
         self._port = port

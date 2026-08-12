@@ -7,14 +7,15 @@ from __future__ import annotations
 import pytest
 from bench import frame as F
 from bench.bus import Bus, Loopback
+from bench.clock import LOGICAL, WALL
 from bench.ecu import Ecu
 
 RUN_ID = "run_001"
 EPOCH_NS = 1_700_000_000_000_000_000
 
 
-def make_ecu(name: str) -> Ecu:
-    ecu = Ecu(name)
+def make_ecu(name: str, *, clock: str = WALL, tick_hz: float = 1.0) -> Ecu:
+    ecu = Ecu(name, clock=clock, tick_hz=tick_hz)
     ecu._bind(run_id=RUN_ID, run_epoch_ns=EPOCH_NS)
     return ecu
 
@@ -139,6 +140,31 @@ def test_forward_preserves_the_cross_hop_correlation_key():
 def test_run_stops_when_should_stop_is_already_true():
     ecu = make_ecu("generator")
     ecu.run(duration=None, should_stop=lambda: True)
+
+
+def test_run_stops_after_the_duration_and_fires_ticks():
+    ecu = make_ecu("generator", clock=LOGICAL, tick_hz=200.0)
+    ticks = []
+    ecu.run(duration=0.15, on_tick=lambda e: ticks.append(e.clock.timestamp_ns()), poll_timeout=0.001)
+    assert len(ticks) >= 2
+    # Logical timestamps advance by exactly the tick period regardless of scheduling.
+    assert ticks[1] - ticks[0] == 5_000_000
+
+
+def test_on_tick_lets_an_ecu_generate_its_own_signals():
+    bus = make_bus("a", 1)
+    generator = make_ecu("generator", clock=LOGICAL, tick_hz=100.0)
+    sent = []
+
+    def _tick(ecu):
+        frame = ecu.handle(bus).send_can(0x310, b"\x2a")
+        sent.append(frame.timestamp_ns)
+
+    generator.run(duration=0.05, on_tick=_tick, poll_timeout=0.001)
+    assert len(sent) >= 2
+    # Exactly tick_index * tick_period, regardless of how long each tick actually took
+    # to run -- the property that makes a logically-clocked run reproducible.
+    assert sent == [i * 10_000_000 for i in range(len(sent))]
 
 
 def test_run_propagates_a_handler_failure():

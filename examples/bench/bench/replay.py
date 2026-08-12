@@ -16,6 +16,7 @@ import pandas as pd
 
 from bench.bench import FilterSpec
 from bench.bus import Bus
+from bench.clock import WALL
 from bench.db import ReplayConfig, fetch_replay_frames, to_frames
 from bench.ecu import DEFAULT_POLL_TIMEOUT, Ecu
 
@@ -38,8 +39,10 @@ class ReplayableEcu(Ecu):
         config: ReplayConfig | None = None,
         fetch_fn: FetchFn | None = None,
         name: str,
+        clock: str = WALL,
+        tick_hz: float = 1.0,
     ) -> None:
-        super().__init__(name)
+        super().__init__(name, clock=clock, tick_hz=tick_hz)
         self._ch = self.handle(ch)
         self._config = config or ReplayConfig()
         self._fetch_fn = fetch_fn or (lambda: fetch_replay_frames(self._config))
@@ -88,8 +91,10 @@ class GeneratorEcu(ReplayableEcu):
         config: ReplayConfig | None = None,
         fetch_fn: FetchFn | None = None,
         name: str = "generator",
+        clock: str = WALL,
+        tick_hz: float = 1.0,
     ) -> None:
-        super().__init__(ch, config=config, fetch_fn=fetch_fn, name=name)
+        super().__init__(ch, config=config, fetch_fn=fetch_fn, name=name, clock=clock, tick_hz=tick_hz)
 
 
 class ReplayEcu(ReplayableEcu):
@@ -106,7 +111,9 @@ class ReplayEcu(ReplayableEcu):
         config: ReplayConfig | None = None,
         fetch_fn: FetchFn | None = None,
         name: str = "replay",
+        clock: str = WALL,
+        tick_hz: float = 1.0,
     ) -> None:
         if config is None:
             config = ReplayConfig(filter=FilterSpec(exclude_source_prefix=""))
-        super().__init__(ch, config=config, fetch_fn=fetch_fn, name=name)
+        super().__init__(ch, config=config, fetch_fn=fetch_fn, name=name, clock=clock, tick_hz=tick_hz)

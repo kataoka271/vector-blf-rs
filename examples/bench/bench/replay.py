@@ -14,10 +14,9 @@ from collections.abc import Callable
 
 import pandas as pd
 
-from bench.bench import FilterSpec
 from bench.bus import Bus
 from bench.clock import WALL
-from bench.db import ReplayConfig, fetch_replay_frames, to_frames
+from bench.db import FilterSpec, ReplayConfig, fetch_replay_frames, to_frames
 from bench.ecu import DEFAULT_POLL_TIMEOUT, Ecu
 
 FetchFn = Callable[[], pd.DataFrame]

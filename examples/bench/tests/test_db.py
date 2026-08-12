@@ -1,14 +1,13 @@
-"""Unit tests for bench/bench.py's FilterSpec.build_where() and bench/db.py's
-wait_for_ingestion/to_frames -- no Databricks connection required (count_fn/fetch_fn are
-fakes, not real SQL queries).
+"""Unit tests for bench/db.py's FilterSpec.build_where(), wait_for_ingestion, and
+to_frames -- no Databricks connection required (count_fn/fetch_fn are fakes, not real
+SQL queries).
 """
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
-from bench.bench import FilterSpec
-from bench.db import ReplayConfig, to_frames, wait_for_ingestion
+from bench.db import FilterSpec, ReplayConfig, to_frames, wait_for_ingestion
 
 
 def test_build_where_defaults():

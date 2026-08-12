@@ -21,9 +21,62 @@ import pandas as pd
 import yaml
 from databricks.sdk.core import Config
 
-from bench.bench import FilterSpec
 from bench.frame import CAN, CAN_FD, DIR_RX, Frame
 from databricks import sql
+
+
+@dataclasses.dataclass
+class FilterSpec:
+    """Selects which blf_gold_signals events feed a replay."""
+
+    source_files: list[str] | None = None
+    t_start_s: float | None = None
+    t_end_s: float | None = None
+    channels: list[int] | None = None
+    signal_source: list[str] = dataclasses.field(default_factory=lambda: ["CAN"])
+    exclude_dirs: list[str] = dataclasses.field(default_factory=lambda: ["Tx"])
+    exclude_source_prefix: str = "testbench/"
+    extra_where: str | None = None
+
+    def build_where(self) -> tuple[str, list]:
+        """Build a `WHERE`-clause predicate (without the `WHERE` keyword) and its `?`-placeholder parameters, in placeholder order."""
+        clauses: list[str] = []
+        params: list = []
+
+        if self.source_files:
+            clauses.append("_source_file IN (" + ", ".join(["?"] * len(self.source_files)) + ")")
+            params += list(self.source_files)
+
+        if self.exclude_source_prefix:
+            clauses.append("_source_file NOT LIKE ?")
+            params.append(f"{self.exclude_source_prefix}%")
+
+        if self.t_start_s is not None:
+            clauses.append("timestamp_s >= ?")
+            params.append(self.t_start_s)
+
+        if self.t_end_s is not None:
+            clauses.append("timestamp_s <= ?")
+            params.append(self.t_end_s)
+
+        if self.channels:
+            clauses.append("channel IN (" + ", ".join(["?"] * len(self.channels)) + ")")
+            params += list(self.channels)
+
+        if self.signal_source:
+            clauses.append("signal_source IN (" + ", ".join(["?"] * len(self.signal_source)) + ")")
+            params += list(self.signal_source)
+
+        if self.exclude_dirs:
+            clauses.append("dir NOT IN (" + ", ".join(["?"] * len(self.exclude_dirs)) + ")")
+            params += list(self.exclude_dirs)
+
+        if self.extra_where:
+            clauses.append(f"({self.extra_where})")
+
+        if not clauses:
+            return "1 = 1", []
+        return " AND ".join(clauses), params
 
 
 @dataclasses.dataclass

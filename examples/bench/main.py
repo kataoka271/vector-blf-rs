@@ -8,14 +8,17 @@ needs no cloud credentials at all (see topologies/quickstart.py).
 Run with:
     uv run --group testing python examples/bench/main.py
     uv run --group testing python examples/bench/main.py --topology quickstart --duration 2
+    uv run --group testing python examples/bench/main.py --connection-config conn.yaml
     uv run --group testing python examples/bench/main.py --list-topologies
 """
 
 from __future__ import annotations
 
 import argparse
+import inspect
 
 from bench.topology import discover, get_topology, list_topologies
+from transport.connection import ConnectionConfig
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -30,6 +33,17 @@ def main(argv: list[str] | None = None) -> None:
         default=60.0,
         help="Overall wall-clock bound; each Ecu also stops on its own should_stop()/KeyboardInterrupt.",
     )
+    parser.add_argument(
+        "--connection-config",
+        default=None,
+        metavar="PATH",
+        help=(
+            "YAML file of Lakebase/Zerobus connection settings (see "
+            "transport/connection.py::ConnectionConfig.from_yaml). Only used by topologies "
+            "that accept a `config` parameter; falls back to BENCH_*/ZEROBUS_* environment "
+            "variables when omitted."
+        ),
+    )
     parser.add_argument("--list-topologies", action="store_true", help="Print registered topology names and exit.")
     args = parser.parse_args(argv)
 
@@ -38,7 +52,13 @@ def main(argv: list[str] | None = None) -> None:
             print(name)
         return
 
-    bench = get_topology(args.topology)(run_id=args.run_id)
+    build = get_topology(args.topology)
+    kwargs: dict[str, object] = {"run_id": args.run_id}
+    if "config" in inspect.signature(build).parameters:
+        kwargs["config"] = (
+            ConnectionConfig.from_yaml(args.connection_config) if args.connection_config else ConnectionConfig()
+        )
+    bench = build(**kwargs)
     bench.run(duration=args.duration)
 
 

@@ -1,5 +1,4 @@
-"""Lakebase (managed Postgres) connection and wire-format helpers shared by
-`bench.channel.LakebaseTx`/`LakebaseRx`.
+"""Lakebase (managed Postgres) channel: LISTEN/NOTIFY, minimal and non-batched.
 
 Deliberately simpler than a Nagle-batched transport (see the plan's "explicitly
 deferred" table): `LakebaseTx.send()` does one synchronous `INSERT ... RETURNING id` +
@@ -8,17 +7,25 @@ single row at a time -- no NOTIFY-payload-size envelope, no inline-vs-id-range b
 NOTIFY is still fire-and-forget, though, so a receiver still needs to catch up on
 connect and dedupe by row id -- that part is not a batching artifact and stays even at
 this minimal scope.
+
+`psycopg`/`databricks.sdk` are imported lazily inside `connect()`, not at module level,
+so constructing a `LakebaseConfig` (or importing this module for its SQL builders in a
+test) never requires either package to be installed.
 """
 
 from __future__ import annotations
 
+import queue
 import re
+import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import psycopg
-from bench.frame import FRAME_COLUMNS, Frame
-from databricks.sdk import WorkspaceClient
+from bench.frame import FRAME_COLUMNS, Frame, accepts
+
+if TYPE_CHECKING:
+    import psycopg
 
 DEFAULT_DATABASE = "databricks_postgres"
 
@@ -76,6 +83,9 @@ def connect(profile: str | None, endpoint_name: str, dbname: str) -> psycopg.Con
     caching the resolved host, and cheap enough for the reconnect-on-failure paths in
     LakebaseTx/LakebaseRx to call directly.
     """
+    import psycopg
+    from databricks.sdk import WorkspaceClient
+
     w = WorkspaceClient(profile=profile or None)
 
     endpoint = w.postgres.get_endpoint(endpoint_name)
@@ -212,13 +222,137 @@ class SeenIds:
         return len(self._seen)
 
 
-def accepts(frame: Frame, *, can_ids: set[int] | None, message_types: set[str] | None) -> bool:
-    """Return whether a receiver with these filters wants `frame`.
+class LakebaseTx:
+    """Transmit side of a Lakebase channel: one synchronous INSERT+NOTIFY per send()."""
 
-    A None filter accepts everything. `can_ids` never matches a non-CAN frame.
+    def __init__(self, *, config: LakebaseConfig, create_schema: bool = True) -> None:
+        self._config = config
+        self._table = config.table
+        self._channel = notify_channel(config.table)
+        self._conn = connect(config.profile, config.endpoint_name, config.dbname)
+        if create_schema:
+            ensure_schema(self._conn, config.table)
+        self._stmt = sql(insert_and_notify_sql(config.table))
+        self._closed = False
+
+    def send(self, frame: Frame) -> None:
+        if self._closed:
+            raise RuntimeError(f"lakebase channel {self._table!r} is closed")
+        params = insert_params(frame, self._channel)
+        try:
+            self._conn.execute(self._stmt, params)
+        except Exception as exc:
+            # One reconnect covers the connection drops a long run inevitably sees: an
+            # idle timeout, or Lakebase scaling its compute to zero and back.
+            print(f"[bench] lakebase tx {self._table}: {exc!r}; reconnecting and retrying once", flush=True)
+            self._conn = connect(self._config.profile, self._config.endpoint_name, self._config.dbname)
+            self._conn.execute(self._stmt, params)
+
+    def flush(self) -> None:
+        pass  # send() is already synchronous
+
+    def close(self) -> None:
+        self._closed = True
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+
+class LakebaseRx:
+    """Receive side of a Lakebase channel: LISTEN on a background thread, with a
+    catch-up SELECT on every (re)connect and id-based dedup, since NOTIFY is
+    fire-and-forget and can drop or duplicate around a reconnect.
     """
-    if message_types is not None and frame.message_type not in message_types:
-        return False
-    if can_ids is not None and frame.can_id not in can_ids:
-        return False
-    return True
+
+    def __init__(
+        self,
+        *,
+        config: LakebaseConfig,
+        run_id: str,
+        can_ids: Sequence[int] | None = None,
+        message_types: Sequence[str] | None = None,
+        create_schema: bool = True,
+    ) -> None:
+        self._config = config
+        self._table = config.table
+        self._channel = notify_channel(config.table)
+        self._run_id = run_id
+        self._can_ids = set(can_ids) if can_ids else None
+        self._message_types = set(message_types) if message_types else None
+        self._queue: queue.Queue[Frame] = queue.Queue()
+        self._seen = SeenIds()
+        self._watermark = 0
+        self._stop = threading.Event()
+        self._conn = None
+        if create_schema:
+            # Create the table before the listener thread can race an unprovisioned
+            # database: the transmitting Ecu may not have started yet.
+            conn = connect(config.profile, config.endpoint_name, config.dbname)
+            try:
+                ensure_schema(conn, config.table)
+            finally:
+                conn.close()
+        self._thread = threading.Thread(target=self._run, name=f"lakebase-rx-{config.table}", daemon=True)
+        self._thread.start()
+
+    def poll(self, timeout: float = 1.0) -> list[Frame]:
+        frames: list[Frame] = []
+        try:
+            frames.append(self._queue.get(timeout=timeout))
+        except queue.Empty:
+            return frames
+        while True:
+            try:
+                frames.append(self._queue.get_nowait())
+            except queue.Empty:
+                return frames
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._conn is not None:
+            # Closing the connection unblocks the notifies() iterator immediately
+            # rather than leaving the thread parked until the next notification.
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+        self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._conn = connect(self._config.profile, self._config.endpoint_name, self._config.dbname)
+                # LISTEN before catching up: a notification arriving during the catch-up
+                # query is then queued by the server rather than lost, and any duplicate
+                # it causes is absorbed by the id dedup.
+                self._conn.execute(sql(f'LISTEN "{self._channel}"'))
+                self._catch_up(self._conn)
+                for notify in self._conn.notifies():
+                    self._on_notify(self._conn, notify.payload)
+                    if self._stop.is_set():
+                        return
+            except Exception as exc:
+                if self._stop.is_set():
+                    return
+                print(f"[bench] lakebase rx {self._table}: {exc!r}; reconnecting", flush=True)
+                self._stop.wait(1.0)
+
+    def _catch_up(self, conn) -> None:
+        cur = conn.execute(sql(catchup_sql(self._table)), (self._run_id, self._watermark, CATCHUP_LOOKBACK_SECONDS))
+        self._emit(cur.fetchall())
+
+    def _on_notify(self, conn, payload: str) -> None:
+        row_id = int(payload)
+        cur = conn.execute(sql(select_by_id_sql(self._table)), (self._run_id, row_id))
+        self._emit(cur.fetchall())
+
+    def _emit(self, rows: Sequence[Sequence]) -> None:
+        for row in rows:
+            row_id = row[0]
+            if not self._seen.add_if_new(row_id):
+                continue
+            frame = Frame.from_row(dict(zip(FRAME_COLUMNS, row[1:])))
+            if accepts(frame, can_ids=self._can_ids, message_types=self._message_types):
+                self._queue.put(frame)
+            self._watermark = max(self._watermark, row_id)

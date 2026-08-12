@@ -1,10 +1,14 @@
-"""Zerobus Ingest connection: streams protobuf `TestbenchFrame` records into a Delta
-table over Zerobus's gRPC endpoint, which the blf_ingestion DLT pipeline unions into
-blf_bronze (see the `blf.testbench_frames_table` pipeline parameter).
+"""Zerobus channel: streams protobuf `TestbenchFrame` records into a Delta table over
+Zerobus's gRPC endpoint, which the blf_ingestion DLT pipeline unions into blf_bronze
+(see the `blf.testbench_frames_table` pipeline parameter).
 
 Zerobus is Ingest-only -- there is no subscribe/receive API -- so this module only ever
-backs the transmit side of a bus (`bench.channel.ZerobusTx`); `ZerobusRx.poll()` raises
+backs the transmit side of a bus (`ZerobusTx`); `ZerobusRx.poll()` raises
 NotImplementedError. Use Lakebase or loopback for ECU-to-ECU receive.
+
+`databricks.sdk`/`zerobus.sdk` are imported lazily inside `ZerobusStream.__init__`, not
+at module level, so constructing a `ZerobusConfig` never requires either package to be
+installed.
 """
 
 from __future__ import annotations
@@ -158,3 +162,37 @@ class ZerobusStream:
         """Flush pending records and close the stream."""
         self._stream.flush()
         self._stream.close()
+
+
+class ZerobusTx:
+    """Transmit side of a Zerobus channel: fire-and-forget protobuf ingest into a
+    Delta table.
+    """
+
+    def __init__(self, *, config: ZerobusConfig, default_catalog: str = "main", default_schema: str = "blf") -> None:
+        self._stream = ZerobusStream(config, default_catalog=default_catalog, default_schema=default_schema)
+
+    def send(self, frame: Frame) -> None:
+        self._stream.record(frame)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def close(self) -> None:
+        self._stream.close()
+
+
+class ZerobusRx:
+    """Zerobus is Ingest-only -- there is no subscribe/receive API. Kept so
+    `Bus`'s dispatch stays total; poll() always raises. Use a Lakebase or loopback
+    channel for Ecu-to-Ecu receive.
+    """
+
+    def poll(self, timeout: float = 1.0) -> list[Frame]:
+        raise NotImplementedError(
+            "Zerobus is Ingest-only (no subscribe/receive API); use a Lakebase or"
+            " loopback channel for Ecu-to-Ecu receive."
+        )
+
+    def close(self) -> None:
+        pass

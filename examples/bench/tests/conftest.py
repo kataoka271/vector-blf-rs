@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from bench.channel import reset
+from transport.loopback import reset
 
 
 @pytest.fixture(autouse=True)

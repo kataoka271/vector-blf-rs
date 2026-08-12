@@ -299,3 +299,18 @@ def source_file_for(run_id: str) -> str:
     one run partitions exactly like one recorded file.
     """
     return f"testbench/{run_id}.blf"
+
+
+def accepts(frame: Frame, *, can_ids: set[int] | None, message_types: set[str] | None) -> bool:
+    """Return whether a receiver with these filters wants `frame`.
+
+    A None filter accepts everything. `can_ids` never matches a non-CAN frame. Pure
+    Frame predicate shared by every channel implementation (loopback, Lakebase, ...),
+    so a channel that doesn't otherwise need any of them never has to import another
+    transport module just for this filter.
+    """
+    if message_types is not None and frame.message_type not in message_types:
+        return False
+    if can_ids is not None and frame.can_id not in can_ids:
+        return False
+    return True

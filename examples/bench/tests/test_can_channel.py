@@ -7,9 +7,8 @@ string share state within this process -- that is what connects tx and rx here.
 from __future__ import annotations
 
 import pytest
-from bench.channel import CanDeviceRx, CanDeviceTx
 from bench.frame import make_can_frame, make_eth_frame
-from transport.device import CanDeviceConfig
+from transport.device import CanDeviceConfig, CanDeviceRx, CanDeviceTx
 
 RUN_ID = "run_001"
 SOURCE_FILE = "testbench/run_001.blf"

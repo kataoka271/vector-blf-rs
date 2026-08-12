@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from bench.bench import TestBench
 from bench.bus import Bus, Lakebase, Loopback
-from bench.channel import LoopbackRx, LoopbackTx
 from transport.lakebase import LakebaseConfig
+from transport.loopback import LoopbackRx, LoopbackTx
 
 
 def test_loopback_bus_opens_loopback_channels():

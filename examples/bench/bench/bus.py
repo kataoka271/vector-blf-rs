@@ -10,22 +10,12 @@ from __future__ import annotations
 
 import uuid
 
-from transport.device import CanDeviceConfig
-from transport.lakebase import LakebaseConfig
-from transport.zerobus import ZerobusConfig
+from transport.device import CanDeviceConfig, CanDeviceRx, CanDeviceTx
+from transport.lakebase import LakebaseConfig, LakebaseRx, LakebaseTx
+from transport.loopback import LoopbackRx, LoopbackTx
+from transport.zerobus import ZerobusConfig, ZerobusRx, ZerobusTx
 
-from bench.channel import (
-    CanDeviceRx,
-    CanDeviceTx,
-    ChannelRx,
-    ChannelTx,
-    LakebaseRx,
-    LakebaseTx,
-    LoopbackRx,
-    LoopbackTx,
-    ZerobusRx,
-    ZerobusTx,
-)
+from bench.channel import ChannelRx, ChannelTx
 
 LOOPBACK = "loopback"
 LAKEBASE = "lakebase"

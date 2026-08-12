@@ -5,10 +5,9 @@ connection required.
 from __future__ import annotations
 
 import pytest
-from bench.frame import make_can_frame
+from bench.frame import accepts, make_can_frame
 from transport.lakebase import (
     SeenIds,
-    accepts,
     catchup_sql,
     check_identifier,
     ensure_schema_sql,

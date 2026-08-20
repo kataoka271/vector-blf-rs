@@ -11,7 +11,8 @@
 # field list. DATABRICKS_HOST/DATABRICKS_TOKEN authenticate BENCH_LAKEBASE_ENDPOINT
 # when no profile is set; to authenticate via a named profile instead
 # (BENCH_LAKEBASE_PROFILE/ZEROBUS_SP_PROFILE), uncomment the ~/.databrickscfg mount
-# below on both services.
+# below on both services. ZEROBUS_CATALOG/ZEROBUS_SCHEMA only need setting if the
+# target table isn't at the transport/zerobus.py default main.blf.*.
 #
 # RUN_ID has no default on purpose: LakebaseRx replays a run_id's entire history on
 # every fresh consumer start (see transport/lakebase.py's catch-up query), so reusing
@@ -59,6 +60,8 @@ services:
       - ZEROBUS_REGION
       - ZEROBUS_CLOUD
       - ZEROBUS_SP_PROFILE
+      - ZEROBUS_CATALOG
+      - ZEROBUS_SCHEMA
       - DATABRICKS_HOST
       - DATABRICKS_TOKEN
       - DATABRICKS_CLIENT_ID

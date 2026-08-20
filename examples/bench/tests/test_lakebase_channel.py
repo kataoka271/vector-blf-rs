@@ -5,7 +5,9 @@ connection required.
 from __future__ import annotations
 
 import json
+from typing import cast
 
+import psycopg
 import pytest
 from bench.frame import FRAME_COLUMNS, accepts, make_can_frame, make_eth_frame
 from transport.lakebase import (
@@ -16,6 +18,7 @@ from transport.lakebase import (
     build_envelope,
     catchup_sql,
     check_identifier,
+    ensure_schema,
     ensure_schema_sql,
     fetch_ids_sql,
     insert_and_notify_sql,
@@ -76,6 +79,21 @@ def test_ensure_schema_sql_declares_every_frame_column():
     assert '"bus_frames"' in ddl
     for column in ("run_id", "source_file", "message_type", "can_id", "vlan_id"):
         assert column in ddl
+
+
+def test_ensure_schema_swallows_a_concurrent_creation_race():
+    """Two sessions racing CREATE TABLE IF NOT EXISTS on a brand-new table (e.g. the
+    Tx and Rx of a bus's first two containers starting at once) can both pass
+    Postgres's existence check before either commits -- the loser sees a
+    UniqueViolation on the system catalog, not a clean no-op. ensure_schema() should
+    treat that the same as "the table already exists".
+    """
+
+    class _RacingConn:
+        def execute(self, _stmt):
+            raise psycopg.errors.UniqueViolation("duplicate key value violates unique constraint")
+
+    ensure_schema(cast(psycopg.Connection, _RacingConn()), "bus_frames")  # must not raise
 
 
 def test_seen_ids_deduplicates_and_evicts_oldest_past_capacity():

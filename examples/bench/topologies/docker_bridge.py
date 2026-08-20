@@ -42,6 +42,11 @@ from bench.topology import register_topology
 from transport.connection import ConnectionConfig
 
 BUS_TABLE = os.environ.get("BENCH_DOCKER_BUS_TABLE", "bench_docker_bus")
+# ConnectionConfig.zerobus_config() leaves catalog/schema unset, which falls back to
+# ZerobusStream's hardcoded "main"/"blf" defaults (transport/zerobus.py) -- override them
+# here when the target table actually lives elsewhere (e.g. main.blf_testbench.*).
+ZEROBUS_CATALOG = os.environ.get("ZEROBUS_CATALOG")
+ZEROBUS_SCHEMA = os.environ.get("ZEROBUS_SCHEMA")
 
 
 def _demo_frames(count: int = 10, gap_ns: int = 500_000_000) -> pd.DataFrame:
@@ -85,7 +90,10 @@ def build_consumer(run_id: str | None = None, config: ConnectionConfig | None = 
     config = config or ConnectionConfig()
     bench = TestBench(run_id=run_id)
     bus = bench.add_bus(Lakebase(config.lakebase_config(table=BUS_TABLE), name=BUS_TABLE))
-    zerobus = bench.add_bus(Zerobus(config.zerobus_config()))
+    zerobus_cfg = config.zerobus_config()
+    zerobus_cfg.catalog = ZEROBUS_CATALOG or zerobus_cfg.catalog
+    zerobus_cfg.schema = ZEROBUS_SCHEMA or zerobus_cfg.schema
+    zerobus = bench.add_bus(Zerobus(zerobus_cfg))
     bench.add_ecu(ReceiverEcu(ch=bus, zerobus=zerobus))
     return bench
 

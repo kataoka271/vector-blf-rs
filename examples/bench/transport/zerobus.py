@@ -121,7 +121,14 @@ class ZerobusStream:
         from zerobus.sdk.shared import RecordType, StreamConfigurationOptions, TableProperties
         from zerobus.sdk.sync import ZerobusSdk
 
-        dbx_cfg = Config(profile=config.profile) if config.profile else Config()
+        # auth_type is forced rather than left to unified-auth detection: Zerobus always
+        # needs service-principal M2M credentials (see the class docstring), and letting
+        # detection run would raise "more than one authorization method configured" the
+        # moment some other ambient credential (e.g. a DATABRICKS_TOKEN a Lakebase bus in
+        # the same process is using) is also present.
+        dbx_cfg = (
+            Config(profile=config.profile, auth_type="oauth-m2m") if config.profile else Config(auth_type="oauth-m2m")
+        )
         client_id = config.client_id or dbx_cfg.client_id
         client_secret = config.client_secret or dbx_cfg.client_secret
         if not client_id or not client_secret:

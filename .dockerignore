@@ -1,0 +1,29 @@
+# Keep the build context small for examples/bench/Dockerfile (and any future Docker
+# build here) -- mirrors .gitignore plus VCS/editor metadata that never needs to reach
+# the daemon.
+
+# Rust
+/target
+
+# Python
+/.venv
+/dist
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Data / generated files
+/data
+/examples/bench/transport/record_pb2.py
+
+# IDE / tooling
+/.claude
+/.cursor
+/.databricks
+
+# VCS
+/.git

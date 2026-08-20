@@ -171,8 +171,20 @@ def ensure_schema_sql(table: str) -> str:
 
 
 def ensure_schema(conn: psycopg.Connection, table: str) -> None:
-    """Create `table` and its indexes if absent, on an already-open connection."""
-    conn.execute(ensure_schema_sql(table).encode("utf-8"))
+    """Create `table` and its indexes if absent, on an already-open connection.
+
+    Two sessions racing this on a table that exists in neither yet can both pass
+    Postgres's existence check before either commits -- CREATE TABLE IF NOT EXISTS
+    is not atomic across sessions -- so the loser gets a UniqueViolation on the system
+    catalog rather than a clean no-op. That failure means the winner's CREATE TABLE
+    already went through, so it is safe to swallow.
+    """
+    import psycopg
+
+    try:
+        conn.execute(ensure_schema_sql(table).encode("utf-8"))
+    except psycopg.errors.UniqueViolation:
+        pass
 
 
 def build_envelope(frames: Sequence[Frame]) -> tuple[str, bool]:

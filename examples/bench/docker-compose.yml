@@ -1,0 +1,67 @@
+# Two containers that only talk to each other through a real Lakebase table and a real
+# Zerobus stream (see topologies/docker_bridge.py) -- no loopback bus, no shared
+# process. Needs a working Lakebase endpoint and Zerobus workspace; nothing is mocked.
+#
+# Run from the repo root:
+#   RUN_ID=$(python -c "import uuid; print(uuid.uuid4())") \
+#     docker compose -f examples/bench/docker-compose.yml up --build
+#
+# Credentials come from the environment (export them, or put them in
+# examples/bench/.env) -- see transport/connection.py::ConnectionConfig for the full
+# field list. DATABRICKS_HOST/DATABRICKS_TOKEN authenticate BENCH_LAKEBASE_ENDPOINT
+# when no profile is set; to authenticate via a named profile instead
+# (BENCH_LAKEBASE_PROFILE/ZEROBUS_SP_PROFILE), uncomment the ~/.databrickscfg mount
+# below on both services.
+#
+# RUN_ID has no default on purpose: LakebaseRx replays a run_id's entire history on
+# every fresh consumer start (see transport/lakebase.py's catch-up query), so reusing
+# one across demo runs floods the consumer with old frames -- pick a fresh id each time.
+
+services:
+  producer:
+    build:
+      context: ../..
+      dockerfile: examples/bench/Dockerfile
+    command:
+      - --topology
+      - docker-producer
+      - --run-id
+      - ${RUN_ID:?set RUN_ID so both containers share one run, e.g. RUN_ID=$(uuidgen)}
+      - --duration
+      - ${DURATION:-60}
+    environment:
+      - BENCH_LAKEBASE_ENDPOINT
+      - BENCH_LAKEBASE_PROFILE
+      - BENCH_LAKEBASE_DATABASE
+      - BENCH_DOCKER_BUS_TABLE
+      - DATABRICKS_HOST
+      - DATABRICKS_TOKEN
+    # volumes:
+    #   - ~/.databrickscfg:/root/.databrickscfg:ro
+
+  consumer:
+    build:
+      context: ../..
+      dockerfile: examples/bench/Dockerfile
+    command:
+      - --topology
+      - docker-consumer
+      - --run-id
+      - ${RUN_ID:?set RUN_ID so both containers share one run, e.g. RUN_ID=$(uuidgen)}
+      - --duration
+      - ${DURATION:-60}
+    environment:
+      - BENCH_LAKEBASE_ENDPOINT
+      - BENCH_LAKEBASE_PROFILE
+      - BENCH_LAKEBASE_DATABASE
+      - BENCH_DOCKER_BUS_TABLE
+      - ZEROBUS_WORKSPACE_ID
+      - ZEROBUS_REGION
+      - ZEROBUS_CLOUD
+      - ZEROBUS_SP_PROFILE
+      - DATABRICKS_HOST
+      - DATABRICKS_TOKEN
+      - DATABRICKS_CLIENT_ID
+      - DATABRICKS_CLIENT_SECRET
+    # volumes:
+    #   - ~/.databrickscfg:/root/.databrickscfg:ro

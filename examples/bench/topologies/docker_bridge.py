@@ -46,7 +46,7 @@ from bench.bench import TestBench
 from bench.bus import Lakebase, Zerobus
 from bench.ecu import ReceiverEcu
 from bench.replay import GeneratorEcu
-from bench.topology import register_topology
+from bench.topology import register_topology, require_config
 from transport.connection import ConnectionConfig
 
 BUS_TABLE = os.environ.get("DOCKER_BUS_TABLE", "bench_docker_bus")
@@ -75,21 +75,23 @@ def _demo_frames(count: int = 10, gap_ns: int = 500_000_000) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_producer(config: ConnectionConfig, run_id: str | None = None) -> TestBench:
+def build_producer(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
     """The producer container: one GeneratorEcu writing synthetic frames onto the
     shared Lakebase bus. Needs LAKEBASE_* credentials; no Zerobus config needed.
     """
+    config = require_config(config, "docker-producer")
     bench = TestBench(run_id=run_id)
     bus = bench.add_bus(Lakebase(config.lakebase_config(table=BUS_TABLE), name=BUS_TABLE))
     bench.add_ecu(GeneratorEcu(ch=bus, fetch_fn=_demo_frames))
     return bench
 
 
-def build_consumer(config: ConnectionConfig, run_id: str | None = None) -> TestBench:
+def build_consumer(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
     """The consumer container: one ReceiverEcu reading the shared Lakebase bus and
     forwarding everything to Zerobus. Needs both LAKEBASE_* and ZEROBUS_*
     credentials.
     """
+    config = require_config(config, "docker-consumer")
     bench = TestBench(run_id=run_id)
     bus = bench.add_bus(Lakebase(config.lakebase_config(table=BUS_TABLE), name=BUS_TABLE))
     zerobus = bench.add_bus(Zerobus(config.zerobus_config(table=ZEROBUS_TABLE)))

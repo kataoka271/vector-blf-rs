@@ -21,10 +21,11 @@ Run with:
 
 Requires a working Databricks/Lakebase/Zerobus setup (see examples/testing/README.md's
 prerequisites -- examples/bench does not duplicate that setup documentation). `build()`
-takes a required `config: ConnectionConfig` -- main.py resolves one from
-LAKEBASE_*/ZEROBUS_* environment variables (see ConnectionConfig.from_environ) by
-default, or `--connection-config <path.yaml>` on the CLI to load them from a file
-instead. For a network-free smoke test, see the `quickstart` topology
+takes the registry's optional `config` and rejects a missing one via `require_config()`
+(see bench/topology.py) -- main.py resolves one from LAKEBASE_*/ZEROBUS_* environment
+variables (see ConnectionConfig.from_environ) by default, or `--connection-config
+<path.yaml>` on the CLI to load them from a file instead. For a network-free smoke
+test, see the `quickstart` topology
 (topologies/quickstart.py) or examples/bench/tests/test_testbench_gateway.py, which
 drive the same wiring/forwarding/capture path over loopback buses with a hand-built
 fetch_fn instead.
@@ -36,11 +37,12 @@ from bench.bench import TestBench
 from bench.bus import Lakebase, Zerobus
 from bench.ecu import GatewayEcu, ProxyEcu, ReceiverEcu
 from bench.replay import GeneratorEcu, ReplayEcu
-from bench.topology import register_topology
+from bench.topology import register_topology, require_config
 from transport.connection import ConnectionConfig
 
 
-def build(config: ConnectionConfig, run_id: str | None = None) -> TestBench:
+def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
+    config = require_config(config, "reference")
     bench = TestBench(run_id=run_id)
 
     bus1 = bench.add_bus(Lakebase(config.lakebase_config(table="bench_reference_bus1")))

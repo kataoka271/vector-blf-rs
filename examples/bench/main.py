@@ -15,9 +15,8 @@ Run with:
 from __future__ import annotations
 
 import argparse
-import inspect
 
-from bench.topology import discover, get_topology, list_topologies
+from bench.topology import MissingConfig, discover, get_topology, list_topologies
 from transport.connection import ConnectionConfig
 
 
@@ -39,9 +38,9 @@ def main(argv: list[str] | None = None) -> None:
         metavar="PATH",
         help=(
             "YAML file of Lakebase/Zerobus connection settings (see "
-            "transport/connection.py::ConnectionConfig.from_yaml). Only used by topologies "
-            "that accept a `config` parameter; falls back to LAKEBASE_*/ZEROBUS_* "
-            "environment variables (see ConnectionConfig.from_environ) when omitted."
+            "transport/connection.py::ConnectionConfig.from_yaml). Falls back to "
+            "LAKEBASE_*/ZEROBUS_* environment variables (see ConnectionConfig.from_environ) "
+            "when omitted; a fully offline topology (e.g. quickstart) needs neither."
         ),
     )
     parser.add_argument("--list-topologies", action="store_true", help="Print registered topology names and exit.")
@@ -53,25 +52,25 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     build = get_topology(args.topology)
-    kwargs = {"run_id": args.run_id}
-    config_param = inspect.signature(build).parameters.get("config")
-    if config_param is not None:
-        if args.connection_config:
-            kwargs["config"] = ConnectionConfig.from_yaml(args.connection_config)
-        else:
-            try:
-                kwargs["config"] = ConnectionConfig.from_environ()
-            except KeyError as exc:
-                # A topology that needs no real credentials (e.g. quickstart) gives
-                # `config` its own default, so it is fine to leave it unset here rather
-                # than force every LAKEBASE_*/ZEROBUS_* variable onto a fully offline run.
-                if config_param.default is inspect.Parameter.empty:
-                    parser.error(
-                        f"--topology {args.topology} needs a connection config: set "
-                        f"LAKEBASE_*/ZEROBUS_* environment variables (missing {exc}) or "
-                        "pass --connection-config"
-                    )
-    bench = build(**kwargs)
+
+    config: ConnectionConfig | None = None
+    unresolved: str | None = None
+    if args.connection_config:
+        config = ConnectionConfig.from_yaml(args.connection_config)
+    else:
+        try:
+            config = ConnectionConfig.from_environ()
+        except KeyError as exc:
+            # Not an error yet: a fully offline topology (e.g. quickstart) ignores
+            # `config` entirely, so an unset LAKEBASE_*/ZEROBUS_* environment only
+            # matters if the topology asks for one -- which it does by raising
+            # MissingConfig from require_config() below.
+            unresolved = f"set LAKEBASE_*/ZEROBUS_* environment variables (missing {exc}) or pass --connection-config"
+
+    try:
+        bench = build(config=config, run_id=args.run_id)
+    except MissingConfig:
+        parser.error(f"--topology {args.topology} needs a connection config: {unresolved}")
     bench.run(duration=args.duration)
 
 

@@ -52,9 +52,9 @@ def _fake_frames() -> pd.DataFrame:
 
 def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
     """`config` is accepted (and ignored) only to satisfy the shared BuildFn signature --
-    this topology is fully offline and never touches Lakebase/Zerobus. Defaulting it to
-    `None` is what lets `main.py` run this topology without any LAKEBASE_*/ZEROBUS_*
-    environment variables set -- see bench.topology's module docstring.
+    this topology is fully offline and never touches Lakebase/Zerobus, so unlike the
+    `reference`/`docker-*` topologies it does not call `require_config()` and runs fine
+    with no LAKEBASE_*/ZEROBUS_* environment variables set.
     """
     bench = TestBench(run_id=run_id)
 

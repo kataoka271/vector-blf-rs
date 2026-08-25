@@ -6,12 +6,19 @@ from __future__ import annotations
 
 import pytest
 from bench.bench import TestBench
-from bench.topology import discover, get_topology, list_topologies, register_topology
+from bench.topology import (
+    MissingConfig,
+    discover,
+    get_topology,
+    list_topologies,
+    register_topology,
+    require_config,
+)
 from transport.connection import ConnectionConfig
 
 
 def test_register_and_get_topology():
-    def build(config: ConnectionConfig, run_id: str | None = None) -> TestBench:
+    def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
         return TestBench(run_id=run_id)
 
     register_topology("unit-test-topology", build)
@@ -46,15 +53,32 @@ def test_quickstart_topology_builds_a_working_bench():
 
 
 def test_quickstart_topology_needs_no_connection_config():
-    # quickstart is fully offline: its `config` parameter defaults to None so main.py can
-    # build it without any LAKEBASE_*/ZEROBUS_* environment variable set -- see
-    # topologies/quickstart.py. Calling the module's build() directly rather than through
-    # get_topology() -- the registry's BuildFn type declares config as required (most
-    # topologies need it), so this exercises quickstart's own, more permissive signature.
-    import topologies.quickstart
-
-    bench = topologies.quickstart.build(run_id="run_001")
+    # quickstart is fully offline, so it never calls require_config() and builds from a
+    # None config -- exactly how main.py calls it when LAKEBASE_*/ZEROBUS_* are unset.
+    discover()
+    bench = get_topology("quickstart")(config=None, run_id="run_001")
     assert bench.run_id == "run_001"
+
+
+def test_a_credential_needing_topology_rejects_a_missing_config():
+    # The mirror of the test above: `config` is optional in BuildFn so that main.py can
+    # always call a topology the same way, so a topology that does need credentials says
+    # so at runtime instead of in its signature -- see bench/topology.py.
+    discover()
+    with pytest.raises(MissingConfig, match="reference"):
+        get_topology("reference")(config=None, run_id="run_001")
+
+
+def test_require_config_passes_a_real_config_through():
+    config = ConnectionConfig(
+        lakebase_database="d",
+        zerobus_catalog="c",
+        zerobus_schema="s",
+        lakebase_endpoint="l",
+        zerobus_workspace_id="w",
+        zerobus_region="r",
+    )
+    assert require_config(config, "some-topology") is config
 
 
 def test_reference_topology_builds_without_touching_the_network():

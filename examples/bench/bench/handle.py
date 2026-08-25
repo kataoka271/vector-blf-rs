@@ -2,14 +2,19 @@
 
 Transmit and receive sides are opened lazily -- a segment an Ecu only sends on never
 subscribes, and one it only listens to never opens a writer. This is also what keeps
-Zerobus usable for a send-only ReceiverEcu leg despite its Rx always raising: nothing
-ever calls open_rx() on it unless the Ecu itself registers a handler via `.on()`.
+Zerobus usable for a send-only ReceiverEcu leg despite its Rx always raising.
+
+A handle also does not deliver back what it sent itself, giving every bus segment CAN's
+"a controller doesn't receive its own transmissions" semantics even where the underlying
+transport has no such notion (loopback fans out to every receiver; LakebaseRx reads back
+its own INSERT). This is also what stops a bidirectional `GatewayEcu` from forwarding its
+own output back and forth forever.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, TypeVar
 
 from bench.clock import Clock
 from bench.frame import DIR_RX, Frame, make_can_frame, make_eth_frame
@@ -19,6 +24,12 @@ if TYPE_CHECKING:
     from bench.ecu import Ecu
 
 Handler = Callable[[Frame], None]
+T = TypeVar("T")
+
+# How many recently-sent frames a handle remembers, to recognise its own echo. Bounded
+# because a long run sends unboundedly many, and no transport here keeps a frame in flight
+# longer than this many frames' worth of time.
+SENT_MEMORY = 4096
 
 
 class _Subscription:
@@ -44,6 +55,8 @@ class BusHandle:
         self._tx = None
         self._rx = None
         self._subscriptions: list[_Subscription] = []
+        # Insertion-ordered, so the oldest key is the one evicted past SENT_MEMORY.
+        self._sent: dict[tuple, None] = {}
 
     @property
     def channel(self) -> int:
@@ -83,9 +96,10 @@ class BusHandle:
         return decorator
 
     def send(self, frame: Frame) -> None:
-        """Transmit `frame` as-is."""
+        """Transmit `frame` as-is. It will not be delivered back to this handle."""
         if self._tx is None:
             self._tx = self.bus.open_tx()
+        self._remember_sent(frame)
         self._tx.send(frame)
 
     def forward(self, frame: Frame) -> None:
@@ -161,18 +175,40 @@ class BusHandle:
         )
 
     def drain(self, timeout: float) -> int:
-        """Poll the receiver once and dispatch what it returns. Returns the frame count.
+        """Poll the receiver once and dispatch what it returns. Returns the number of
+        frames dispatched, which excludes this handle's own echoed transmissions.
 
         Returns 0 without blocking when this segment has no subscriptions.
         """
         if self._rx is None:
             return 0
-        frames = self._rx.poll(timeout=timeout)
-        for frame in frames:
+        dispatched = 0
+        for frame in self._rx.poll(timeout=timeout):
+            if self._is_own_echo(frame):
+                continue
+            dispatched += 1
             for sub in self._subscriptions:
                 if sub.matches(frame):
                     sub.handler(frame)
-        return len(frames)
+        return dispatched
+
+    def _remember_sent(self, frame: Frame) -> None:
+        self._sent[frame.hop_key()] = None
+        if len(self._sent) > SENT_MEMORY:
+            del self._sent[next(iter(self._sent))]
+
+    def _is_own_echo(self, frame: Frame) -> bool:
+        """Return whether `frame` is one this handle transmitted, coming back.
+
+        The key is dropped once matched, so this suppresses exactly one echo per
+        transmission: a second frame that happens to be byte-identical -- a genuine
+        retransmission by someone else -- is still delivered.
+        """
+        key = frame.hop_key()
+        if key not in self._sent:
+            return False
+        del self._sent[key]
+        return True
 
     def close(self) -> None:
         for side in (self._tx, self._rx):
@@ -184,22 +220,22 @@ class BusHandle:
         self._tx = self._rx = None
 
 
-def _as_set(single, plural) -> set | None:
+def _as_set(single: T | None, plural: Sequence[T] | None) -> set[T] | None:
     if single is None and plural is None:
         return None
-    values = set() if plural is None else set(plural)
+    values: set[T] = set() if plural is None else set(plural)
     if single is not None:
         values.add(single)
     return values
 
 
-def _union(sets) -> list | None:
+def _union(sets: Iterable[set[T] | None]) -> list[T] | None:
     """Return the union of the given filters, or None if any of them is unrestricted.
 
     One unrestricted handler makes the whole receiver unrestricted -- narrowing the
     channel-level filter to the other handlers' ids would starve it.
     """
-    out: set = set()
+    out: set[T] = set()
     for values in sets:
         if values is None:
             return None

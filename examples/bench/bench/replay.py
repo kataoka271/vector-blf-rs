@@ -50,9 +50,12 @@ class ReplayableEcu(Ecu):
         self,
         *,
         duration: float | None = None,
+        on_tick: Callable[[Ecu], None] | None = None,
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,  # unused: this Ecu's pacing is data-driven, not poll-driven
         should_stop: Callable[[], bool] = lambda: False,
     ) -> None:
+        if on_tick is not None:
+            raise TypeError(f"{type(self).__name__}.run() has no tick loop and does not support on_tick")
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
         try:

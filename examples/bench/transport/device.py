@@ -8,7 +8,7 @@ module level, so constructing a `CanDeviceConfig` never requires it to be instal
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bench.frame import CAN, CAN_FD, DIR_RX, Frame
 
@@ -41,7 +41,7 @@ class EthDeviceConfig:
 def _open_can_bus(config: CanDeviceConfig):
     import can
 
-    kwargs: dict = {
+    kwargs: dict[str, Any] = {
         "interface": config.interface,
         "channel": config.channel,
         "receive_own_messages": config.receive_own_messages,
@@ -68,7 +68,7 @@ class CanDeviceTx:
             raise ValueError(f"CAN device channel cannot send message_type={frame.message_type!r}")
         # python-can requires dlc == len(data) for non-remote frames; a CAN-FD dlc is a
         # code (e.g. 15 -> 64 bytes) rather than a byte count, so use the byte length
-        # instead of the frame's own dlc field when is_fd (see transport can_io history).
+        # instead of the frame's own dlc field when is_fd.
         dlc = len(frame.data) if frame.is_fd else (frame.dlc if frame.dlc is not None else len(frame.data))
         self._bus.send(
             can.Message(
@@ -122,10 +122,9 @@ class CanDeviceRx:
         return frames
 
     def _to_frame(self, msg) -> Frame:
-        # msg.timestamp is float seconds since the epoch; the udp_multicast backend
-        # fills it from the kernel's SO_TIMESTAMPNS control message. Only accurate to
-        # ~240ns at present-day epoch magnitudes (float64 resolution), far below CAN
-        # frame spacing, so it does not affect ordering.
+        # msg.timestamp is float seconds since epoch, filled by udp_multicast from the
+        # kernel's SO_TIMESTAMPNS. Only accurate to ~240ns at present-day magnitudes
+        # (float64 resolution), far below CAN frame spacing, so it doesn't affect ordering.
         observed_ns = int(msg.timestamp * 1e9)
         return Frame(
             run_id=self._run_id,

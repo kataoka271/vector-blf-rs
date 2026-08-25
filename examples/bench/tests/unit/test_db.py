@@ -10,6 +10,31 @@ import pytest
 from bench.db import FilterSpec, ReplayConfig, to_frames, wait_for_ingestion
 
 
+def test_replay_config_quotes_each_table_name_part():
+    cfg = ReplayConfig(catalog="main", schema="blf_dev")
+    assert cfg.gold_table == "`main`.`blf_dev`.`blf_gold_signals`"
+    assert cfg.silver_can_table == "`main`.`blf_dev`.`blf_silver_can`"
+
+
+def test_replay_config_from_yaml_keeps_defaults_for_absent_keys(tmp_path):
+    path = tmp_path / "replay.yaml"
+    path.write_text("catalog: other\nfilter:\n  channels: [1, 2]\n  exclude_source_prefix: ''\n")
+
+    cfg = ReplayConfig.from_yaml(path)
+    assert cfg.catalog == "other"
+    assert cfg.schema == ReplayConfig().schema
+    assert cfg.filter.channels == [1, 2]
+    assert cfg.filter.exclude_source_prefix == ""
+    # Untouched filter keys keep FilterSpec's own defaults, not None.
+    assert cfg.filter.signal_source == ["CAN"]
+
+
+def test_replay_config_from_yaml_without_a_filter_section_uses_the_default_filter(tmp_path):
+    path = tmp_path / "replay.yaml"
+    path.write_text("catalog: other\n")
+    assert ReplayConfig.from_yaml(path).filter == FilterSpec()
+
+
 def test_build_where_defaults():
     sql, params = FilterSpec().build_where()
     assert sql == "_source_file NOT LIKE ? AND signal_source IN (?) AND dir NOT IN (?)"

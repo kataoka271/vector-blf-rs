@@ -1,8 +1,7 @@
 """A fully offline topology: Generator -> Gateway -> Receiver over loopback buses, with
-a hand-built fetch_fn standing in for the Databricks fetch (same fixture rows as
-tests/test_testbench_gateway.py). No Databricks/Lakebase/Zerobus credentials needed --
-this is the topology to reach for to sanity-check the wiring/forwarding/capture path, or
-as a starting point for a new offline topology.
+a hand-built fetch_fn standing in for the Databricks fetch. No Databricks/Lakebase/
+Zerobus credentials needed -- this is the topology to reach for to sanity-check the
+wiring/forwarding/capture path, or as a starting point for a new offline topology.
 
 Run with:
     uv run --group testing python examples/bench/main.py --topology quickstart --duration 2
@@ -16,6 +15,7 @@ from bench.bus import Loopback
 from bench.ecu import GatewayEcu, ReceiverEcu
 from bench.replay import GeneratorEcu
 from bench.topology import register_topology
+from transport.connection import ConnectionConfig
 
 
 def _fake_frames() -> pd.DataFrame:
@@ -49,7 +49,12 @@ def _fake_frames() -> pd.DataFrame:
     )
 
 
-def build(run_id: str | None = None) -> TestBench:
+def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
+    """`config` is accepted (and ignored) only to satisfy the shared BuildFn signature --
+    this topology is fully offline and never touches Lakebase/Zerobus, so unlike the
+    `reference`/`docker-*` topologies it does not call `require_config()` and runs fine
+    with no LAKEBASE_*/ZEROBUS_* environment variables set.
+    """
     bench = TestBench(run_id=run_id)
 
     bus1 = bench.add_bus(Loopback())

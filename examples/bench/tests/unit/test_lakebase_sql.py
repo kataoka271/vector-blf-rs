@@ -1,5 +1,6 @@
-"""Offline tests for transport/lakebase.py's SQL builders and helpers -- no Postgres
-connection required.
+"""Offline tests for transport/lakebase.py's SQL builders and NOTIFY envelope -- no
+Postgres connection required. The same statements and payloads are exercised against a
+real Lakebase endpoint in `online/test_lakebase.py`.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from typing import cast
 
 import psycopg
 import pytest
-from bench.frame import FRAME_COLUMNS, accepts, make_can_frame, make_eth_frame
+from bench.frame import FRAME_COLUMNS, make_can_frame, make_eth_frame
 from transport.lakebase import (
     _ID_ARRAY_OVERHEAD,
     _ID_BYTES_PER_FRAME,
@@ -104,15 +105,6 @@ def test_seen_ids_deduplicates_and_evicts_oldest_past_capacity():
     assert seen.add_if_new(3) is True  # evicts 1
     assert len(seen) == 2
     assert seen.add_if_new(1) is True  # 1 was evicted, so it counts as new again
-
-
-def test_accepts_can_id_and_message_type_filters():
-    frame = _frame()
-    assert accepts(frame, can_ids=None, message_types=None) is True
-    assert accepts(frame, can_ids={0x310}, message_types=None) is True
-    assert accepts(frame, can_ids={0x999}, message_types=None) is False
-    assert accepts(frame, can_ids=None, message_types={"CAN"}) is True
-    assert accepts(frame, can_ids=None, message_types={"ETH"}) is False
 
 
 # ── batch SQL construction ──────────────────────────────────────────────────

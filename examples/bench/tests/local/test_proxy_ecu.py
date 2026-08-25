@@ -11,6 +11,7 @@ import socket
 import threading
 import time
 
+import pytest
 from bench.bus import Loopback
 from bench.ecu import Ecu, ProxyEcu
 from bench.frame import make_can_frame
@@ -69,3 +70,13 @@ def test_proxy_ecu_forwards_a_udp_datagram_onto_its_bus():
     assert got.data == b"\x01\x02"
     assert got.channel == bus.channel
     assert got.run_id == RUN_ID
+
+
+def test_proxy_ecu_rejects_on_tick_rather_than_never_firing_it():
+    bus = Loopback(name="a")
+    bus.channel = 1
+    proxy = ProxyEcu(ch=bus, port=0, host="127.0.0.1")
+    proxy._bind(run_id=RUN_ID, run_epoch_ns=EPOCH_NS)
+
+    with pytest.raises(TypeError, match="on_tick"):
+        proxy.run(duration=0.01, on_tick=lambda _ecu: None)

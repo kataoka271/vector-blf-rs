@@ -7,10 +7,9 @@ instead of something baked into an Ecu's code.
 
 Transports are a registry (`register_transport()`), not an if/elif chain: adding one
 means writing a `transport/<name>.py` with `open_tx(bus)`/`open_rx(bus, **kwargs)`
-functions (and, if needed, an `on_construct(bus)` hook) and calling
-`register_transport()` once -- see the four built-in registrations at the bottom of this
-module for the pattern, and any `transport/<name>.py` for what the functions look like.
-Nothing here needs editing to add a fifth transport.
+functions and calling `register_transport()` once -- see the four built-in registrations
+at the bottom of this module for the pattern, and any `transport/<name>.py` for what the
+functions look like. Nothing here needs editing to add a fifth transport.
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ from transport.device import CanDeviceConfig
 from transport.device import open_rx as _can_open_rx
 from transport.device import open_tx as _can_open_tx
 from transport.lakebase import LakebaseConfig
-from transport.lakebase import on_construct as _lakebase_on_construct
 from transport.lakebase import open_rx as _lakebase_open_rx
 from transport.lakebase import open_tx as _lakebase_open_tx
 from transport.loopback import open_rx as _loopback_open_rx
@@ -46,7 +44,6 @@ BusConfig = LakebaseConfig | ZerobusConfig | CanDeviceConfig | None
 class _Transport:
     open_tx: Callable[[Bus], ChannelTx]
     open_rx: Callable[..., ChannelRx]
-    on_construct: Callable[[Bus], None] | None = None
 
 
 _TRANSPORTS: dict[str, _Transport] = {}
@@ -57,17 +54,14 @@ def register_transport(
     *,
     open_tx: Callable[[Bus], ChannelTx],
     open_rx: Callable[..., ChannelRx],
-    on_construct: Callable[[Bus], None] | None = None,
 ) -> None:
     """Register a transport under `bus_type`, so `Bus(bus_type, ...)` dispatches to it.
 
     `open_tx(bus) -> ChannelTx` and `open_rx(bus, *, run_id, can_ids=None,
     message_types=None, source_file=None, run_epoch_ns=None) -> ChannelRx` do the actual
-    work. `on_construct(bus)`, if given, runs once from `Bus.__init__` -- e.g. Lakebase
-    uses it to resolve an unset table name from the bus's own generated name. Calling
-    this again with an already-registered `bus_type` replaces it.
+    work. Calling this again with an already-registered `bus_type` replaces it.
     """
-    _TRANSPORTS[bus_type] = _Transport(open_tx=open_tx, open_rx=open_rx, on_construct=on_construct)
+    _TRANSPORTS[bus_type] = _Transport(open_tx=open_tx, open_rx=open_rx)
 
 
 def _transport(bus_type: str) -> _Transport:
@@ -83,13 +77,11 @@ class Bus:
     """
 
     def __init__(self, bus_type: str, config: BusConfig = None, *, name: str | None = None) -> None:
+        _transport(bus_type)  # validates bus_type now, rather than at open_tx()/open_rx()
         self.name = name or f"bus_{uuid.uuid4().hex[:8]}"
         self.bus_type = bus_type
         self.config = config
         self.channel: int | None = None
-        on_construct = _transport(bus_type).on_construct
-        if on_construct is not None:
-            on_construct(self)
 
     def open_tx(self) -> ChannelTx:
         return _transport(self.bus_type).open_tx(self)
@@ -124,19 +116,19 @@ class Bus:
 
 
 register_transport(LOOPBACK, open_tx=_loopback_open_tx, open_rx=_loopback_open_rx)
-register_transport(LAKEBASE, open_tx=_lakebase_open_tx, open_rx=_lakebase_open_rx, on_construct=_lakebase_on_construct)
+register_transport(LAKEBASE, open_tx=_lakebase_open_tx, open_rx=_lakebase_open_rx)
 register_transport(ZEROBUS, open_tx=_zerobus_open_tx, open_rx=_zerobus_open_rx)
 register_transport(CAN, open_tx=_can_open_tx, open_rx=_can_open_rx)
 
 
-def Lakebase(config: LakebaseConfig | None = None, *, name: str | None = None) -> Bus:
+def Lakebase(config: LakebaseConfig, *, name: str | None = None) -> Bus:
     """A bus segment backed by a Lakebase (managed Postgres) table."""
-    return Bus(LAKEBASE, config or LakebaseConfig(), name=name)
+    return Bus(LAKEBASE, config, name=name)
 
 
-def Zerobus(config: ZerobusConfig | None = None, *, name: str | None = None) -> Bus:
+def Zerobus(config: ZerobusConfig, *, name: str | None = None) -> Bus:
     """A send-only bus segment backed by a Zerobus-ingested Delta table."""
-    return Bus(ZEROBUS, config or ZerobusConfig(), name=name)
+    return Bus(ZEROBUS, config, name=name)
 
 
 def CanDeviceBus(config: CanDeviceConfig | None = None, *, name: str | None = None) -> Bus:

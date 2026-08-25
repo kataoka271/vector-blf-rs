@@ -32,6 +32,37 @@ def test_handle_resolves_to_the_same_object_for_the_same_bus():
     assert ecu.handle(bus) is ecu.handle(bus)
 
 
+def test_a_segment_only_sent_on_never_opens_a_receiver():
+    # What keeps a send-only transport (Zerobus, whose Rx always raises) usable as a
+    # ReceiverEcu's upload leg: nothing calls open_rx() unless a handler is registered.
+    ecu = make_ecu("receiver")
+    bus = make_bus("a", 1)
+    handle = ecu.handle(bus)
+    handle.send_can(0x310, b"\x00")
+    handle.subscribe()
+    assert handle._rx is None
+    assert handle._tx is not None
+    ecu.close()
+
+
+def test_a_segment_only_listened_to_never_opens_a_transmitter():
+    ecu = make_ecu("receiver")
+    bus = make_bus("a", 1)
+    handle = ecu.handle(bus)
+    handle.on()(lambda _f: None)
+    handle.subscribe()
+    assert handle._tx is None
+    assert handle._rx is not None
+    ecu.close()
+
+
+def test_using_a_bus_that_was_never_registered_names_the_fix():
+    ecu = make_ecu("generator")
+    unregistered = Loopback(name="orphan")  # no channel: never passed to add_bus()
+    with pytest.raises(RuntimeError, match="no channel assigned"):
+        ecu.handle(unregistered).send_can(0x310, b"\x00")
+
+
 def test_send_can_stamps_channel_run_and_source_file():
     ecu = make_ecu("generator")
     bus = make_bus("a", 1)
@@ -53,6 +84,54 @@ def test_send_eth_produces_an_ethernet_frame():
     )
     assert frame.message_type == F.ETH
     assert frame.channel == 2
+
+
+def test_an_ecu_does_not_receive_what_it_sent_itself():
+    # Every segment shares CAN's semantics: a controller doesn't receive its own transmissions
+    # (python-can's receive_own_messages=False), but loopback and LakebaseRx both echo a
+    # sender's own frame back to it, so BusHandle suppresses the echo.
+    bus = make_bus("a", 1)
+    ecu = make_ecu("talker")
+    heard = []
+    ecu.handle(bus).on()(heard.append)
+    ecu.handle(bus).subscribe()
+
+    ecu.handle(bus).send_can(0x310, b"\x00")
+    assert ecu.handle(bus).drain(timeout=0.05) == 0
+    assert heard == []
+    ecu.close()
+
+
+def test_another_ecu_on_the_segment_still_receives_it():
+    bus = make_bus("a", 1)
+    talker, listener = make_ecu("talker"), make_ecu("listener")
+    heard = []
+    listener.handle(bus).on()(heard.append)
+    listener.handle(bus).subscribe()
+
+    talker.handle(bus).send_can(0x310, b"\x00")
+    listener.handle(bus).drain(timeout=0.05)
+    assert [f.can_id for f in heard] == [0x310]
+    talker.close()
+    listener.close()
+
+
+def test_only_one_echo_is_suppressed_per_transmission():
+    # Suppression is per sent frame, not a standing filter: a byte-identical frame from
+    # somewhere else is somebody's real traffic and must still be delivered.
+    bus = make_bus("a", 1)
+    ecu, other = make_ecu("talker"), make_ecu("other")
+    heard = []
+    ecu.handle(bus).on()(heard.append)
+    ecu.handle(bus).subscribe()
+
+    sent = ecu.handle(bus).send_can(0x310, b"\x00")
+    other.handle(bus).send(sent)  # the same frame, from another Ecu
+    ecu.handle(bus).drain(timeout=0.05)
+
+    assert [f.can_id for f in heard] == [0x310]
+    ecu.close()
+    other.close()
 
 
 def test_handlers_receive_only_matching_frames():
@@ -145,7 +224,14 @@ def test_run_stops_when_should_stop_is_already_true():
 def test_run_stops_after_the_duration_and_fires_ticks():
     ecu = make_ecu("generator", clock=LOGICAL, tick_hz=200.0)
     ticks = []
-    ecu.run(duration=0.15, on_tick=lambda e: ticks.append(e.clock.timestamp_ns()), poll_timeout=0.001)
+
+    def _tick(e):
+        # run() already raised if the Ecu had never been bound to a run, so by the time
+        # a tick fires the clock is always there.
+        assert e.clock is not None
+        ticks.append(e.clock.timestamp_ns())
+
+    ecu.run(duration=0.15, on_tick=_tick, poll_timeout=0.001)
     assert len(ticks) >= 2
     # Logical timestamps advance by exactly the tick period regardless of scheduling.
     assert ticks[1] - ticks[0] == 5_000_000

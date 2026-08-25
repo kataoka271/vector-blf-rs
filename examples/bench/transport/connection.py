@@ -1,40 +1,43 @@
 """Where a bench process gets its Lakebase/Zerobus connection settings.
 
-Deliberately small: running examples/bench against real Lakebase/Zerobus should need a
-Lakebase endpoint and a Databricks profile, and nothing else. The Zerobus fields exist
-for ReceiverEcu's upload leg and stay empty in the common (loopback/CAN-only) case.
+Every field except `lakebase_profile`/`zerobus_profile` is required, with no
+library-level default -- constructing a `ConnectionConfig` with one missing is a
+`TypeError` naming it, rather than silently falling back to an empty string or ambient
+environment variable. A wrong-but-present default (a stale catalog, someone else's
+endpoint) is worse than a loud failure at construction.
 
-Field defaults already read BENCH_*/ZEROBUS_* environment variables, so plain
-`ConnectionConfig()` is "from the environment" with no separate from_env() needed --
-from_yaml() layers explicit YAML values on top of those same defaults, mirroring
-bench.db.ReplayConfig.from_yaml().
+`from_environ()` builds one from LAKEBASE_*/ZEROBUS_* environment variables (profiles
+optional there too); `from_yaml()` builds one from a YAML file's keys. Neither layers on
+top of the other or on top of ambient environment variables -- pick one source per
+process.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from transport.lakebase import DEFAULT_DATABASE, LakebaseConfig
+from transport.lakebase import LakebaseConfig
 from transport.zerobus import ZerobusConfig
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class ConnectionConfig:
     """Connection settings shared by every Lakebase/Zerobus bus in one process."""
 
-    lakebase_endpoint: str = dataclasses.field(default_factory=lambda: os.environ.get("BENCH_LAKEBASE_ENDPOINT", ""))
-    lakebase_profile: str | None = dataclasses.field(default_factory=lambda: os.environ.get("BENCH_LAKEBASE_PROFILE"))
-    lakebase_database: str = dataclasses.field(
-        default_factory=lambda: os.environ.get("BENCH_LAKEBASE_DATABASE", DEFAULT_DATABASE)
-    )
-    zerobus_workspace_id: str = dataclasses.field(default_factory=lambda: os.environ.get("ZEROBUS_WORKSPACE_ID", ""))
-    zerobus_region: str = dataclasses.field(default_factory=lambda: os.environ.get("ZEROBUS_REGION", ""))
-    zerobus_cloud: str = dataclasses.field(default_factory=lambda: os.environ.get("ZEROBUS_CLOUD", "aws"))
-    zerobus_profile: str | None = dataclasses.field(default_factory=lambda: os.environ.get("ZEROBUS_SP_PROFILE"))
+    lakebase_endpoint: str
+    lakebase_database: str
+    zerobus_catalog: str
+    zerobus_schema: str
+    zerobus_workspace_id: str
+    zerobus_region: str
+    zerobus_service_principal_id: str
+
+    lakebase_profile: str | None = None
+    zerobus_profile: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ConnectionConfig:
@@ -46,11 +49,26 @@ class ConnectionConfig:
         data = yaml.safe_load(Path(path).read_text()) or {}
         return cls(**data)
 
-    def lakebase_config(self, *, table: str = "") -> LakebaseConfig:
-        """Return a LakebaseConfig for `table` using these connection settings.
+    @classmethod
+    def from_environ(cls) -> ConnectionConfig:
+        return cls(
+            lakebase_endpoint=os.environ["LAKEBASE_ENDPOINT"],
+            lakebase_database=os.environ["LAKEBASE_DATABASE"],
+            zerobus_catalog=os.environ["ZEROBUS_CATALOG"],
+            zerobus_schema=os.environ["ZEROBUS_SCHEMA"],
+            zerobus_workspace_id=os.environ["ZEROBUS_WORKSPACE_ID"],
+            zerobus_region=os.environ["ZEROBUS_REGION"],
+            zerobus_service_principal_id=os.environ["ZEROBUS_SERVICE_PRINCIPAL_ID"],
+            lakebase_profile=os.environ.get("LAKEBASE_PROFILE"),
+            zerobus_profile=os.environ.get("ZEROBUS_PROFILE"),
+        )
 
-        `table` defaults to "" so the owning Bus's generated name is used instead -- see
-        transport.lakebase.on_construct.
+    def lakebase_config(self, *, table: str) -> LakebaseConfig:
+        """Return a LakebaseConfig for `table` using these connection settings. `table`
+        must be named explicitly by the caller (see the module docstring).
+
+        Raises `pydantic.ValidationError` when a connection setting is blank or `table`
+        is not a bare SQL identifier -- see LakebaseConfig.
         """
         return LakebaseConfig(
             profile=self.lakebase_profile,
@@ -59,12 +77,19 @@ class ConnectionConfig:
             table=table,
         )
 
-    def zerobus_config(self, *, table: str = "blf_testbench_frames") -> ZerobusConfig:
-        """Return a ZerobusConfig for `table` using these connection settings."""
+    def zerobus_config(self, *, table: str) -> ZerobusConfig:
+        """Return a ZerobusConfig for `table` using these connection settings.
+
+        Raises `pydantic.ValidationError` when a connection setting is blank, a name is
+        not a bare Unity Catalog name, or `zerobus_workspace_id`/`zerobus_region` is not
+        a single DNS label -- see ZerobusConfig.
+        """
         return ZerobusConfig(
             workspace_id=self.zerobus_workspace_id,
             region=self.zerobus_region,
-            cloud=self.zerobus_cloud,
+            catalog=self.zerobus_catalog,
+            schema=self.zerobus_schema,
             table=table,
             profile=self.zerobus_profile,
+            service_principal_id=self.zerobus_service_principal_id,
         )

@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 
 import pytest
-from bench.frame import make_can_frame
+from bench.frame import Frame, make_can_frame
 from transport.lakebase import LakebaseTx
 
 RUN_ID = "run_001"
@@ -40,7 +40,7 @@ class FakeWriter:
         self.gate = False
         self.fail = False
 
-    def write_batch(self, frames: list) -> None:
+    def write_batch(self, frames: list[Frame]) -> None:
         if self.fail:
             raise RuntimeError("simulated write failure")
         if self.gate:
@@ -97,3 +97,38 @@ def test_write_failure_surfaces_from_send_and_close():
         tx.send(_frame())
     with pytest.raises(RuntimeError, match="transmit failed"):
         tx.close()
+
+
+def test_write_failure_surfaces_from_a_waiting_flush():
+    writer = FakeWriter()
+    writer.gate = True
+    tx = LakebaseTx(writer=writer)
+    try:
+        tx.send(_frame())
+        assert writer.entered.wait(5.0), "writer never started the first round trip"
+        # flush() blocks on the in-flight write; the failure has to wake it rather than
+        # leave the caller parked until its own timeout.
+        writer.fail = True
+        tx.send(_frame())
+        writer.release.set()
+        with pytest.raises(RuntimeError, match="transmit failed"):
+            tx.flush()
+    finally:
+        writer.release.set()
+        with pytest.raises(RuntimeError, match="transmit failed"):
+            tx.close()
+
+
+def test_send_after_close_is_rejected():
+    writer = FakeWriter()
+    tx = LakebaseTx(writer=writer)
+    tx.close()
+    with pytest.raises(RuntimeError, match="is closed"):
+        tx.send(_frame())
+
+
+def test_constructing_without_a_config_or_a_writer_is_rejected():
+    # Both default to None so a test can inject a writer; with neither there is nothing
+    # to connect to, and failing here beats a None dereference on the writer thread.
+    with pytest.raises(ValueError, match="either config or an explicit writer"):
+        LakebaseTx()

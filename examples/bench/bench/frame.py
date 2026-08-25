@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import time
+from typing import Any
 
 CAN = "CAN"
 CAN_FD = "CAN_FD"
@@ -85,6 +86,10 @@ _JSON_KEYS_INVERSE = {v: k for k, v in _JSON_KEYS.items()}
 # Fields carried as base64 strings in JSON rather than as-is.
 _BINARY_FIELDS = ("data", "src_addr", "dst_addr")
 
+# The two fields `forwarded()` re-stamps at each hop, and so the two Frame.hop_key()
+# leaves out.
+_HOP_VARYING = ("channel", "observed_ns")
+
 DIR_TX = 0
 DIR_RX = 1
 DIR_TX_RQ = 2
@@ -136,14 +141,14 @@ class Frame:
     def is_eth(self) -> bool:
         return self.message_type in ETH_TYPES
 
-    def to_row(self) -> dict:
+    def to_row(self) -> dict[str, Any]:
         """Return the FRAME_COLUMNS-keyed dict used as Postgres parameters and as the
         Zerobus protobuf constructor kwargs.
         """
         return {name: getattr(self, name) for name in FRAME_COLUMNS}
 
     @classmethod
-    def from_row(cls, row: dict) -> Frame:
+    def from_row(cls, row: dict[str, Any]) -> Frame:
         """Rebuild a Frame from a FRAME_COLUMNS-keyed dict (a Postgres row, a Zerobus
         poll result, ...). Extra keys such as the bus table's `id` are ignored.
         """
@@ -158,12 +163,12 @@ class Frame:
                 kwargs[name] = bytes(value)
         return cls(**kwargs)
 
-    def to_json_obj(self) -> dict:
+    def to_json_obj(self) -> dict[str, Any]:
         """Return the compact representation: abbreviated keys, unset fields omitted,
         binary fields base64-encoded. run_id/source_file are excluded (see the module
         docstring).
         """
-        obj: dict = {}
+        obj: dict[str, Any] = {}
         for name, key in _JSON_KEYS.items():
             value = getattr(self, name)
             if value is None:
@@ -174,11 +179,11 @@ class Frame:
         return obj
 
     @classmethod
-    def from_json_obj(cls, obj: dict, *, run_id: str, source_file: str) -> Frame:
+    def from_json_obj(cls, obj: dict[str, Any], *, run_id: str, source_file: str) -> Frame:
         """Inverse of to_json_obj; `run_id`/`source_file` come from the caller (a batch
         envelope, a run context, ...).
         """
-        kwargs: dict = {"run_id": run_id, "source_file": source_file}
+        kwargs: dict[str, Any] = {"run_id": run_id, "source_file": source_file}
         for key, value in obj.items():
             name = _JSON_KEYS_INVERSE.get(key)
             if name is None:
@@ -200,6 +205,20 @@ class Frame:
             channel=channel,
             observed_ns=time.time_ns() if observed_ns is None else observed_ns,
         )
+
+    def hop_key(self) -> tuple[Any, ...]:
+        """Return an identity for this frame that survives forwarding.
+
+        `forwarded()` re-stamps exactly `channel` and `observed_ns`, so every other field
+        together identifies the same frame at any hop. This is the (run_id, can_id,
+        timestamp_ns) correlation key the module docstring describes, widened to the whole
+        record so that two frames a LogicalClock stamped within one tick -- identical
+        timestamp_ns, different payloads -- do not collide.
+
+        Used to recognise a frame an Ecu put on a segment itself when it comes back (see
+        bench/handle.py).
+        """
+        return tuple(getattr(self, name) for name in FRAME_COLUMNS if name not in _HOP_VARYING)
 
 
 def make_can_frame(

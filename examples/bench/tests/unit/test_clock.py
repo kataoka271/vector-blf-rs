@@ -1,11 +1,16 @@
 """Tests for the run clocks, in particular the property that motivates the logical one:
 identical timestamps regardless of when the process actually got scheduled.
+
+`make_clock`'s two classes conforming to the `Clock` protocol is not tested here: it is
+the annotated return type, so `uv run ty check` already rejects a class that drifts out
+of conformance. What a type checker cannot see is which class a given string selects,
+and that is what the dispatch test below covers.
 """
 
 from __future__ import annotations
 
 import pytest
-from bench.clock import LOGICAL, WALL, Clock, LogicalClock, WallClock, make_clock
+from bench.clock import LOGICAL, WALL, LogicalClock, WallClock, make_clock
 
 EPOCH_NS = 1_700_000_000_000_000_000
 
@@ -15,11 +20,6 @@ def test_make_clock_returns_the_kind_named():
     assert isinstance(make_clock(LOGICAL, run_epoch_ns=EPOCH_NS, tick_hz=1.0), LogicalClock)
     with pytest.raises(ValueError, match="unknown clock"):
         make_clock("sundial", run_epoch_ns=EPOCH_NS, tick_hz=1.0)
-
-
-@pytest.mark.parametrize("kind", [WALL, LOGICAL])
-def test_both_clocks_satisfy_the_protocol(kind):
-    assert isinstance(make_clock(kind, run_epoch_ns=EPOCH_NS, tick_hz=1.0), Clock)
 
 
 @pytest.mark.parametrize("kind", [WALL, LOGICAL])

@@ -19,6 +19,18 @@ __pycache__/
 # examples/bench/transport/zerobus.py)
 /examples/bench/transport/record_pb2.py
 
+# Local Lakebase/Zerobus connection settings filled in from connection.example.yaml
+# (may contain real endpoint/profile names -- never commit a filled-in copy)
+/examples/bench/connection.yaml
+
+# Local Lakebase/Zerobus credentials filled in from .env.example (may contain a real
+# PAT/client secret -- never commit a filled-in copy)
+/examples/bench/.env
+
+# Rotated Zerobus service-principal secrets, cached in plaintext between rotations (see
+# _SECRET_CACHE_DIR in examples/bench/transport/zerobus.py) -- never commit these
+/examples/bench/.cache/
+
 # IDE / tooling
 /.claude
 /.cursor

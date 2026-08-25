@@ -16,6 +16,7 @@ from bench.bus import Loopback
 from bench.ecu import GatewayEcu, ReceiverEcu
 from bench.replay import GeneratorEcu
 from bench.topology import register_topology
+from transport.connection import ConnectionConfig
 
 
 def _fake_frames() -> pd.DataFrame:
@@ -49,7 +50,12 @@ def _fake_frames() -> pd.DataFrame:
     )
 
 
-def build(run_id: str | None = None) -> TestBench:
+def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
+    """`config` is accepted (and ignored) only to satisfy the shared BuildFn signature --
+    this topology is fully offline and never touches Lakebase/Zerobus. Defaulting it to
+    `None` is what lets `main.py` run this topology without any LAKEBASE_*/ZEROBUS_*
+    environment variables set -- see bench.topology's module docstring.
+    """
     bench = TestBench(run_id=run_id)
 
     bus1 = bench.add_bus(Loopback())

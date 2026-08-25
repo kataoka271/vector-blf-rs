@@ -9,15 +9,16 @@
 # Credentials come from the environment (export them, or put them in
 # examples/bench/.env) -- see transport/connection.py::ConnectionConfig for the full
 # field list. DATABRICKS_HOST/DATABRICKS_TOKEN (a PAT) authenticate
-# BENCH_LAKEBASE_ENDPOINT when no profile is set; to authenticate via a named profile
-# instead (BENCH_LAKEBASE_PROFILE/ZEROBUS_SP_PROFILE), uncomment the ~/.databrickscfg
+# LAKEBASE_ENDPOINT when no profile is set; to authenticate via a named profile
+# instead (LAKEBASE_PROFILE/ZEROBUS_PROFILE), uncomment the ~/.databrickscfg
 # mount below on both services -- but only a service-principal (OAuth M2M) profile
 # works this way. A personal OAuth U2M profile's "databricks-cli" auth type shells out
 # to the databricks CLI binary and its browser token cache, neither of which exists in
-# this image, so BENCH_LAKEBASE_ENDPOINT needs a PAT (DATABRICKS_HOST/TOKEN) unless
-# BENCH_LAKEBASE_PROFILE names a service principal too. ZEROBUS_CATALOG/ZEROBUS_SCHEMA
-# only need setting if the target table isn't at the transport/zerobus.py default
-# main.blf.*.
+# this image, so LAKEBASE_ENDPOINT needs a PAT (DATABRICKS_HOST/TOKEN) unless
+# LAKEBASE_PROFILE names a service principal too. LAKEBASE_DATABASE and
+# ZEROBUS_CATALOG/ZEROBUS_SCHEMA have no library-level default (see
+# transport/connection.py::ConnectionConfig) and must be set here -- ConnectionConfig.
+# from_environ() raises KeyError outright if one is unset.
 #
 # RUN_ID has no default on purpose: LakebaseRx replays a run_id's entire history on
 # every fresh consumer start (see transport/lakebase.py's catch-up query), so reusing
@@ -36,10 +37,10 @@ services:
       - --duration
       - ${DURATION:-60}
     environment:
-      - BENCH_LAKEBASE_ENDPOINT
-      - BENCH_LAKEBASE_PROFILE
-      - BENCH_LAKEBASE_DATABASE
-      - BENCH_DOCKER_BUS_TABLE
+      - LAKEBASE_ENDPOINT
+      - LAKEBASE_PROFILE
+      - LAKEBASE_DATABASE
+      - DOCKER_BUS_TABLE
       - DATABRICKS_HOST
       - DATABRICKS_TOKEN
     # volumes:
@@ -57,16 +58,16 @@ services:
       - --duration
       - ${DURATION:-60}
     environment:
-      - BENCH_LAKEBASE_ENDPOINT
-      - BENCH_LAKEBASE_PROFILE
-      - BENCH_LAKEBASE_DATABASE
-      - BENCH_DOCKER_BUS_TABLE
+      - LAKEBASE_ENDPOINT
+      - LAKEBASE_PROFILE
+      - LAKEBASE_DATABASE
+      - DOCKER_BUS_TABLE
       - ZEROBUS_WORKSPACE_ID
       - ZEROBUS_REGION
-      - ZEROBUS_CLOUD
-      - ZEROBUS_SP_PROFILE
+      - ZEROBUS_PROFILE
       - ZEROBUS_CATALOG
       - ZEROBUS_SCHEMA
+      - ZEROBUS_TABLE
       - DATABRICKS_HOST
       - DATABRICKS_TOKEN
       - DATABRICKS_CLIENT_ID

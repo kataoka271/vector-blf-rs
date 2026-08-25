@@ -7,10 +7,11 @@ from __future__ import annotations
 import pytest
 from bench.bench import TestBench
 from bench.topology import discover, get_topology, list_topologies, register_topology
+from transport.connection import ConnectionConfig
 
 
 def test_register_and_get_topology():
-    def build(run_id: str | None = None) -> TestBench:
+    def build(config: ConnectionConfig, run_id: str | None = None) -> TestBench:
         return TestBench(run_id=run_id)
 
     register_topology("unit-test-topology", build)
@@ -30,17 +31,48 @@ def test_discover_registers_the_shipped_topologies():
 
 def test_quickstart_topology_builds_a_working_bench():
     discover()
-    bench = get_topology("quickstart")(run_id="run_001")
+    config = ConnectionConfig(
+        lakebase_database="d",
+        zerobus_catalog="c",
+        zerobus_schema="s",
+        lakebase_endpoint="l",
+        zerobus_workspace_id="w",
+        zerobus_region="r",
+    )
+    bench = get_topology("quickstart")(config=config, run_id="run_001")
     assert bench.run_id == "run_001"
     assert len(bench._buses) == 2
     assert len(bench._ecus) == 3
 
 
+def test_quickstart_topology_needs_no_connection_config():
+    # quickstart is fully offline: its `config` parameter defaults to None so main.py can
+    # build it without any LAKEBASE_*/ZEROBUS_* environment variable set -- see
+    # topologies/quickstart.py. Calling the module's build() directly rather than through
+    # get_topology() -- the registry's BuildFn type declares config as required (most
+    # topologies need it), so this exercises quickstart's own, more permissive signature.
+    import topologies.quickstart
+
+    bench = topologies.quickstart.build(run_id="run_001")
+    assert bench.run_id == "run_001"
+
+
 def test_reference_topology_builds_without_touching_the_network():
     # Building a Bus never opens a connection (open_tx()/open_rx() do that lazily), so
-    # this covers the topology's wiring without needing real Lakebase/Zerobus.
+    # this covers the topology's wiring without needing real Lakebase/Zerobus -- but
+    # ConnectionConfig's fields (database/catalog/schema/...) are required with no
+    # library-level default (see transport/connection.py), so this passes a config with
+    # those filled in rather than relying on the environment.
     discover()
-    bench = get_topology("reference")(run_id="run_001")
+    config = ConnectionConfig(
+        lakebase_database="d",
+        zerobus_catalog="c",
+        zerobus_schema="s",
+        lakebase_endpoint="l",
+        zerobus_workspace_id="w",
+        zerobus_region="r",
+    )
+    bench = get_topology("reference")(config=config, run_id="run_001")
     assert bench.run_id == "run_001"
     assert len(bench._buses) == 3
     assert len(bench._ecus) == 5

@@ -40,8 +40,6 @@ if TYPE_CHECKING:
     import psycopg
     from bench.bus import Bus
 
-DEFAULT_DATABASE = "databricks_postgres"
-
 # Postgres caps a NOTIFY payload at 8000 bytes. The envelope is built client-side without
 # the row ids, which the INSERT statement merges in server-side, so the budget has to
 # leave room for one id (up to 20 digits, plus a separator) per frame.
@@ -64,13 +62,10 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 @dataclass
 class LakebaseConfig:
+    dbname: str
+    table: str
+    endpoint_name: str
     profile: str | None = None
-    endpoint_name: str = ""
-    dbname: str = DEFAULT_DATABASE
-    # Empty means "use the owning Bus's generated name" -- see bench.bus.Bus.__init__,
-    # which resolves this so that e.g. two independently-constructed Lakebase() buses in
-    # one TestBench land on two distinct Postgres tables rather than silently colliding.
-    table: str = ""
 
 
 def check_identifier(name: str, *, what: str = "table") -> str:
@@ -570,16 +565,6 @@ class LakebaseRx:
             if accepts(frame, can_ids=self._can_ids, message_types=self._message_types):
                 self._queue.put(frame)
             self._watermark = max(self._watermark, row_id)
-
-
-def on_construct(bus: Bus) -> None:
-    """Registered as this transport's Bus on_construct hook -- see
-    bench.bus.register_transport. Resolves an unset LakebaseConfig.table from the
-    owning Bus's generated name, so two independently-constructed Lakebase() buses
-    never silently share a table just because neither caller named one.
-    """
-    assert isinstance(bus.config, LakebaseConfig)
-    bus.config.table = bus.config.table or bus.name
 
 
 def open_tx(bus: Bus) -> LakebaseTx:

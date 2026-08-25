@@ -20,11 +20,11 @@ Run with:
     uv run --group testing python examples/bench/main.py --topology reference
 
 Requires a working Databricks/Lakebase/Zerobus setup (see examples/testing/README.md's
-prerequisites -- examples/bench does not duplicate that setup documentation). Connection
-settings come from transport.connection.ConnectionConfig -- BENCH_LAKEBASE_ENDPOINT/
-BENCH_LAKEBASE_PROFILE/BENCH_LAKEBASE_DATABASE/ZEROBUS_* environment variables by
-default, or `--connection-config <path.yaml>` on the CLI (see main.py) to load them from
-a file instead. For a network-free smoke test, see the `quickstart` topology
+prerequisites -- examples/bench does not duplicate that setup documentation). `build()`
+takes a required `config: ConnectionConfig` -- main.py resolves one from
+LAKEBASE_*/ZEROBUS_* environment variables (see ConnectionConfig.from_environ) by
+default, or `--connection-config <path.yaml>` on the CLI to load them from a file
+instead. For a network-free smoke test, see the `quickstart` topology
 (topologies/quickstart.py) or examples/bench/tests/test_testbench_gateway.py, which
 drive the same wiring/forwarding/capture path over loopback buses with a hand-built
 fetch_fn instead.
@@ -40,17 +40,12 @@ from bench.topology import register_topology
 from transport.connection import ConnectionConfig
 
 
-def build(run_id: str | None = None, config: ConnectionConfig | None = None) -> TestBench:
-    """`config` defaults to `ConnectionConfig()`, i.e. BENCH_*/ZEROBUS_* environment
-    variables -- pass an explicit one (e.g. `ConnectionConfig.from_yaml(path)`) to point
-    this topology at a different endpoint without editing this file.
-    """
-    config = config or ConnectionConfig()
+def build(config: ConnectionConfig, run_id: str | None = None) -> TestBench:
     bench = TestBench(run_id=run_id)
 
-    bus1 = bench.add_bus(Lakebase(config.lakebase_config()))
-    bus2 = bench.add_bus(Lakebase(config.lakebase_config()))
-    zerobus = bench.add_bus(Zerobus(config.zerobus_config()))
+    bus1 = bench.add_bus(Lakebase(config.lakebase_config(table="bench_reference_bus1")))
+    bus2 = bench.add_bus(Lakebase(config.lakebase_config(table="bench_reference_bus2")))
+    zerobus = bench.add_bus(Zerobus(config.zerobus_config(table="blf_testbench_frames")))
 
     generator = GeneratorEcu(ch=bus1)
     gateway = GatewayEcu(ch1=bus1, ch2=bus2)

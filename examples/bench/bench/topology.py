@@ -3,28 +3,36 @@
 Before this module, `examples/bench/main.py` hardcoded one topology directly as
 imperative Python with no pattern for a second one. This is the same registry idiom
 `bench.bus.register_transport` uses for transports: adding a topology means writing
-`examples/bench/topologies/<name>.py` with a `build(run_id=None) -> TestBench` function
-and calling `register_topology()` once -- not editing `main.py`. `discover()` imports
-every module under `topologies/` so each one's registration call actually runs; call it
-once (e.g. from `main.py`) before `get_topology()`/`list_topologies()`.
+`examples/bench/topologies/<name>.py` with a `build(config, run_id=None) -> TestBench`
+function (see `BuildFn` below) and calling `register_topology()` once -- not editing
+`main.py`. A topology that needs no real Lakebase/Zerobus credentials can still give
+`config` a default (e.g. `None`) so `main.py` doesn't have to construct one just to call
+it -- see topologies/quickstart.py. `discover()` imports every module under `topologies/`
+so each one's registration call actually runs; call it once (e.g. from `main.py`) before
+`get_topology()`/`list_topologies()`.
 """
 
 from __future__ import annotations
 
 import importlib
 import pkgutil
-from collections.abc import Callable
+from typing import Protocol
+
+from transport.connection import ConnectionConfig
 
 from bench.bench import TestBench
 
-BuildFn = Callable[..., TestBench]
+
+class BuildFn(Protocol):
+    def __call__(self, config: ConnectionConfig, run_id: str | None = None) -> TestBench: ...
+
 
 _TOPOLOGIES: dict[str, BuildFn] = {}
 
 
 def register_topology(name: str, build: BuildFn) -> None:
-    """Register `build` (a `(run_id: str | None = None) -> TestBench` factory) under
-    `name`. Re-registering an existing name replaces it.
+    """Register `build` (a `(config, run_id: str | None = None) -> TestBench` factory,
+    see `BuildFn`) under `name`. Re-registering an existing name replaces it.
     """
     _TOPOLOGIES[name] = build
 

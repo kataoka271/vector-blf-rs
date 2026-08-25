@@ -1,0 +1,38 @@
+# Template for transport/connection.py::ConnectionConfig.from_yaml().
+#
+# Copy this file to connection.yaml (gitignored) and fill in the values for your
+# workspace, then pass it to test.py or main.py:
+#
+#   uv run python examples/bench/test.py --connection-config examples/bench/connection.yaml
+#   uv run python examples/bench/main.py --connection-config examples/bench/connection.yaml
+#
+# Every key below except lakebase_profile/zerobus_profile is required -- from_yaml()
+# does not merge in LAKEBASE_*/ZEROBUS_* environment variables for a key it omits, it
+# just passes the parsed YAML straight to ConnectionConfig(**data), so omitting a
+# required one is a TypeError naming it (use ConnectionConfig.from_environ() instead if
+# you want the environment-variable source). Never commit a copy of this file with real
+# values filled in.
+
+# Lakebase (managed Postgres) -----------------------------------------------------
+lakebase_endpoint: projects/<project>/branches/<branch>/endpoints/<endpoint>
+# Name of a Databricks CLI profile (~/.databrickscfg). Omit (or leave null) to
+# authenticate via DATABRICKS_HOST/DATABRICKS_TOKEN (a PAT) instead. Only a
+# service-principal (OAuth M2M) profile works inside the Docker demo -- see
+# docker-compose.yml.
+lakebase_profile: null
+# Required. The Postgres table itself is named separately, per bus, via
+# lakebase_config(table=...).
+lakebase_database: databricks_postgres
+
+# Zerobus (Delta ingest) ------------------------------------------------------------
+zerobus_workspace_id: "<workspace id>"
+zerobus_region: us-east-2
+# Name of a Databricks CLI profile for the Zerobus service principal. Omit (or leave
+# null) to authenticate via DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET instead --
+# Zerobus always needs service-principal (OAuth M2M) credentials, see
+# transport/zerobus.py::ZerobusStream.
+zerobus_profile: null
+# Required. The Delta table itself is named separately, per bus, via
+# zerobus_config(table=...).
+zerobus_catalog: main
+zerobus_schema: blf

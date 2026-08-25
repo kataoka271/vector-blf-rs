@@ -40,8 +40,8 @@ def main(argv: list[str] | None = None) -> None:
         help=(
             "YAML file of Lakebase/Zerobus connection settings (see "
             "transport/connection.py::ConnectionConfig.from_yaml). Only used by topologies "
-            "that accept a `config` parameter; falls back to BENCH_*/ZEROBUS_* environment "
-            "variables when omitted."
+            "that accept a `config` parameter; falls back to LAKEBASE_*/ZEROBUS_* "
+            "environment variables (see ConnectionConfig.from_environ) when omitted."
         ),
     )
     parser.add_argument("--list-topologies", action="store_true", help="Print registered topology names and exit.")
@@ -53,11 +53,24 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     build = get_topology(args.topology)
-    kwargs: dict[str, object] = {"run_id": args.run_id}
-    if "config" in inspect.signature(build).parameters:
-        kwargs["config"] = (
-            ConnectionConfig.from_yaml(args.connection_config) if args.connection_config else ConnectionConfig()
-        )
+    kwargs = {"run_id": args.run_id}
+    config_param = inspect.signature(build).parameters.get("config")
+    if config_param is not None:
+        if args.connection_config:
+            kwargs["config"] = ConnectionConfig.from_yaml(args.connection_config)
+        else:
+            try:
+                kwargs["config"] = ConnectionConfig.from_environ()
+            except KeyError as exc:
+                # A topology that needs no real credentials (e.g. quickstart) gives
+                # `config` its own default, so it is fine to leave it unset here rather
+                # than force every LAKEBASE_*/ZEROBUS_* variable onto a fully offline run.
+                if config_param.default is inspect.Parameter.empty:
+                    parser.error(
+                        f"--topology {args.topology} needs a connection config: set "
+                        f"LAKEBASE_*/ZEROBUS_* environment variables (missing {exc}) or "
+                        "pass --connection-config"
+                    )
     bench = build(**kwargs)
     bench.run(duration=args.duration)
 

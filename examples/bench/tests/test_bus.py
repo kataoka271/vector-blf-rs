@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 from bench.bench import TestBench
-from bench.bus import Bus, Lakebase, Loopback, register_transport
-from transport.lakebase import LakebaseConfig
+from bench.bus import Bus, Loopback, register_transport
 from transport.loopback import LoopbackRx, LoopbackTx
 
 
@@ -23,19 +22,6 @@ def test_unknown_bus_type_raises_at_construction():
     # Fails fast at Bus(...) rather than waiting until open_tx()/open_rx() is called.
     with pytest.raises(ValueError, match="unknown bus_type"):
         Bus("smoke-signal")
-
-
-def test_two_lakebase_buses_get_distinct_default_table_names():
-    # Both Lakebase() calls take no config, so this only stays correct as long as Bus
-    # resolves an unset LakebaseConfig.table from its own generated name -- see
-    # transport/lakebase.py's LakebaseConfig.table docstring.
-    a = Lakebase()
-    b = Lakebase()
-    assert isinstance(a.config, LakebaseConfig)
-    assert isinstance(b.config, LakebaseConfig)
-    assert a.config.table != b.config.table
-    assert a.config.table == a.name
-    assert b.config.table == b.name
 
 
 def test_add_bus_auto_assigns_incrementing_channels():

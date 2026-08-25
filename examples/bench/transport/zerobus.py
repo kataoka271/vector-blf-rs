@@ -26,30 +26,21 @@ if TYPE_CHECKING:
 
     from bench.bus import Bus
 
-_ZEROBUS_HOST_SUFFIX = {"aws": "cloud.databricks.com", "azure": "azuredatabricks.net"}
-
 
 @dataclass
 class ZerobusConfig:
-    workspace_id: str = ""
-    region: str = ""
-    cloud: str = "aws"
-    catalog: str | None = None
-    schema: str | None = None
-    table: str = "blf_testbench_frames"
+    catalog: str
+    schema: str
+    table: str
+    workspace_id: str
+    region: str
     client_id: str = ""
     client_secret: str = ""
     profile: str | None = None
 
     @property
     def endpoint(self) -> str:
-        try:
-            suffix = _ZEROBUS_HOST_SUFFIX[self.cloud]
-        except KeyError:
-            raise ValueError(
-                f"unknown zerobus.cloud {self.cloud!r}; expected one of {sorted(_ZEROBUS_HOST_SUFFIX)}"
-            ) from None
-        return f"https://{self.workspace_id}.zerobus.{self.region}.{suffix}"
+        return f"https://{self.workspace_id}.zerobus.{self.region}.cloud.databricks.com"
 
 
 def _generate_record_pb2() -> bool:
@@ -116,7 +107,7 @@ class ZerobusStream:
     SQL-visible, and `close()` before exiting.
     """
 
-    def __init__(self, config: ZerobusConfig, *, default_catalog: str = "main", default_schema: str = "blf") -> None:
+    def __init__(self, config: ZerobusConfig) -> None:
         from databricks.sdk.core import Config
         from zerobus.sdk.shared import RecordType, StreamConfigurationOptions, TableProperties
         from zerobus.sdk.sync import ZerobusSdk
@@ -138,9 +129,7 @@ class ZerobusStream:
                 " DATABRICKS_CLIENT_SECRET in the environment."
             )
         self._pb = load_record_pb2()
-        catalog = config.catalog or default_catalog
-        schema = config.schema or default_schema
-        self._table = f"{catalog}.{schema}.{config.table}"
+        self._table = f"{config.catalog}.{config.schema}.{config.table}"
         sdk = ZerobusSdk(config.endpoint, dbx_cfg.host)
         self._create_stream = lambda: sdk.create_stream(
             client_id,
@@ -182,8 +171,8 @@ class ZerobusTx:
     Delta table.
     """
 
-    def __init__(self, *, config: ZerobusConfig, default_catalog: str = "main", default_schema: str = "blf") -> None:
-        self._stream = ZerobusStream(config, default_catalog=default_catalog, default_schema=default_schema)
+    def __init__(self, *, config: ZerobusConfig) -> None:
+        self._stream = ZerobusStream(config)
 
     def send(self, frame: Frame) -> None:
         self._stream.record(frame)

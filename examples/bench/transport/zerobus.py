@@ -14,33 +14,93 @@ installed.
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import sys
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+import warnings
+from typing import TYPE_CHECKING, Annotated
 
 from bench.frame import Frame
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo, field_validator
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from bench.bus import Bus
 
+# catalog/schema/table are joined into an unquoted `catalog.schema.table` and handed to
+# Zerobus as one string, so a name carrying a dot, a backtick, or a space would silently
+# address a different table (or none). Unity Catalog allows a leading digit, unlike a
+# bare SQL identifier.
+_UC_NAME = re.compile(r"^[A-Za-z0-9_]+$")
 
-@dataclass
-class ZerobusConfig:
-    catalog: str
-    schema: str
-    table: str
-    workspace_id: str
-    region: str
-    client_id: str = ""
-    client_secret: str = ""
-    profile: str | None = None
+# workspace_id and region are interpolated into the endpoint hostname (see
+# ZerobusConfig.endpoint), so each has to be a single DNS label. This is what catches a
+# whole URL or a `https://` prefix pasted into either one.
+_HOST_LABEL = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$")
 
-    @property
-    def endpoint(self) -> str:
-        return f"https://{self.workspace_id}.zerobus.{self.region}.cloud.databricks.com"
+_NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# ZerobusConfig's `schema` field shadows BaseModel.schema(), pydantic v1's deprecated
+# JSON-schema classmethod, so pydantic warns when the class is created. The name is Unity
+# Catalog's own ("catalog.schema.table") and worth keeping; the method it shadows is
+# never called here and is scheduled for removal in pydantic v3. Instance access still
+# resolves to the field -- a classmethod is a non-data descriptor, so the instance
+# __dict__ wins over it.
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message='Field name "schema"', category=UserWarning)
+
+    class ZerobusConfig(BaseModel):
+        """Connection settings for one Zerobus Ingest stream into `catalog.schema.table`.
+
+        `client_id`/`client_secret` are the OAuth service-principal credentials; leaving
+        them empty defers to the ambient `databricks.sdk.core.Config` (see
+        `ZerobusStream`), so unlike the other fields "" is meaningful here and allowed.
+
+        Raises `pydantic.ValidationError` on a missing, blank, or unknown field, on a
+        `catalog`/`schema`/`table` that is not a bare Unity Catalog name, or on a
+        `workspace_id`/`region` that is not a single DNS label.
+        """
+
+        # Frozen because ZerobusStream holds one across stream recreations; extra="forbid"
+        # so a misspelled key is an error rather than a silently ignored one.
+        model_config = ConfigDict(frozen=True, extra="forbid")
+
+        catalog: _NonEmpty
+        schema: _NonEmpty
+        table: _NonEmpty
+        workspace_id: _NonEmpty
+        region: _NonEmpty
+        client_id: str = ""
+        # repr=False so a secret passed in explicitly never reaches a log line or a
+        # traceback through the model's repr.
+        client_secret: str = Field(default="", repr=False)
+        profile: _NonEmpty | None = None
+
+        @field_validator("catalog", "schema", "table")
+        @classmethod
+        def _bare_unity_catalog_name(cls, value: str, info: ValidationInfo) -> str:
+            if not _UC_NAME.match(value):
+                raise ValueError(f"{info.field_name} must match {_UC_NAME.pattern!r}, got {value!r}")
+            return value
+
+        @field_validator("workspace_id", "region")
+        @classmethod
+        def _single_dns_label(cls, value: str, info: ValidationInfo) -> str:
+            if not _HOST_LABEL.match(value):
+                raise ValueError(f"{info.field_name} must match {_HOST_LABEL.pattern!r}, got {value!r}")
+            return value
+
+        @field_validator("profile", mode="before")
+        @classmethod
+        def _blank_profile_means_none(cls, value: object) -> object:
+            # `ZEROBUS_PROFILE=` (set but empty) reaches ConnectionConfig as "" rather
+            # than None; both mean "no profile", and ZerobusStream already collapses them.
+            return None if isinstance(value, str) and not value.strip() else value
+
+        @property
+        def endpoint(self) -> str:
+            return f"https://{self.workspace_id}.zerobus.{self.region}.cloud.databricks.com"
 
 
 def _generate_record_pb2() -> bool:

@@ -31,10 +31,10 @@ import queue
 import re
 import threading
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 from bench.frame import FRAME_COLUMNS, Frame, accepts
+from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 if TYPE_CHECKING:
     import psycopg
@@ -60,19 +60,56 @@ CATCHUP_LOOKBACK_SECONDS = 5.0
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-@dataclass
-class LakebaseConfig:
-    dbname: str
-    table: str
-    endpoint_name: str
-    profile: str | None = None
-
-
 def check_identifier(name: str, *, what: str = "table") -> str:
     """Return `name` unchanged if it is a bare SQL identifier, else raise ValueError."""
     if not _IDENTIFIER.match(name):
         raise ValueError(f"{what} name must match {_IDENTIFIER.pattern!r} (bare identifier), got {name!r}")
     return name
+
+
+# Non-empty after stripping surrounding whitespace, which a value copied out of a YAML
+# file or an environment variable easily picks up and which no field here ever wants.
+_NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class LakebaseConfig(BaseModel):
+    """Connection settings for one Lakebase (managed Postgres) bus segment.
+
+    `table` is the Postgres table backing this one segment, and doubles as its
+    LISTEN/NOTIFY channel name; `endpoint_name` names the Lakebase endpoint
+    (`projects/<p>/branches/<b>/endpoints/<e>`, or a bare endpoint name) that `connect()`
+    resolves to a host. `profile` names a Databricks CLI profile, or is None to
+    authenticate from the ambient environment.
+
+    Raises `pydantic.ValidationError` on a missing, blank, or unknown field, or on a
+    `table` that is not a bare SQL identifier.
+    """
+
+    # Frozen because a bus's connection settings are read from several threads (the
+    # LakebaseTx writer thread and the LakebaseRx listener thread both hold one and
+    # re-read it on every reconnect); extra="forbid" so a misspelled key is an error
+    # rather than a silently ignored one.
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    dbname: _NonEmpty
+    table: _NonEmpty
+    endpoint_name: _NonEmpty
+    profile: _NonEmpty | None = None
+
+    @field_validator("table")
+    @classmethod
+    def _table_is_a_bare_identifier(cls, value: str) -> str:
+        # Validating here fails at construction rather than at the first query: the table
+        # name is interpolated into DDL/DML where a bound parameter is not allowed, so
+        # every SQL builder below re-checks it, but by then a run has already started.
+        return check_identifier(value)
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def _blank_profile_means_none(cls, value: object) -> object:
+        # `LAKEBASE_PROFILE=` (set but empty) reaches ConnectionConfig as "" rather than
+        # None; both mean "no profile", and connect() already collapses them.
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 def sql(statement: str) -> Any:

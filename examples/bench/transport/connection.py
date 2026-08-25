@@ -68,6 +68,9 @@ class ConnectionConfig:
 
         Every Lakebase bus must name its own table explicitly (two independently-constructed buses must never silently
         share one, or land on a randomly generated name)
+
+        Raises `pydantic.ValidationError` when a connection setting is blank or `table`
+        is not a bare SQL identifier -- see LakebaseConfig.
         """
         return LakebaseConfig(
             profile=self.lakebase_profile,
@@ -77,7 +80,12 @@ class ConnectionConfig:
         )
 
     def zerobus_config(self, *, table: str) -> ZerobusConfig:
-        """Return a ZerobusConfig for `table` using these connection settings."""
+        """Return a ZerobusConfig for `table` using these connection settings.
+
+        Raises `pydantic.ValidationError` when a connection setting is blank, a name is
+        not a bare Unity Catalog name, or `zerobus_workspace_id`/`zerobus_region` is not
+        a single DNS label -- see ZerobusConfig.
+        """
         return ZerobusConfig(
             workspace_id=self.zerobus_workspace_id,
             region=self.zerobus_region,

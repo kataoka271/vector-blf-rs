@@ -53,6 +53,7 @@ testing = [
     "protobuf>=4.25.0,<7.0",
     "psycopg[binary]>=3.1.0,<4.0",
     "pyarrow>=14.0.0",
+    "pydantic>=2.0",
     "python-can>=4.5.0",
     "pyyaml>=6.0",
 ]

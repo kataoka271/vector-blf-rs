@@ -145,7 +145,14 @@ def test_run_stops_when_should_stop_is_already_true():
 def test_run_stops_after_the_duration_and_fires_ticks():
     ecu = make_ecu("generator", clock=LOGICAL, tick_hz=200.0)
     ticks = []
-    ecu.run(duration=0.15, on_tick=lambda e: ticks.append(e.clock.timestamp_ns()), poll_timeout=0.001)
+
+    def _tick(e):
+        # run() already raised if the Ecu had never been bound to a run, so by the time
+        # a tick fires the clock is always there.
+        assert e.clock is not None
+        ticks.append(e.clock.timestamp_ns())
+
+    ecu.run(duration=0.15, on_tick=_tick, poll_timeout=0.001)
     assert len(ticks) >= 2
     # Logical timestamps advance by exactly the tick period regardless of scheduling.
     assert ticks[1] - ticks[0] == 5_000_000

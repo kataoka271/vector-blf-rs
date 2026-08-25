@@ -50,9 +50,17 @@ class ReplayableEcu(Ecu):
         self,
         *,
         duration: float | None = None,
+        on_tick: Callable[[Ecu], None] | None = None,
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,  # unused: this Ecu's pacing is data-driven, not poll-driven
         should_stop: Callable[[], bool] = lambda: False,
     ) -> None:
+        # on_tick is accepted so this stays substitutable for Ecu.run(), and rejected
+        # rather than ignored: this override has no tick loop to fire it from (pacing
+        # comes from the fetched rows), so a caller passing one would otherwise watch it
+        # silently never fire. poll_timeout is different -- it is only a tuning knob, so
+        # ignoring it changes nothing a caller can observe.
+        if on_tick is not None:
+            raise TypeError(f"{type(self).__name__}.run() has no tick loop and does not support on_tick")
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
         try:

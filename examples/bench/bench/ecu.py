@@ -202,9 +202,16 @@ class ProxyEcu(Ecu):
         self,
         *,
         duration: float | None = None,
+        on_tick: Callable[[Ecu], None] | None = None,
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,
         should_stop: Callable[[], bool] = lambda: False,
     ) -> None:
+        # on_tick is accepted so this stays substitutable for Ecu.run(), and rejected
+        # rather than ignored: there is no tick loop here to fire it from (a socket is
+        # polled instead of a bus drained), so a caller passing one would otherwise
+        # watch it silently never fire.
+        if on_tick is not None:
+            raise TypeError(f"{type(self).__name__}.run() has no tick loop and does not support on_tick")
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

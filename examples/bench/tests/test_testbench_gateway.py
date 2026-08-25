@@ -9,6 +9,7 @@ TestBench" claim -- nothing here talks to Databricks, Lakebase, or Zerobus.
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from bench.bench import TestBench
 from bench.bus import Loopback
 from bench.ecu import GatewayEcu, ReceiverEcu
@@ -70,3 +71,13 @@ def test_generator_gateway_receiver_over_loopback():
     # The gateway must have re-stamped every frame onto bus2's channel, not bus1's.
     assert all(f.channel == bus2.channel for f in receiver.captured)
     assert all(f.run_id == RUN_ID for f in receiver.captured)
+
+
+def test_replayable_ecu_rejects_on_tick_rather_than_never_firing_it():
+    bench = TestBench(run_id=RUN_ID)
+    bus = bench.add_bus(Loopback())
+    generator = GeneratorEcu(ch=bus, fetch_fn=_fake_frames)
+    bench.add_ecu(generator)
+
+    with pytest.raises(TypeError, match="on_tick"):
+        generator.run(duration=0.01, on_tick=lambda _ecu: None)

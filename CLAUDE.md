@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Comments
+
+Keep comments minimal.
+
+- Do not add comments that merely restate what the code does.
+- Prefer clear names and simple code over explanatory comments.
+- Add a comment only when it explains a non-obvious "why", business rule,
+  constraint, workaround, or important edge case.
+- Do not add comments describing the implementation process or reasoning steps.
+- Do not document every branch, condition, or edge case unless it is
+  genuinely non-obvious from the code.
+- Do not add JSDoc to internal/private functions unless it provides
+  information that cannot be inferred from the signature and implementation.
+- Keep comments to 1–3 lines when possible.
+- Before adding a comment, ask: "Would this still be useful if the code
+  were refactored?" If not, omit it.
+- Do not modify existing comments unless they are incorrect or the behavior
+  they describe has changed.
+
 ## Commit Messages
 
 - Use only ASCII characters. Do not use arrows (`→`, `–`, `—`), emoji, or other non-ASCII symbols.

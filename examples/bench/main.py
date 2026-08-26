@@ -61,10 +61,8 @@ def main(argv: list[str] | None = None) -> None:
         try:
             config = ConnectionConfig.from_environ()
         except KeyError as exc:
-            # Not an error yet: a fully offline topology (e.g. quickstart) ignores
-            # `config` entirely, so an unset LAKEBASE_*/ZEROBUS_* environment only
-            # matters if the topology asks for one -- which it does by raising
-            # MissingConfig from require_config() below.
+            # Not an error yet: a fully offline topology (e.g. quickstart) ignores `config`
+            # entirely, so this only matters if the topology asks for one via require_config() below.
             unresolved = f"set LAKEBASE_*/ZEROBUS_* environment variables (missing {exc}) or pass --connection-config"
 
     try:

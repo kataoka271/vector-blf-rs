@@ -1,27 +1,21 @@
 """Lakebase (managed Postgres) channel: LISTEN/NOTIFY with Nagle-style batching.
 
-Batching is self-clocking, not timed: LakebaseTx's background writer thread sends
-whatever accumulated in its queue the moment the previous round trip completes, so a
-batch of one costs no added delay at a low frame rate and a batch grows to roughly
+Batching is self-clocking, not timed: LakebaseTx's writer thread sends whatever
+accumulated in its queue the moment the previous round trip completes, so a batch of one
+costs no added delay at a low frame rate and a batch grows to roughly
 round-trip-time x offered-rate at a high one -- no batch-size or batch-interval to
-configure. LakebaseTx only owns the queue/thread that decides *when* a round trip
-starts; _LakebaseBatchWriter owns the connection and does the round trip itself (one
-INSERT+NOTIFY per batch) -- see each class's docstring.
+configure. LakebaseTx owns the queue/thread deciding *when* a round trip starts;
+_LakebaseBatchWriter owns the connection and does the round trip itself.
 
 NOTIFY payloads are hybrid: Postgres caps a notification at 8000 bytes
 (NOTIFY_PAYLOAD_LIMIT). A batch that fits is carried inline (build_envelope returns
-inline=True), so a receiver needs no follow-up query; a batch that doesn't (a few
-1500-byte Ethernet frames is enough) carries only its identity plus an `ids` array
-merged in server-side, and the receiver fetches those exact ids via fetch_ids_sql (not a
-min/max range -- concurrent writers to the same table make one batch's ids
-non-contiguous).
+inline=True); a batch that doesn't carries only its identity plus an `ids` array, and the
+receiver fetches those exact ids via fetch_ids_sql. NOTIFY is still fire-and-forget, so a
+receiver still catches up on connect and dedupes by row id, independent of batching.
 
-NOTIFY is still fire-and-forget, so a receiver still needs to catch up on connect and
-dedupe by row id -- that part is unrelated to batching and unchanged.
-
-`psycopg`/`databricks.sdk` are imported lazily inside `connect()`, not at module level,
-so constructing a `LakebaseConfig` (or importing this module for its SQL builders in a
-test) never requires either package to be installed.
+`psycopg`/`databricks.sdk` are imported lazily inside `connect()`, so constructing a
+`LakebaseConfig` (or importing this module for its SQL builders in a test) never
+requires either package to be installed.
 """
 
 from __future__ import annotations
@@ -49,10 +43,9 @@ _ID_ARRAY_OVERHEAD = 16
 
 ENVELOPE_VERSION = 1
 
-# Seconds of overlap re-scanned by a catch-up query. A row's BIGSERIAL id is assigned
-# when the INSERT runs but only becomes visible once its transaction commits, so ids can
-# become visible out of order and `id > watermark` alone can step over a row that
-# committed late. Re-scanning by insert time and deduplicating by id closes that window.
+# Seconds of overlap re-scanned by a catch-up query, since a BIGSERIAL id becomes visible
+# only once its transaction commits -- ids can go visible out of order, so `id > watermark`
+# alone can skip a late-committing row. Re-scanning by insert time and deduping by id closes that gap.
 CATCHUP_LOOKBACK_SECONDS = 5.0
 
 # Bus table names are interpolated into DDL/DML where a bound parameter is not allowed
@@ -85,10 +78,9 @@ class LakebaseConfig(BaseModel):
     `table` that is not a bare SQL identifier.
     """
 
-    # Frozen because a bus's connection settings are read from several threads (the
-    # LakebaseTx writer thread and the LakebaseRx listener thread both hold one and
-    # re-read it on every reconnect); extra="forbid" so a misspelled key is an error
-    # rather than a silently ignored one.
+    # Frozen: read from both LakebaseTx's writer thread and LakebaseRx's listener thread
+    # on every reconnect, without a mutex -- immutability rules out a race. extra="forbid"
+    # so a misspelled key errors instead of being silently ignored.
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     dbname: _NonEmpty
@@ -113,15 +105,10 @@ class LakebaseConfig(BaseModel):
 
 
 def sql(statement: str) -> Any:
-    """Mark a dynamically-built statement as safe to execute.
-
-    psycopg's stubs accept only `LiteralString` for a query built from an f-string, so
-    that interpolating anything into a statement is a type error by default. Every
-    statement built here interpolates nothing but table names `check_identifier` has
-    already validated -- all values are bound parameters -- and this is the single place
-    that argument is recorded. Returns `Any` rather than `LiteralString`, which needs
-    Python 3.11 while this project supports 3.10.
-    """
+    """Mark a dynamically-built statement as safe to execute. Returns `statement` unchanged."""
+    # psycopg's stubs want LiteralString for an f-string-built query; every statement built
+    # here interpolates only table names check_identifier already validated. Any, not
+    # LiteralString, since that type needs Python 3.11 and this project supports 3.10.
     return statement
 
 
@@ -203,19 +190,17 @@ def ensure_schema_sql(table: str) -> str:
 
 
 def ensure_schema(conn: psycopg.Connection, table: str) -> None:
-    """Create `table` and its indexes if absent, on an already-open connection.
-
-    Two sessions racing this on a table that exists in neither yet can both pass
-    Postgres's existence check before either commits -- CREATE TABLE IF NOT EXISTS
-    is not atomic across sessions -- so the loser gets a UniqueViolation on the system
-    catalog rather than a clean no-op. That failure means the winner's CREATE TABLE
-    already went through, so it is safe to swallow.
+    """Create `table` and its indexes if absent, on an already-open connection. Safe to
+    call from two racing sessions at once.
     """
     import psycopg
 
     try:
         conn.execute(ensure_schema_sql(table).encode("utf-8"))
     except psycopg.errors.UniqueViolation:
+        # CREATE TABLE IF NOT EXISTS isn't atomic across sessions: two sessions racing on
+        # a table that exists in neither yet can both pass the existence check before
+        # either commits, so the loser hits this instead of a clean no-op.
         pass
 
 
@@ -225,11 +210,9 @@ def build_envelope(frames: Sequence[Frame]) -> tuple[str, bool]:
     Returns `(payload, inline)`. When `inline` is True the payload carries the frames
     themselves and the receiver needs no follow-up query; when False it carries only the
     batch's identity and the receiver must fetch the rows itself. Either way the payload
-    lacks the `ids` array -- that is added server-side from the inserted rows.
-
-    All frames must share one run_id and source_file; they are hoisted out of the
-    per-frame objects to keep the payload under the 8000-byte cap. Raises ValueError for
-    an empty batch or a mixed one.
+    lacks the `ids` array -- that is added server-side from the inserted rows. All frames
+    must share one run_id and source_file. Raises ValueError for an empty batch or a mixed
+    one.
     """
     if not frames:
         raise ValueError("cannot build an envelope for an empty batch")
@@ -238,6 +221,8 @@ def build_envelope(frames: Sequence[Frame]) -> tuple[str, bool]:
     if any(f.run_id != run_id or f.source_file != source_file for f in frames):
         raise ValueError("every frame in one batch must share run_id and source_file")
 
+    # run_id/source_file are hoisted out of the per-frame objects, not repeated per frame,
+    # to keep the payload under the 8000-byte cap.
     envelope = {"v": ENVELOPE_VERSION, "rid": run_id, "sf": source_file}
     ids_budget = _ID_ARRAY_OVERHEAD + _ID_BYTES_PER_FRAME * len(frames)
     inline = dict(envelope, frames=[f.to_json_obj() for f in frames])
@@ -279,20 +264,18 @@ def insert_and_notify_sql(table: str, batch_size: int) -> str:
     """Return the statement that inserts `batch_size` frames and notifies about them.
 
     Placeholders bind, in order: every frame's FRAME_COLUMNS values row by row, then the
-    notification channel, then the envelope JSON from build_envelope. The envelope's
-    `ids` array is merged in from the inserted rows, which is why this has to be one
-    statement -- doing the INSERT and the NOTIFY separately would need a second round
-    trip and put the notification outside the insert's transaction.
+    notification channel, then the envelope JSON from build_envelope.
     """
     check_identifier(table)
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
     row = "(" + ", ".join(["%s"] * len(FRAME_COLUMNS)) + ")"
     values = ", ".join([row] * batch_size)
-    # The real ids go on the wire rather than just their min and max: other ECUs insert
-    # into the same bus table concurrently, so one statement's sequence values are not
-    # necessarily contiguous and a receiver cannot reconstruct them from a range. Ordering
-    # by id restores insertion order, which is what pairs ids[i] with frames[i].
+    # One statement, not INSERT then NOTIFY separately: the envelope's `ids` array is
+    # merged in from the inserted rows, and a second round trip would put the
+    # notification outside the insert's transaction. Real ids go on the wire, not just
+    # min/max, since concurrent inserts from other ECUs make one statement's sequence
+    # values non-contiguous; ordering by id is what pairs ids[i] with frames[i].
     return (
         f'WITH ins AS (INSERT INTO "{table}" ({_quoted_columns()}) VALUES {values} RETURNING id) '
         "SELECT pg_notify(%s, (%s::jsonb || jsonb_build_object('ids', jsonb_agg(id ORDER BY id)))::text) FROM ins"
@@ -410,15 +393,12 @@ class _LakebaseBatchWriter:
 
 
 class LakebaseTx:
-    """Transmit side of a Lakebase channel: batches self-clock to the round trip.
+    """Transmit side of a Lakebase channel: batches self-clock to the round trip (see
+    the module docstring). send() only queues a frame; a background thread sends
+    whatever has accumulated the moment the previous write_batch() call returns.
 
-    send() only queues a frame; a background thread sends whatever has accumulated the
-    moment the previous write_batch() call returns, so a batch of one costs no added
-    delay at a low frame rate and a batch grows to roughly round-trip-time x
-    offered-rate at a high one -- no batch-size or batch-interval to configure. A write
-    that fails its one retry (inside _LakebaseBatchWriter.write_batch) is not swallowed:
-    the error latches and surfaces from the next send(), flush(), or close(), so a
-    dropped frame is never silent.
+    A write that fails its one retry is not swallowed: the error latches and surfaces
+    from the next send(), flush(), or close(), so a dropped frame is never silent.
     """
 
     def __init__(
@@ -497,11 +477,7 @@ class LakebaseRx:
     fire-and-forget and can drop or duplicate around a reconnect.
 
     A batch too large to travel inside its notification is fetched by row id on a second
-    connection, opened on first use. It cannot share the listening connection: that one
-    is parked inside `notifies()`, and a query issued on it from within that loop never
-    returns, which would wedge this thread for the rest of the run without so much as an
-    exception. The catch-up query does run on the listening connection, but only before
-    the loop is entered.
+    connection, opened on first use (see `_fetch_connection`).
     """
 
     def __init__(
@@ -587,10 +563,10 @@ class LakebaseRx:
         self._emit(cur.fetchall())
 
     def _fetch_connection(self):
-        """Return the connection used for by-id fetches, opening it on first use.
-
-        Deliberately not the listening connection -- see the class docstring.
-        """
+        """Return the connection used for by-id fetches, opening it on first use."""
+        # Not the listening connection: that one is parked inside notifies(), and a query
+        # issued on it from within that loop never returns, wedging this thread for the
+        # rest of the run without so much as an exception.
         if self._fetch_conn is None or self._fetch_conn.closed:
             self._fetch_conn = connect(self._config.profile, self._config.endpoint_name, self._config.dbname)
         return self._fetch_conn

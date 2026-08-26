@@ -1,8 +1,7 @@
 """A fully offline topology: Generator -> Gateway -> Receiver over loopback buses, with
-a hand-built fetch_fn standing in for the Databricks fetch (same fixture rows as
-tests/test_testbench_gateway.py). No Databricks/Lakebase/Zerobus credentials needed --
-this is the topology to reach for to sanity-check the wiring/forwarding/capture path, or
-as a starting point for a new offline topology.
+a hand-built fetch_fn standing in for the Databricks fetch. No Databricks/Lakebase/
+Zerobus credentials needed -- this is the topology to reach for to sanity-check the
+wiring/forwarding/capture path, or as a starting point for a new offline topology.
 
 Run with:
     uv run --group testing python examples/bench/main.py --topology quickstart --duration 2

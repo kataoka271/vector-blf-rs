@@ -1,10 +1,6 @@
 """Whole-bench runs over loopback buses: a Generator -> Gateway -> Receiver topology
 end to end, plus the orchestration TestBench itself owns (one shared run epoch, a thread
-per Ecu, stopping a run early).
-
-This is the executable version of the "unify replay_bench + vecu_sdk into one TestBench"
-claim -- nothing here talks to Databricks, Lakebase, or Zerobus. `_fake_frames()` mirrors
-examples/testing/replay_bench/run_testbench.py's own dry-run fixture rows.
+per Ecu, stopping a run early). Nothing here talks to Databricks, Lakebase, or Zerobus.
 """
 
 from __future__ import annotations

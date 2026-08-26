@@ -2,16 +2,13 @@
 
 Transmit and receive sides are opened lazily -- a segment an Ecu only sends on never
 subscribes, and one it only listens to never opens a writer. This is also what keeps
-Zerobus usable for a send-only ReceiverEcu leg despite its Rx always raising: nothing
-ever calls open_rx() on it unless the Ecu itself registers a handler via `.on()`.
+Zerobus usable for a send-only ReceiverEcu leg despite its Rx always raising.
 
-A handle also does not deliver back what it sent itself. A CAN controller does not
-receive its own transmissions (python-can's `receive_own_messages`, which
-transport/device.py leaves False), but the other transports have no such notion: loopback
-fans a frame out to every receiver attached to the segment, and LakebaseRx reads back
-rows this same process INSERTed. Suppressing the echo here rather than per transport
-gives every bus segment the CAN semantics -- and is what stops a bidirectional
-`GatewayEcu` from forwarding its own output back and forth forever.
+A handle also does not deliver back what it sent itself, giving every bus segment CAN's
+"a controller doesn't receive its own transmissions" semantics even where the underlying
+transport has no such notion (loopback fans out to every receiver; LakebaseRx reads back
+its own INSERT). This is also what stops a bidirectional `GatewayEcu` from forwarding its
+own output back and forth forever.
 """
 
 from __future__ import annotations
@@ -28,10 +25,9 @@ if TYPE_CHECKING:
 
 Handler = Callable[[Frame], None]
 
-# How many recently-sent frames a handle remembers so it can recognise its own echo.
-# Bounded because a long run sends unboundedly many; an echo that arrives later than this
-# many frames after its own transmission would have to have been in flight for the whole
-# window, which no transport here does.
+# How many recently-sent frames a handle remembers, to recognise its own echo. Bounded
+# because a long run sends unboundedly many, and no transport here keeps a frame in flight
+# longer than this many frames' worth of time.
 SENT_MEMORY = 4096
 
 

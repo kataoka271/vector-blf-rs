@@ -1,22 +1,18 @@
 """Topology: a named, reusable way to build a `TestBench`.
 
-Before this module, `examples/bench/main.py` hardcoded one topology directly as
-imperative Python with no pattern for a second one. This is the same registry idiom
-`bench.bus.register_transport` uses for transports: adding a topology means writing
-`examples/bench/topologies/<name>.py` with a `build(config=None, run_id=None) -> TestBench`
-function (see `BuildFn` below) and calling `register_topology()` once -- not editing
-`main.py`. `discover()` imports every module under `topologies/` so each one's
-registration call actually runs; call it once (e.g. from `main.py`) before
-`get_topology()`/`list_topologies()`.
+The same registry idiom `bench.bus.register_transport` uses for transports: adding a
+topology means writing `examples/bench/topologies/<name>.py` with a
+`build(config=None, run_id=None) -> TestBench` function (see `BuildFn` below) and calling
+`register_topology()` once -- not editing `main.py`. `discover()` imports every module
+under `topologies/` so each one's registration call actually runs; call it once (e.g.
+from `main.py`) before `get_topology()`/`list_topologies()`.
 
-`config` is optional in `BuildFn` because that is how a caller holding only a `BuildFn`
-can actually call one: `main.py` resolves connection settings from the environment and
-gets nothing when a fully offline run leaves LAKEBASE_*/ZEROBUS_* unset, so it needs to
-be able to pass `None`. A topology that does need real credentials therefore cannot
-declare `config` required -- that would be a narrower parameter than the protocol allows
--- and instead states the requirement at runtime by calling `require_config()`, which
-raises `MissingConfig` for `main.py` to turn into a CLI error. Fully offline topologies
-(see topologies/quickstart.py) just ignore the argument.
+`config` is optional in `BuildFn` so a caller holding only a `BuildFn` can still call one
+when `main.py` resolves nothing from the environment (a fully offline run leaving
+LAKEBASE_*/ZEROBUS_* unset). A topology that needs real credentials states that at
+runtime via `require_config()`, which raises `MissingConfig` for `main.py` to turn into a
+CLI error, rather than declaring `config` required in its own signature. Fully offline
+topologies (see topologies/quickstart.py) just ignore the argument.
 """
 
 from __future__ import annotations

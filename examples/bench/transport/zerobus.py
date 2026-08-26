@@ -28,10 +28,9 @@ if TYPE_CHECKING:
 
     from bench.bus import Bus
 
-# catalog/schema/table are joined into an unquoted `catalog.schema.table` and handed to
-# Zerobus as one string, so a name carrying a dot, a backtick, or a space would silently
-# address a different table (or none). Unity Catalog allows a leading digit, unlike a
-# bare SQL identifier.
+# Joined unquoted into `catalog.schema.table` for Zerobus, so a dot/backtick/space in a
+# name would silently address a different table. Unity Catalog also allows a leading
+# digit, unlike a bare SQL identifier.
 _UC_NAME = re.compile(r"^[A-Za-z0-9_]+$")
 
 # workspace_id and region are interpolated into the endpoint hostname (see
@@ -41,12 +40,9 @@ _HOST_LABEL = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$")
 
 _NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
-# ZerobusConfig's `schema` field shadows BaseModel.schema(), pydantic v1's deprecated
-# JSON-schema classmethod, so pydantic warns when the class is created. The name is Unity
-# Catalog's own ("catalog.schema.table") and worth keeping; the method it shadows is
-# never called here and is scheduled for removal in pydantic v3. Instance access still
-# resolves to the field -- a classmethod is a non-data descriptor, so the instance
-# __dict__ wins over it.
+# ZerobusConfig.schema shadows pydantic v1's deprecated BaseModel.schema(), hence the
+# warning suppression. The name (Unity Catalog's "catalog.schema.table") is worth keeping;
+# instance access still resolves to the field since a classmethod is a non-data descriptor.
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", message='Field name "schema"', category=UserWarning)
 
@@ -130,11 +126,9 @@ def load_record_pb2():
     Generated protobuf code is a build artifact tied to the protobuf runtime version, so
     it is not checked in; this builds it on first use when grpc_tools is installed.
     Raises RuntimeError naming the manual command when that is not possible.
-
-    Uses importlib rather than a relative `from . import record_pb2` so a type checker
-    does not try (and fail) to statically resolve a module that exists only after a
-    build step -- see _generate_record_pb2() above.
     """
+    # importlib, not a relative `from . import record_pb2`, so a type checker does not
+    # try (and fail) to statically resolve a module that exists only after the build step.
     import importlib
 
     try:
@@ -155,13 +149,12 @@ def load_record_pb2():
 
 
 def _make_ack_ledger():
-    """Return an SDK AckCallback that counts server acknowledgements.
-
-    The subclass is built here rather than declared at module level because its base
-    class comes from the SDK, which this module imports lazily (see the module
-    docstring). One ledger is shared across a stream and its recreations, so a resent
-    record's acknowledgement lands in the same count as the original send.
+    """Return an SDK AckCallback that counts server acknowledgements. One ledger is
+    shared across a stream and its recreations, so a resent record's acknowledgement
+    lands in the same count as the original send.
     """
+    # Subclassed here, not at module level: the base class comes from the SDK, which this
+    # module imports lazily (see the module docstring).
     from zerobus.sdk.sync.zerobus_sdk import AckCallback
 
     class _AckLedger(AckCallback):
@@ -181,8 +174,6 @@ def _make_ack_ledger():
 class StreamFactory(Protocol):
     """How ZerobusStream obtains streams, builds records, and learns what was acked.
 
-    Separated from the durability policy in ZerobusStream so that policy can be
-    exercised without a gRPC endpoint -- the same seam LakebaseTx has for its writer.
     `recreate(old)` must carry `old`'s unacknowledged records over to the new stream,
     which is what makes recovery lossless, and `acked` must count one per record the
     server confirmed, across recreations.
@@ -212,10 +203,8 @@ class _SdkStreamFactory:
         from zerobus.sdk.sync import ZerobusSdk
 
         # auth_type is forced rather than left to unified-auth detection: Zerobus always
-        # needs service-principal M2M credentials (see the class docstring), and letting
-        # detection run would raise "more than one authorization method configured" the
-        # moment some other ambient credential (e.g. a DATABRICKS_TOKEN a Lakebase bus in
-        # the same process is using) is also present.
+        # needs M2M credentials, and detection would raise "more than one authorization
+        # method configured" if another ambient credential (e.g. a Lakebase bus's token) is present.
         dbx_cfg = (
             Config(profile=config.profile, auth_type="oauth-m2m") if config.profile else Config(auth_type="oauth-m2m")
         )
@@ -286,10 +275,9 @@ class ZerobusStream:
         return self._stream
 
     def _with_stream_retry(self, op):
-        # A long-running stream can go bad mid-run; recreate it once on any failure
-        # rather than silently losing the rest of the run's frames. It has to be
-        # recreate() and not create(): a brand-new stream would start with an empty
-        # buffer, discarding exactly the records the failing operation was carrying.
+        # Recreate the stream once on failure rather than silently losing the rest of the
+        # run's frames. Must be recreate(), not create() -- a fresh stream would start with
+        # an empty buffer, discarding the records in flight.
         try:
             return op()
         except Exception as exc:
@@ -308,24 +296,21 @@ class ZerobusStream:
     def flush(self) -> None:
         """Block until the server has acknowledged everything sent so far.
 
-        This cannot on its own prove the records got there. A stream that has already
-        broken flushes without complaining; acknowledgement callbacks lag flush() by
-        design (a 500-record flush returned with 460 counted, all 500 by close); and the
-        SDK's per-offset confirmation (`wait_for_offset`) is unusable, its Python wrapper
-        calling the Rust method without the `timeout_sec` argument that method requires.
-        close() is where every record is accounted for instead.
+        This cannot on its own prove the records got there: a broken stream flushes
+        without complaining, and acknowledgement callbacks lag flush() by design (a
+        500-record flush returned with 460 counted, all 500 by close). The SDK's
+        per-offset confirmation is unusable too (its Python wrapper omits a required
+        argument), which is why close() is where every record gets accounted for.
         """
         self._with_stream_retry(lambda: self._stream.flush())
 
     def close(self) -> None:
         """Flush pending records, close the stream, and account for every record.
 
-        An ingest onto a stream that has already broken reports it only through the
-        SDK's own log -- it raises nothing, and a subsequent flush() returns
-        successfully -- so without this accounting a dropped frame would be silent,
-        which is the one thing a bus transport here must never be (compare LakebaseTx,
-        whose write failure latches). Anything missing is resent by recreating the
-        stream, and what is still missing after that raises RuntimeError.
+        A broken stream reports nothing on its own -- ingest raises nothing and flush()
+        returns successfully -- so without this accounting a dropped frame would be
+        silent. Anything missing is resent by recreating the stream; what is still
+        missing after that raises RuntimeError.
         """
         missing = self._missing(self._flush_and_close(self._stream))
         if not missing:
@@ -340,13 +325,9 @@ class ZerobusStream:
 
     def _missing(self, unacked: int) -> int:
         """Return how many records are unaccounted for, on the more pessimistic of two
-        independent counts.
-
-        The SDK's own `unacked` covers what it still holds; the ledger's covers what it
-        dropped without ever holding -- which is the case that made this loss silent, so
-        neither count alone is enough. Both are only exact once the stream is closed:
-        that is when the SDK drains its acknowledgement callbacks, and the only state in
-        which it will answer `get_unacked_records()` at all.
+        independent counts: the SDK's own `unacked` (what it still holds) and the
+        ledger's (what it dropped without ever holding). Both are only exact once the
+        stream is closed.
         """
         return max(unacked, self._sent - self._factory.acked)
 

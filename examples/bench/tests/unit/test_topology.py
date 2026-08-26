@@ -82,11 +82,9 @@ def test_require_config_passes_a_real_config_through():
 
 
 def test_reference_topology_builds_without_touching_the_network():
-    # Building a Bus never opens a connection (open_tx()/open_rx() do that lazily), so
-    # this covers the topology's wiring without needing real Lakebase/Zerobus -- but
-    # ConnectionConfig's fields (database/catalog/schema/...) are required with no
-    # library-level default (see transport/connection.py), so this passes a config with
-    # those filled in rather than relying on the environment.
+    # Building a Bus never opens a connection (open_tx()/open_rx() do that lazily), so this
+    # covers the wiring without real Lakebase/Zerobus -- but ConnectionConfig's fields have
+    # no library-level default, so a filled-in config is passed rather than the environment.
     discover()
     config = ConnectionConfig(
         lakebase_database="d",

@@ -3,11 +3,9 @@
 their run loop is fetch-paced-send rather than reactive-drain, so they do not share
 Ecu.run()'s loop the way these three do.
 
-Deliberately simpler than examples/testing/vecu_sdk's Ecu: no manifest, no RunControl,
-no barrier or heartbeat. A TestBench wires each Ecu directly to already-constructed Bus
-objects at construction time, and TestBench.start() binds run_id/run_epoch_ns into every
-registered Ecu at once (`_bind()`) -- see the plan's "explicitly deferred" table for what
-this simplifies away.
+A TestBench wires each Ecu directly to already-constructed Bus objects at construction
+time, and TestBench.start() binds run_id/run_epoch_ns into every registered Ecu at once
+(`_bind()`).
 """
 
 from __future__ import annotations
@@ -28,14 +26,14 @@ DEFAULT_POLL_TIMEOUT = 0.05
 class Ecu:
     """One Ecu participating in one TestBench run.
 
-    Construct with the Bus objects it talks to (subclasses take them as named args,
-    e.g. `GatewayEcu(ch1=bus1, ch2=bus2)`); `run_id`/the clock are not resolved until
-    the owning TestBench calls `_bind()` from `start()`.
+    Construct with the Bus objects it talks to (subclasses take them as named args, e.g.
+    `GatewayEcu(ch1=bus1, ch2=bus2)`); `run_id`/the clock are not resolved until the
+    owning TestBench calls `_bind()` from `start()`.
 
-    `clock` (`bench.clock.WALL` or `.LOGICAL`) and `tick_hz` select which Clock this
-    Ecu gets once bound -- `LOGICAL` is what makes a signal-generating Ecu's output
-    byte-reproducible across runs regardless of scheduling jitter; see bench/clock.py.
-    `tick_hz` also sets the rate `run(on_tick=...)` fires at.
+    `clock` (`bench.clock.WALL` or `.LOGICAL`) and `tick_hz` select which Clock this Ecu
+    gets once bound -- `LOGICAL` makes a signal-generating Ecu's output byte-reproducible
+    regardless of scheduling jitter; see bench/clock.py. `tick_hz` also sets the rate
+    `run(on_tick=...)` fires at.
     """
 
     def __init__(self, name: str, *, clock: str = WALL, tick_hz: float = 1.0) -> None:
@@ -112,11 +110,7 @@ class Ecu:
 class GatewayEcu(Ecu):
     """Forwards every frame from `ch1` to `ch2` (and, with `bidirectional=True`, the
     other way too). Purely reactive -- no polling loop of its own beyond Ecu.run()'s
-    drain, matching the reference Gateway ECU pattern.
-
-    `bidirectional=True` relies on a handle not being handed back what it sent (see
-    bench/handle.py): both handlers are unconditional, so without that a forwarded frame
-    would arrive on the far segment and be forwarded straight back, forever.
+    drain.
     """
 
     def __init__(
@@ -138,7 +132,10 @@ class GatewayEcu(Ecu):
             print(f"[{self.name}] {ch1.name} -> {ch2.name}: {frame.data.hex()}", flush=True)
 
         if bidirectional:
-
+            # Both handlers are unconditional, so bidirectional forwarding relies on a
+            # handle not being handed back what it sent (see bench/handle.py) -- without
+            # that, a forwarded frame would arrive on the far segment and forward straight
+            # back, forever.
             @h2.on()
             def _forward_2_to_1(frame: Frame) -> None:
                 h1.forward(frame)
@@ -149,9 +146,7 @@ class ReceiverEcu(Ecu):
     """Captures every frame on `ch` and, if `zerobus` is given, uploads it.
 
     Zerobus is just another Bus (see bench.bus.Zerobus) rather than a special-cased
-    upload parameter, so the upload leg is only a second BusHandle -- this is also what
-    retires the separate Lakebase-to-Zerobus bridge process: this one Ecu both captures
-    and uploads, in-process.
+    upload parameter, so the upload leg is only a second BusHandle.
     """
 
     def __init__(
@@ -210,10 +205,6 @@ class ProxyEcu(Ecu):
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,
         should_stop: Callable[[], bool] = lambda: False,
     ) -> None:
-        # on_tick is accepted so this stays substitutable for Ecu.run(), and rejected
-        # rather than ignored: there is no tick loop here to fire it from (a socket is
-        # polled instead of a bus drained), so a caller passing one would otherwise
-        # watch it silently never fire.
         if on_tick is not None:
             raise TypeError(f"{type(self).__name__}.run() has no tick loop and does not support on_tick")
         if self.clock is None:

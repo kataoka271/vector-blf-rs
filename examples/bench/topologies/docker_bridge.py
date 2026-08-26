@@ -1,36 +1,14 @@
 """Two-container demo: a producer container and a consumer container that only ever
 talk to each other through a real Lakebase table and a real Zerobus stream -- no
-loopback bus, no shared process. This is what proves the Lakebase/Zerobus transports
-(examples/bench/transport/lakebase.py, .../zerobus.py) actually work across a process
-boundary, not just within one in-process TestBench like the `reference`/`quickstart`
-topologies do.
+loopback bus, no shared process.
 
     [producer container]                          [consumer container]
     GeneratorEcu --(bus, Lakebase table)-------->  ReceiverEcu --(Zerobus)--> Delta table
 
-`build_producer()` makes up its own frames (`_demo_frames`, below) instead of fetching
-from Databricks -- this demo only needs Lakebase + Zerobus credentials, not a populated
-blf_gold_signals/blf_silver_can to replay from. Pass a `fetch_fn`/`config` of your own
-(or reuse `bench.replay.GeneratorEcu`'s default Databricks fetch) for a real replay.
-
-Both containers must agree on:
-- the shared bus's Lakebase table name (`DOCKER_BUS_TABLE` env var, default
-  "bench_docker_bus") -- any bare identifier is a valid table name, so a producer/
-  consumer pair that disagrees doesn't error, it just silently talks past each other on
-  two distinct tables.
-- `--run-id` -- `LakebaseRx` only accepts frames whose envelope carries its own run_id.
-
-`LAKEBASE_DATABASE`/`ZEROBUS_CATALOG`/`ZEROBUS_SCHEMA` are required fields on
-ConnectionConfig with no library-level default (see transport/connection.py) --
-ConnectionConfig.from_environ() raises KeyError if any is unset, rather than silently
-landing on some default database/catalog/schema. Set them explicitly; the Zerobus table
-itself is a demo-level default here (`ZEROBUS_TABLE`, "blf_testbench_frames") rather than
-a ConnectionConfig field, since it's named per-bus via `zerobus_config(table=...)`.
-
-See examples/bench/docker-compose.yml, which passes both through to each service
-identically and requires the caller to set `RUN_ID` explicitly (a repeated run_id
-replays that id's entire history on every fresh consumer start -- see
-transport/lakebase.py's catch-up query -- so each demo run needs a fresh one).
+Both containers need LAKEBASE_*/ZEROBUS_* env vars and must agree on DOCKER_BUS_TABLE
+(default "bench_docker_bus") and `--run-id`; see docker-compose.yml, which passes both
+through identically. Each run needs a fresh RUN_ID -- a repeated one replays that id's
+entire history on every fresh consumer start.
 
 Run with (from the repo root):
     RUN_ID=$(python -c "import uuid; print(uuid.uuid4())") \\
@@ -49,6 +27,8 @@ from bench.replay import GeneratorEcu
 from bench.topology import register_topology, require_config
 from transport.connection import ConnectionConfig
 
+# Any bare identifier is a valid table name, so a producer/consumer pair that disagrees
+# on this doesn't error -- it silently talks past each other on two distinct tables.
 BUS_TABLE = os.environ.get("DOCKER_BUS_TABLE", "bench_docker_bus")
 ZEROBUS_TABLE = os.environ.get("ZEROBUS_TABLE", "blf_testbench_frames")
 
@@ -82,6 +62,8 @@ def build_producer(config: ConnectionConfig | None = None, run_id: str | None = 
     config = require_config(config, "docker-producer")
     bench = TestBench(run_id=run_id)
     bus = bench.add_bus(Lakebase(config.lakebase_config(table=BUS_TABLE), name=BUS_TABLE))
+    # _demo_frames rather than a real Databricks fetch, so this demo needs only
+    # Lakebase/Zerobus credentials, not a populated blf_gold_signals/blf_silver_can.
     bench.add_ecu(GeneratorEcu(ch=bus, fetch_fn=_demo_frames))
     return bench
 

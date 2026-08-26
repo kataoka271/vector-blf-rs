@@ -1,11 +1,7 @@
 """TestBench: the orchestrator. Owns the buses and Ecus for one run, assigns each bus a
 BLF channel number, binds a shared run_epoch_ns into every Ecu when the run starts, and
-drives each Ecu's run() loop on its own thread -- modeled directly on
-examples/testing/test_ecu/vecu/run_vecu_testbench.py's run_loopback(), which is the
-same "thread per Ecu, in-process, no barrier" pattern.
-
-`FilterSpec` (the Databricks-fetch filter) used to live in this module too, but it is a
-`bench.db`/`bench.replay` concern, not an orchestration one -- see bench/db.py.
+drives each Ecu's run() loop on its own thread -- one thread per Ecu, in-process, no
+barrier.
 """
 
 from __future__ import annotations

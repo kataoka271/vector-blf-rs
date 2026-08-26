@@ -87,10 +87,9 @@ def test_send_eth_produces_an_ethernet_frame():
 
 
 def test_an_ecu_does_not_receive_what_it_sent_itself():
-    # The CAN semantics every segment now has: a controller does not receive its own
-    # transmissions (python-can's receive_own_messages, False in transport/device.py),
-    # but loopback fans out to every attached receiver and LakebaseRx reads back its own
-    # INSERT, so BusHandle suppresses the echo.
+    # Every segment shares CAN's semantics: a controller doesn't receive its own transmissions
+    # (python-can's receive_own_messages=False), but loopback and LakebaseRx both echo a
+    # sender's own frame back to it, so BusHandle suppresses the echo.
     bus = make_bus("a", 1)
     ecu = make_ecu("talker")
     heard = []

@@ -2,16 +2,14 @@
 
 Every field except `lakebase_profile`/`zerobus_profile` is required, with no
 library-level default -- constructing a `ConnectionConfig` with one missing is a
-`TypeError` naming it, rather than silently falling back to some empty string or ambient
-environment variable. That is deliberate: two independently-constructed buses must never
-silently share a table or land on a randomly generated one (see `lakebase_config()`), and
-a wrong-but-present default (a stale catalog, someone else's endpoint) is worse than a
-loud failure at construction.
+`TypeError` naming it, rather than silently falling back to an empty string or ambient
+environment variable. A wrong-but-present default (a stale catalog, someone else's
+endpoint) is worse than a loud failure at construction.
 
 `from_environ()` builds one from LAKEBASE_*/ZEROBUS_* environment variables (profiles
-are optional there too); `from_yaml()` builds one from a YAML file's keys. Neither layers
-on top of the other or on top of ambient environment variables -- pick one source per
-process, unlike bench.db.ReplayConfig.from_yaml's env-fallback-on-missing-key behavior.
+optional there too); `from_yaml()` builds one from a YAML file's keys. Neither layers on
+top of the other or on top of ambient environment variables -- pick one source per
+process.
 """
 
 from __future__ import annotations
@@ -64,10 +62,8 @@ class ConnectionConfig:
         )
 
     def lakebase_config(self, *, table: str) -> LakebaseConfig:
-        """Return a LakebaseConfig for `table` using these connection settings.
-
-        Every Lakebase bus must name its own table explicitly (two independently-constructed buses must never silently
-        share one, or land on a randomly generated name)
+        """Return a LakebaseConfig for `table` using these connection settings. `table`
+        must be named explicitly by the caller (see the module docstring).
 
         Raises `pydantic.ValidationError` when a connection setting is blank or `table`
         is not a bare SQL identifier -- see LakebaseConfig.

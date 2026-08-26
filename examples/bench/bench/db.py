@@ -1,12 +1,10 @@
 """Databricks SQL Connector query helpers, and the adapter turning a fetched DataFrame
 into a paced list[Frame] for GeneratorEcu/ReplayEcu.
 
-Fetches the raw CAN frames to replay in two steps: (1) filter `blf_gold_signals` down to
-the (_source_file, channel, timestamp_ns) key set the configured FilterSpec selects, then
-(2) join that key set against `blf_silver_can` for the exact original frame bytes.
-`blf_gold_signals` only carries decoded signal_name/signal_value, not raw can_id/data, so
-sourcing the replay bytes from blf_silver_can replays the bit-exact original frames
-instead of re-encoding signal values.
+Fetches replay frames in two steps: (1) filter `blf_gold_signals` down to the
+(_source_file, channel, timestamp_ns) key set FilterSpec selects, then (2) join that key
+set against `blf_silver_can` for the exact original frame bytes -- blf_gold_signals only
+carries decoded signal_name/signal_value, not raw can_id/data.
 """
 
 from __future__ import annotations
@@ -125,11 +123,9 @@ def connect(dbx_cfg: Config):
     return sql.connect(
         server_hostname=dbx_cfg.host,
         http_path=f"/sql/1.0/warehouses/{dbx_cfg.warehouse_id}",
-        # sql.connect expects a CredentialsProvider: Callable[[], Callable[[], Dict[str, str]]].
-        # Config.authenticate is the inner header factory (calling it returns headers
-        # directly), so it must be wrapped, not passed bare -- passing it bare makes the
-        # connector call it once too many, then try to call the resulting headers dict as
-        # a function.
+        # sql.connect wants Callable[[], Callable[[], Dict]]; Config.authenticate is already
+        # the inner header factory, so it must be wrapped -- passed bare, the connector
+        # calls it once too many and tries to call the resulting headers dict.
         credentials_provider=lambda: dbx_cfg.authenticate,
     )
 
@@ -138,10 +134,9 @@ def fetch_replay_frames(cfg: ReplayConfig, dbx_cfg: Config | None = None) -> pd.
     """Return the raw CAN frames matching cfg.filter, ordered by timestamp_ns.
 
     Columns: timestamp_ns, timestamp_s, channel, can_id, is_ext_id, rtr, dlc, data, dir,
-    message_type. message_type ("CAN"/"CAN_FD"/"CAN_FD64") is the pipeline's own
-    is-this-FD determination (from the original BLF object type), not something
-    re-derived from dlc -- a CAN-FD frame with an 8-byte-or-smaller payload has the same
-    raw dlc code as classic CAN, so dlc alone cannot tell them apart.
+    message_type. message_type ("CAN"/"CAN_FD"/"CAN_FD64") comes from the pipeline's own
+    is-this-FD determination, not from dlc -- a CAN-FD frame with an 8-byte-or-smaller
+    payload has the same raw dlc code as classic CAN.
     """
     dbx_cfg = dbx_cfg or Config()
     where, params = cfg.filter.build_where()
@@ -189,14 +184,10 @@ def wait_for_ingestion(
 ) -> int:
     """Block until `source_file` has at least `expected_count` rows in blf_gold_signals.
 
-    A captured frame only becomes usable as a filter for a downstream Ecu once
-    blf_ingestion has streamed it through blf_bronze -> blf_silver_can_signals ->
-    blf_gold_signals, which lags the Zerobus upload by the pipeline's own latency. This
-    polls rather than blocking on the upload itself, since Zerobus Ingest acknowledges a
-    write once Delta has it, not once blf_ingestion has read it.
-
-    `expected_count <= 0` returns 0 immediately. Raises TimeoutError if `expected_count`
-    is not reached within `timeout_s`.
+    Polls rather than blocking on the Zerobus upload itself, since that acknowledges a
+    write once Delta has it, not once blf_ingestion has streamed it through to
+    blf_gold_signals. `expected_count <= 0` returns 0 immediately. Raises TimeoutError if
+    `expected_count` is not reached within `timeout_s`.
     """
     if expected_count <= 0:
         return 0
@@ -216,13 +207,10 @@ def wait_for_ingestion(
 def to_frames(df: pd.DataFrame, *, run_id: str, source_file: str, channel: int) -> list[Frame]:
     """Convert fetch_replay_frames' rows into a paced list[Frame].
 
-    `timestamp_ns` on each Frame is set to its relative offset from the first row (so
-    consecutive frames' timestamp_ns deltas reproduce the recorded gaps, in nanoseconds,
-    for a caller to sleep by) -- this is the replay's relative position, not when it is
-    actually sent. `observed_ns` is left at 0 as a placeholder: the caller should
-    re-stamp each frame via `frame.forwarded(channel=frame.channel)` right before
-    sending, so `observed_ns` reflects the actual wall-clock instant it went out rather
-    than the instant this conversion ran.
+    `timestamp_ns` on each Frame is its relative offset (ns) from the first row, for a
+    caller to sleep by -- not when it is actually sent. `observed_ns` is left at 0; the
+    caller must re-stamp each frame via `frame.forwarded(channel=frame.channel)` right
+    before sending, so it reflects the actual wall-clock send instant.
     """
     if df.empty:
         return []

@@ -9,12 +9,11 @@ The suite is split into three tiers, one directory each:
 * `online/` -- a real Databricks workspace: Lakebase authentication and writes, Zerobus
   ingest. Skipped unless `BENCH_ONLINE=1`; see `online/conftest.py`.
 
-What is deliberately *not* tested anywhere here: anything a type checker already proves.
-`uv run ty check` rejects a missing or misspelled constructor argument and a class that
-does not satisfy `Clock`/`ChannelTx`/`ChannelRx`, so a test asserting the same thing at
-runtime only restates the annotation. Tests here cover behaviour a type checker cannot
-see: runtime validation of *values* (a blank string, a table name that is not a bare
-identifier), dispatch decided by a string key, SQL text, wire encodings, and timing.
+What is deliberately *not* tested anywhere here: anything a type checker already proves
+(`uv run ty check` rejects a missing/misspelled constructor argument or a class that does
+not satisfy `Clock`/`ChannelTx`/`ChannelRx`). Tests here cover behaviour a type checker
+cannot see: runtime validation of *values*, dispatch decided by a string key, SQL text,
+wire encodings, and timing.
 """
 
 from __future__ import annotations

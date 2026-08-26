@@ -1,22 +1,21 @@
 """Gating and shared fixtures for the online tier: tests that authenticate against a real
 Databricks workspace and write to it.
 
-They are opt-in. Set `BENCH_ONLINE=1` to run them:
+Opt-in. Set `BENCH_ONLINE=1` to run them:
 
     BENCH_ONLINE=1 uv run --group testing pytest examples/bench/tests/online -v
 
-Without it every test here skips, so `uv run pytest` stays offline and hermetic. They are
+Without it every test here skips, so `uv run pytest` stays offline and hermetic; they are
 also marked `online`, so `-m "not online"` excludes them explicitly.
 
-Connection settings come from `ConnectionConfig.from_environ()` -- the same
-LAKEBASE_*/ZEROBUS_* variables `main.py` reads -- so running this tier exercises the real
-configuration path rather than a test-only one. `examples/bench/.env` is loaded first for
-any variable not already set in the environment, matching what docker-compose.yml reads.
+Connection settings come from `ConnectionConfig.from_environ()`, the same
+LAKEBASE_*/ZEROBUS_* variables `main.py` reads. `examples/bench/.env` is loaded first for
+any variable not already set in the environment, matching docker-compose.yml.
 
 Everything these tests create is cleaned up: the Lakebase tier writes to a table named
 per run and drops it, and the Zerobus tier deletes its own rows by run_id. The Zerobus
-write test therefore requires a SQL warehouse (DATABRICKS_WAREHOUSE_ID) and skips without
-one, rather than leaving rows behind that it cannot remove.
+write test requires a SQL warehouse (DATABRICKS_WAREHOUSE_ID) and skips without one,
+rather than leaving rows it cannot remove.
 """
 
 from __future__ import annotations

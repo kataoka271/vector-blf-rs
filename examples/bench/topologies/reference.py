@@ -1,6 +1,4 @@
-"""The reference topology: a minimal, unified rewrite of examples/testing's
-replay_bench + vecu_sdk systems (see the plan this was built from, and
-examples/testing/README.md for the two systems being unified).
+"""The reference topology (see examples/testing/README.md for prerequisites):
 
     Generator --(bus1, Lakebase)--> Gateway --(bus2, Lakebase)--> Receiver --> Zerobus
                                         ^                            ^
@@ -19,16 +17,10 @@ examples/testing/README.md for the two systems being unified).
 Run with:
     uv run --group testing python examples/bench/main.py --topology reference
 
-Requires a working Databricks/Lakebase/Zerobus setup (see examples/testing/README.md's
-prerequisites -- examples/bench does not duplicate that setup documentation). `build()`
-takes the registry's optional `config` and rejects a missing one via `require_config()`
-(see bench/topology.py) -- main.py resolves one from LAKEBASE_*/ZEROBUS_* environment
-variables (see ConnectionConfig.from_environ) by default, or `--connection-config
-<path.yaml>` on the CLI to load them from a file instead. For a network-free smoke
-test, see the `quickstart` topology
-(topologies/quickstart.py) or examples/bench/tests/test_testbench_gateway.py, which
-drive the same wiring/forwarding/capture path over loopback buses with a hand-built
-fetch_fn instead.
+Requires a working Databricks/Lakebase/Zerobus setup. `build()` rejects a missing
+`config` via `require_config()` (see bench/topology.py); main.py resolves one from
+LAKEBASE_*/ZEROBUS_* environment variables by default, or `--connection-config
+<path.yaml>`. For a network-free smoke test, see the `quickstart` topology instead.
 """
 
 from __future__ import annotations

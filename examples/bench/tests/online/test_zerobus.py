@@ -2,19 +2,16 @@
 the real Ingest endpoint, and rows actually landing in the target Delta table.
 
 Zerobus is Ingest-only, so there is no receive side to read back with -- the write is
-verified with a SQL query through a warehouse, which is also how the rows are cleaned up
-afterwards. Both are keyed on this run's own run_id, so nothing else in the table is
-touched.
+verified and cleaned up with a SQL query through a warehouse, both keyed on this run's
+own run_id.
 
 The target table is `ZEROBUS_CATALOG.ZEROBUS_SCHEMA.<ZEROBUS_TABLE>` (default
 `blf_testbench_frames`, the same table topologies/reference.py uploads to). It must
 already exist as a MANAGED table whose columns match transport/record.proto.
 
-The last test deliberately reproduces the SDK hazard the durability accounting in
-`ZerobusStream.close()` exists for: a stream opened after an earlier one in the same
-process was closed can have its records silently dropped. The plain write test runs
-first, before anything in this process has opened a stream, so the two are not testing
-the same path.
+The last test deliberately reproduces the SDK hazard `ZerobusStream.close()`'s
+durability accounting exists for (see its docstring); it runs after the plain write
+test, since closing that test's stream is what breaks the next one.
 """
 
 from __future__ import annotations

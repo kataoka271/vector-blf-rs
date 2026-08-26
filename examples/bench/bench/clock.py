@@ -1,24 +1,18 @@
 """The run clock: how an Ecu decides the `timestamp_ns` it stamps on a frame.
 
 Every frame carries two times. `observed_ns` is always the real wall clock at the hop
-that produced it, which is what makes per-hop latency measurable. `timestamp_ns` is the
-run-relative time the log is indexed by, and that is what these classes decide.
+that produced it. `timestamp_ns` is the run-relative time the log is indexed by, and
+that is what these classes decide.
 
-`WallClock` derives it from the shared `run_epoch_ns` a TestBench hands out when it
-starts. Across development environments that leaves NTP skew (typically well under
-50 ms) in the merged log -- the same order as the delivery latency itself, so it is
-usually fine. Default.
-
-`LogicalClock` derives it from the tick index instead, so the same scenario produces
-byte-identical timestamps on every replay regardless of network jitter or how loaded the
-machine was. `observed_ns` stays real on both clocks -- it measures the delivery path,
-which is a property of the deployment and not of the simulation. Use `LogicalClock`
-whenever a run's output is compared against a stored baseline or another run
-(reproducible regression comparisons).
+`WallClock` (default) derives it from the shared `run_epoch_ns` a TestBench hands out
+when it starts -- leaves typical NTP skew (well under 50ms) in the merged log, usually
+fine. `LogicalClock` derives it from the tick index instead, so a replayed scenario
+produces byte-identical timestamps regardless of network jitter or machine load; use it
+whenever a run's output is compared against a stored baseline or another run.
+`observed_ns` stays real on both clocks.
 
 Both clocks also schedule ticks (`tick()`/`next_tick_due_ns()`/`sleep_until_next_tick()`),
-which is what `Ecu.run()`'s `on_tick` callback uses to fire at a steady rate -- e.g. for
-an Ecu that generates its own signals rather than replaying or forwarding traffic.
+which is what `Ecu.run()`'s `on_tick` callback uses to fire at a steady rate.
 """
 
 from __future__ import annotations

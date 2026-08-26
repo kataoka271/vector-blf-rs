@@ -13,7 +13,6 @@ import threading
 import time
 
 import pandas as pd
-import pytest
 from bench.bench import TestBench
 from bench.bus import Loopback
 from bench.ecu import Ecu, GatewayEcu, ReceiverEcu
@@ -86,17 +85,6 @@ def test_generator_gateway_receiver_over_loopback():
     assert all(f.run_id == RUN_ID for f in receiver.captured)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GatewayEcu(bidirectional=True) echoes forever: a forwarded frame comes straight"
-        " back to the same gateway's receiver on the far segment and is forwarded again."
-        " No transport suppresses a frame an Ecu sent itself (loopback fans out to every"
-        " attached receiver, LakebaseRx reads back its own INSERT) and a forwarded frame"
-        " carries no already-seen marker, so this is a hole in bench/ecu.py, not in the"
-        " transports. Unmark once one side of that is fixed."
-    ),
-)
 def test_a_bidirectional_gateway_forwards_the_return_path_exactly_once():
     bench = TestBench(run_id=RUN_ID)
     bus1 = bench.add_bus(Loopback())

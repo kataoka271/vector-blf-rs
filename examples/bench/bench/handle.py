@@ -4,6 +4,14 @@ Transmit and receive sides are opened lazily -- a segment an Ecu only sends on n
 subscribes, and one it only listens to never opens a writer. This is also what keeps
 Zerobus usable for a send-only ReceiverEcu leg despite its Rx always raising: nothing
 ever calls open_rx() on it unless the Ecu itself registers a handler via `.on()`.
+
+A handle also does not deliver back what it sent itself. A CAN controller does not
+receive its own transmissions (python-can's `receive_own_messages`, which
+transport/device.py leaves False), but the other transports have no such notion: loopback
+fans a frame out to every receiver attached to the segment, and LakebaseRx reads back
+rows this same process INSERTed. Suppressing the echo here rather than per transport
+gives every bus segment the CAN semantics -- and is what stops a bidirectional
+`GatewayEcu` from forwarding its own output back and forth forever.
 """
 
 from __future__ import annotations
@@ -19,6 +27,12 @@ if TYPE_CHECKING:
     from bench.ecu import Ecu
 
 Handler = Callable[[Frame], None]
+
+# How many recently-sent frames a handle remembers so it can recognise its own echo.
+# Bounded because a long run sends unboundedly many; an echo that arrives later than this
+# many frames after its own transmission would have to have been in flight for the whole
+# window, which no transport here does.
+SENT_MEMORY = 4096
 
 
 class _Subscription:
@@ -44,6 +58,8 @@ class BusHandle:
         self._tx = None
         self._rx = None
         self._subscriptions: list[_Subscription] = []
+        # Insertion-ordered, so the oldest key is the one evicted past SENT_MEMORY.
+        self._sent: dict[tuple, None] = {}
 
     @property
     def channel(self) -> int:
@@ -83,9 +99,10 @@ class BusHandle:
         return decorator
 
     def send(self, frame: Frame) -> None:
-        """Transmit `frame` as-is."""
+        """Transmit `frame` as-is. It will not be delivered back to this handle."""
         if self._tx is None:
             self._tx = self.bus.open_tx()
+        self._remember_sent(frame)
         self._tx.send(frame)
 
     def forward(self, frame: Frame) -> None:
@@ -161,18 +178,40 @@ class BusHandle:
         )
 
     def drain(self, timeout: float) -> int:
-        """Poll the receiver once and dispatch what it returns. Returns the frame count.
+        """Poll the receiver once and dispatch what it returns. Returns the number of
+        frames dispatched, which excludes this handle's own echoed transmissions.
 
         Returns 0 without blocking when this segment has no subscriptions.
         """
         if self._rx is None:
             return 0
-        frames = self._rx.poll(timeout=timeout)
-        for frame in frames:
+        dispatched = 0
+        for frame in self._rx.poll(timeout=timeout):
+            if self._is_own_echo(frame):
+                continue
+            dispatched += 1
             for sub in self._subscriptions:
                 if sub.matches(frame):
                     sub.handler(frame)
-        return len(frames)
+        return dispatched
+
+    def _remember_sent(self, frame: Frame) -> None:
+        self._sent[frame.hop_key()] = None
+        if len(self._sent) > SENT_MEMORY:
+            del self._sent[next(iter(self._sent))]
+
+    def _is_own_echo(self, frame: Frame) -> bool:
+        """Return whether `frame` is one this handle transmitted, coming back.
+
+        The key is dropped once matched, so this suppresses exactly one echo per
+        transmission: a second frame that happens to be byte-identical -- a genuine
+        retransmission by someone else -- is still delivered.
+        """
+        key = frame.hop_key()
+        if key not in self._sent:
+            return False
+        del self._sent[key]
+        return True
 
     def close(self) -> None:
         for side in (self._tx, self._rx):

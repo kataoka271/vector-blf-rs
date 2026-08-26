@@ -86,6 +86,55 @@ def test_send_eth_produces_an_ethernet_frame():
     assert frame.channel == 2
 
 
+def test_an_ecu_does_not_receive_what_it_sent_itself():
+    # The CAN semantics every segment now has: a controller does not receive its own
+    # transmissions (python-can's receive_own_messages, False in transport/device.py),
+    # but loopback fans out to every attached receiver and LakebaseRx reads back its own
+    # INSERT, so BusHandle suppresses the echo.
+    bus = make_bus("a", 1)
+    ecu = make_ecu("talker")
+    heard = []
+    ecu.handle(bus).on()(heard.append)
+    ecu.handle(bus).subscribe()
+
+    ecu.handle(bus).send_can(0x310, b"\x00")
+    assert ecu.handle(bus).drain(timeout=0.05) == 0
+    assert heard == []
+    ecu.close()
+
+
+def test_another_ecu_on_the_segment_still_receives_it():
+    bus = make_bus("a", 1)
+    talker, listener = make_ecu("talker"), make_ecu("listener")
+    heard = []
+    listener.handle(bus).on()(heard.append)
+    listener.handle(bus).subscribe()
+
+    talker.handle(bus).send_can(0x310, b"\x00")
+    listener.handle(bus).drain(timeout=0.05)
+    assert [f.can_id for f in heard] == [0x310]
+    talker.close()
+    listener.close()
+
+
+def test_only_one_echo_is_suppressed_per_transmission():
+    # Suppression is per sent frame, not a standing filter: a byte-identical frame from
+    # somewhere else is somebody's real traffic and must still be delivered.
+    bus = make_bus("a", 1)
+    ecu, other = make_ecu("talker"), make_ecu("other")
+    heard = []
+    ecu.handle(bus).on()(heard.append)
+    ecu.handle(bus).subscribe()
+
+    sent = ecu.handle(bus).send_can(0x310, b"\x00")
+    other.handle(bus).send(sent)  # the same frame, from another Ecu
+    ecu.handle(bus).drain(timeout=0.05)
+
+    assert [f.can_id for f in heard] == [0x310]
+    ecu.close()
+    other.close()
+
+
 def test_handlers_receive_only_matching_frames():
     bus = make_bus("a", 1)
     producer, consumer = make_ecu("generator"), make_ecu("receiver")

@@ -113,6 +113,10 @@ class GatewayEcu(Ecu):
     """Forwards every frame from `ch1` to `ch2` (and, with `bidirectional=True`, the
     other way too). Purely reactive -- no polling loop of its own beyond Ecu.run()'s
     drain, matching the reference Gateway ECU pattern.
+
+    `bidirectional=True` relies on a handle not being handed back what it sent (see
+    bench/handle.py): both handlers are unconditional, so without that a forwarded frame
+    would arrive on the far segment and be forwarded straight back, forever.
     """
 
     def __init__(

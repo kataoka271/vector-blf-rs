@@ -6,7 +6,7 @@ Zerobus is Ingest-only -- there is no subscribe/receive API -- so this module on
 backs the transmit side of a bus (`ZerobusTx`); `ZerobusRx.poll()` raises
 NotImplementedError. Use Lakebase or loopback for ECU-to-ECU receive.
 
-`databricks.sdk`/`zerobus.sdk` are imported lazily inside `ZerobusStream.__init__`, not
+`databricks.sdk`/`zerobus.sdk` are imported lazily inside `_SdkStreamFactory.__init__`, not
 at module level, so constructing a `ZerobusConfig` never requires either package to be
 installed.
 """
@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 import warnings
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Protocol
 
 from bench.frame import Frame
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo, field_validator
@@ -154,17 +154,56 @@ def load_record_pb2():
     )
 
 
-class ZerobusStream:
-    """One Zerobus Ingest protobuf stream into `catalog.schema.table`.
+def _make_ack_ledger():
+    """Return an SDK AckCallback that counts server acknowledgements.
+
+    The subclass is built here rather than declared at module level because its base
+    class comes from the SDK, which this module imports lazily (see the module
+    docstring). One ledger is shared across a stream and its recreations, so a resent
+    record's acknowledgement lands in the same count as the original send.
+    """
+    from zerobus.sdk.sync.zerobus_sdk import AckCallback
+
+    class _AckLedger(AckCallback):
+        def __init__(self) -> None:
+            super().__init__()
+            self.acked = 0
+
+        def on_ack(self, offset: int) -> None:
+            self.acked += 1
+
+        def on_error(self, offset: int, error_message: str) -> None:
+            print(f"[bench] zerobus: record at offset {offset} rejected: {error_message}", flush=True)
+
+    return _AckLedger()
+
+
+class StreamFactory(Protocol):
+    """How ZerobusStream obtains streams, builds records, and learns what was acked.
+
+    Separated from the durability policy in ZerobusStream so that policy can be
+    exercised without a gRPC endpoint -- the same seam LakebaseTx has for its writer.
+    `recreate(old)` must carry `old`'s unacknowledged records over to the new stream,
+    which is what makes recovery lossless, and `acked` must count one per record the
+    server confirmed, across recreations.
+    """
+
+    @property
+    def acked(self) -> int: ...
+
+    def create(self): ...
+    def recreate(self, old): ...
+    def build_record(self, frame: Frame): ...
+
+
+class _SdkStreamFactory:
+    """The real thing: opens Zerobus Ingest streams into one `catalog.schema.table`.
 
     Credentials are OAuth service-principal client id/secret, not the bearer token the
     Databricks SQL connector uses; resolved from `config.client_id`/`client_secret` or,
     when unset, from the ambient `databricks.sdk.core.Config` (DATABRICKS_CLIENT_ID /
     DATABRICKS_CLIENT_SECRET, or `config.profile`). Raises RuntimeError when no client
     credentials are found.
-
-    `record()` is fire-and-forget; call `flush()` to bound the delay before rows become
-    SQL-visible, and `close()` before exiting.
     """
 
     def __init__(self, config: ZerobusConfig) -> None:
@@ -189,24 +228,73 @@ class ZerobusStream:
                 " DATABRICKS_CLIENT_SECRET in the environment."
             )
         self._pb = load_record_pb2()
-        self._table = f"{config.catalog}.{config.schema}.{config.table}"
-        sdk = ZerobusSdk(config.endpoint, dbx_cfg.host)
-        self._create_stream = lambda: sdk.create_stream(
-            client_id,
-            client_secret,
-            TableProperties(self._table, self._pb.TestbenchFrame.DESCRIPTOR),
-            StreamConfigurationOptions(record_type=RecordType.PROTO),
+        self.table = f"{config.catalog}.{config.schema}.{config.table}"
+        self._sdk = ZerobusSdk(config.endpoint, dbx_cfg.host)
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._table_properties = TableProperties(self.table, self._pb.TestbenchFrame.DESCRIPTOR)
+        self._ledger = _make_ack_ledger()
+        self._options = StreamConfigurationOptions(record_type=RecordType.PROTO, ack_callback=self._ledger)
+
+    @property
+    def acked(self) -> int:
+        return self._ledger.acked
+
+    def create(self):
+        return self._sdk.create_stream(
+            self._client_id,
+            self._client_secret,
+            self._table_properties,
+            self._options,
         )
-        self._stream = self._create_stream()
+
+    def recreate(self, old):
+        """Return a new stream re-ingesting whatever `old` never got acknowledged.
+
+        `recreate_stream` requires a closed stream, so `old` is closed first; it may
+        already be closed (that is the usual case here), which is why the failure is
+        ignored.
+        """
+        try:
+            old.close()
+        except Exception:
+            pass
+        return self._sdk.recreate_stream(old)
+
+    def build_record(self, frame: Frame):
+        return self._pb.TestbenchFrame(**frame.to_row())
+
+
+class ZerobusStream:
+    """One Zerobus Ingest protobuf stream into `catalog.schema.table`, with the
+    guarantee that a frame it accepted is never lost silently.
+
+    `record()` is fire-and-forget; call `flush()` to bound the delay before rows become
+    SQL-visible, and `close()` before exiting -- `close()` is where an unacknowledged
+    record is caught, and it raises rather than returning quietly (see its docstring).
+    """
+
+    def __init__(self, config: ZerobusConfig, *, factory: StreamFactory | None = None) -> None:
+        self._factory = factory or _SdkStreamFactory(config)
+        self._table = f"{config.catalog}.{config.schema}.{config.table}"
+        self._stream = self._factory.create()
+        self._sent = 0
+
+    def _recover(self):
+        """Replace the current stream with one re-ingesting its unacknowledged records."""
+        self._stream = self._factory.recreate(self._stream)
+        return self._stream
 
     def _with_stream_retry(self, op):
         # A long-running stream can go bad mid-run; recreate it once on any failure
-        # rather than silently losing the rest of the run's frames.
+        # rather than silently losing the rest of the run's frames. It has to be
+        # recreate() and not create(): a brand-new stream would start with an empty
+        # buffer, discarding exactly the records the failing operation was carrying.
         try:
             return op()
         except Exception as exc:
             print(f"[bench] zerobus {self._table}: {exc!r}; recreating stream and retrying once", flush=True)
-            self._stream = self._create_stream()
+            self._recover()
             return op()
 
     def record(self, frame: Frame) -> None:
@@ -214,16 +302,70 @@ class ZerobusStream:
         None-valued variant fields, so a CAN frame simply leaves the Ethernet columns
         unset.
         """
-        self._with_stream_retry(lambda: self._stream.ingest_record_nowait(self._pb.TestbenchFrame(**frame.to_row())))
+        self._with_stream_retry(lambda: self._stream.ingest_record_nowait(self._factory.build_record(frame)))
+        self._sent += 1
 
     def flush(self) -> None:
-        """Block until the server has acknowledged everything sent so far."""
+        """Block until the server has acknowledged everything sent so far.
+
+        This cannot on its own prove the records got there. A stream that has already
+        broken flushes without complaining; acknowledgement callbacks lag flush() by
+        design (a 500-record flush returned with 460 counted, all 500 by close); and the
+        SDK's per-offset confirmation (`wait_for_offset`) is unusable, its Python wrapper
+        calling the Rust method without the `timeout_sec` argument that method requires.
+        close() is where every record is accounted for instead.
+        """
         self._with_stream_retry(lambda: self._stream.flush())
 
     def close(self) -> None:
-        """Flush pending records and close the stream."""
-        self._stream.flush()
-        self._stream.close()
+        """Flush pending records, close the stream, and account for every record.
+
+        An ingest onto a stream that has already broken reports it only through the
+        SDK's own log -- it raises nothing, and a subsequent flush() returns
+        successfully -- so without this accounting a dropped frame would be silent,
+        which is the one thing a bus transport here must never be (compare LakebaseTx,
+        whose write failure latches). Anything missing is resent by recreating the
+        stream, and what is still missing after that raises RuntimeError.
+        """
+        missing = self._missing(self._flush_and_close(self._stream))
+        if not missing:
+            return
+        print(
+            f"[bench] zerobus {self._table}: {missing} record(s) unaccounted for; recreating stream to resend",
+            flush=True,
+        )
+        remaining = self._missing(self._flush_and_close(self._recover()))
+        if remaining:
+            raise RuntimeError(f"zerobus {self._table}: {remaining} record(s) were never acknowledged and are lost")
+
+    def _missing(self, unacked: int) -> int:
+        """Return how many records are unaccounted for, on the more pessimistic of two
+        independent counts.
+
+        The SDK's own `unacked` covers what it still holds; the ledger's covers what it
+        dropped without ever holding -- which is the case that made this loss silent, so
+        neither count alone is enough. Both are only exact once the stream is closed:
+        that is when the SDK drains its acknowledgement callbacks, and the only state in
+        which it will answer `get_unacked_records()` at all.
+        """
+        return max(unacked, self._sent - self._factory.acked)
+
+    @staticmethod
+    def _flush_and_close(stream) -> int:
+        """Flush and close `stream`, returning how many records it never got acked.
+
+        A flush that raises is not fatal here: the point of closing is to find out what
+        was lost, and `get_unacked_records()` only answers once the stream is closed.
+        """
+        try:
+            stream.flush()
+        except Exception as exc:
+            print(f"[bench] zerobus: flush before close failed ({exc!r}); closing to count what was lost", flush=True)
+        try:
+            stream.close()
+        except Exception:
+            pass
+        return sum(1 for _ in stream.get_unacked_records())
 
 
 class ZerobusTx:

@@ -85,6 +85,10 @@ _JSON_KEYS_INVERSE = {v: k for k, v in _JSON_KEYS.items()}
 # Fields carried as base64 strings in JSON rather than as-is.
 _BINARY_FIELDS = ("data", "src_addr", "dst_addr")
 
+# The two fields `forwarded()` re-stamps at each hop, and so the two Frame.hop_key()
+# leaves out.
+_HOP_VARYING = ("channel", "observed_ns")
+
 DIR_TX = 0
 DIR_RX = 1
 DIR_TX_RQ = 2
@@ -200,6 +204,20 @@ class Frame:
             channel=channel,
             observed_ns=time.time_ns() if observed_ns is None else observed_ns,
         )
+
+    def hop_key(self) -> tuple:
+        """Return an identity for this frame that survives forwarding.
+
+        `forwarded()` re-stamps exactly `channel` and `observed_ns`, so every other field
+        together identifies the same frame at any hop. This is the (run_id, can_id,
+        timestamp_ns) correlation key the module docstring describes, widened to the whole
+        record so that two frames a LogicalClock stamped within one tick -- identical
+        timestamp_ns, different payloads -- do not collide.
+
+        Used to recognise a frame an Ecu put on a segment itself when it comes back (see
+        bench/handle.py).
+        """
+        return tuple(getattr(self, name) for name in FRAME_COLUMNS if name not in _HOP_VARYING)
 
 
 def make_can_frame(

@@ -495,6 +495,13 @@ class LakebaseRx:
     """Receive side of a Lakebase channel: LISTEN on a background thread, with a
     catch-up SELECT on every (re)connect and id-based dedup, since NOTIFY is
     fire-and-forget and can drop or duplicate around a reconnect.
+
+    A batch too large to travel inside its notification is fetched by row id on a second
+    connection, opened on first use. It cannot share the listening connection: that one
+    is parked inside `notifies()`, and a query issued on it from within that loop never
+    returns, which would wedge this thread for the rest of the run without so much as an
+    exception. The catch-up query does run on the listening connection, but only before
+    the loop is entered.
     """
 
     def __init__(
@@ -517,6 +524,7 @@ class LakebaseRx:
         self._watermark = 0
         self._stop = threading.Event()
         self._conn = None
+        self._fetch_conn = None
         if create_schema:
             # Create the table before the listener thread can race an unprovisioned
             # database: the transmitting Ecu may not have started yet.
@@ -550,6 +558,7 @@ class LakebaseRx:
             except Exception:
                 pass
         self._thread.join(timeout=5.0)
+        self._close_fetch_conn()
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -561,27 +570,47 @@ class LakebaseRx:
                 self._conn.execute(sql(f'LISTEN "{self._channel}"'))
                 self._catch_up(self._conn)
                 for notify in self._conn.notifies():
-                    self._on_notify(self._conn, notify.payload)
+                    self._on_notify(notify.payload)
                     if self._stop.is_set():
                         return
             except Exception as exc:
                 if self._stop.is_set():
                     return
                 print(f"[bench] lakebase rx {self._table}: {exc!r}; reconnecting", flush=True)
+                # Whatever went wrong may have been the fetch connection; drop it too so
+                # the next notification opens a fresh one.
+                self._close_fetch_conn()
                 self._stop.wait(1.0)
 
     def _catch_up(self, conn) -> None:
         cur = conn.execute(sql(catchup_sql(self._table)), (self._run_id, self._watermark, CATCHUP_LOOKBACK_SECONDS))
         self._emit(cur.fetchall())
 
-    def _on_notify(self, conn, payload: str) -> None:
+    def _fetch_connection(self):
+        """Return the connection used for by-id fetches, opening it on first use.
+
+        Deliberately not the listening connection -- see the class docstring.
+        """
+        if self._fetch_conn is None or self._fetch_conn.closed:
+            self._fetch_conn = connect(self._config.profile, self._config.endpoint_name, self._config.dbname)
+        return self._fetch_conn
+
+    def _close_fetch_conn(self) -> None:
+        if self._fetch_conn is not None:
+            try:
+                self._fetch_conn.close()
+            except Exception:
+                pass
+            self._fetch_conn = None
+
+    def _on_notify(self, payload: str) -> None:
         envelope = parse_envelope(payload)
         if envelope["run_id"] != self._run_id:
             return
         if envelope["frames"] is not None:
             self._emit_inline(envelope["ids"], envelope["frames"])
             return
-        cur = conn.execute(sql(fetch_ids_sql(self._table)), (self._run_id, envelope["ids"]))
+        cur = self._fetch_connection().execute(sql(fetch_ids_sql(self._table)), (self._run_id, envelope["ids"]))
         self._emit(cur.fetchall())
 
     def _emit_inline(self, ids: Sequence[int], frames: Sequence[Frame]) -> None:

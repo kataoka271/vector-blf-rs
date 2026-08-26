@@ -10,9 +10,11 @@ The target table is `ZEROBUS_CATALOG.ZEROBUS_SCHEMA.<ZEROBUS_TABLE>` (default
 `blf_testbench_frames`, the same table topologies/reference.py uploads to). It must
 already exist as a MANAGED table whose columns match transport/record.proto.
 
-Test order matters here, and the last test says why: once a stream has been closed, the
-next stream opened in the same process drops records. The write test therefore runs
-first, before anything else in this process has opened a stream.
+The last test deliberately reproduces the SDK hazard the durability accounting in
+`ZerobusStream.close()` exists for: a stream opened after an earlier one in the same
+process was closed can have its records silently dropped. The plain write test runs
+first, before anything in this process has opened a stream, so the two are not testing
+the same path.
 """
 
 from __future__ import annotations
@@ -80,6 +82,22 @@ def _table(config: ZerobusConfig) -> str:
     return f"{config.catalog}.{config.schema}.{config.table}"
 
 
+def _close_reporting_loss(tx: ZerobusTx) -> RuntimeError | None:
+    """Close `tx`, returning the loss it reported instead of raising it.
+
+    Zerobus itself sometimes drops records (see the last test); the guarantee the
+    transport gives is not that this never happens, but that it is never silent. Each
+    test therefore checks the two consistent outcomes -- every record landed, or close()
+    said so -- and treats a reported loss as an environment failure rather than a code
+    one.
+    """
+    try:
+        tx.close()
+    except RuntimeError as exc:
+        return exc
+    return None
+
+
 def _wait_for_rows(verify_config, table: str, run_id: str, expected: int) -> list:
     rows: list = []
     deadline = time.monotonic() + VISIBILITY_TIMEOUT_S
@@ -103,10 +121,14 @@ def test_ingested_frames_land_in_the_delta_table(zerobus_config, verify_config, 
         for frame in sent:
             tx.send(frame)
         tx.flush()
-        tx.close()
+        reported_loss = _close_reporting_loss(tx)
 
         rows = _wait_for_rows(verify_config, table, run_id, len(sent))
-        assert len(rows) == len(sent), f"only {len(rows)}/{len(sent)} row(s) visible after {VISIBILITY_TIMEOUT_S}s"
+        assert len(rows) == len(sent) or reported_loss is not None, (
+            f"only {len(rows)}/{len(sent)} row(s) visible after {VISIBILITY_TIMEOUT_S}s, and close() did not say so"
+        )
+        if reported_loss is not None:
+            pytest.xfail(f"Zerobus dropped records and reported it: {reported_loss}")
         assert [row.message_type for row in rows] == ["CAN", "CAN_FD", "ETH"]
         assert [row.can_id for row in rows] == [0x310, 0x311, None]
         assert [row.is_fd for row in rows] == [False, True, None]
@@ -133,19 +155,15 @@ def test_a_stream_authenticates_and_opens_against_the_real_endpoint(zerobus_conf
     stream.close()
 
 
-@pytest.mark.xfail(
-    reason=(
-        "A stream opened after an earlier one in the same process was closed drops"
-        " records, and drops them silently: ingest_record_nowait() only logs 'Stream"
-        " closed', raises nothing, so _with_stream_retry never recreates the stream and"
-        " flush()/close() both return successfully having lost frames. How many survive"
-        " is a race, hence a non-strict xfail. Reproduced against"
-        " main.blf_testbench.blf_testbench_frames: 1 of 3 records landed. This is the"
-        " failure mode LakebaseTx deliberately does not have (see its docstring: 'a"
-        " dropped frame is never silent') -- ZerobusTx needs the same latch."
-    ),
-)
 def test_records_sent_after_an_earlier_stream_was_closed_still_land(zerobus_config, verify_config, run_id):
+    """Deliberately reproduces the hazard the durability accounting exists for.
+
+    A stream opened after an earlier one in the same process was closed sometimes has its
+    records dropped by the SDK: the ingest call only logs "Stream closed" and raises
+    nothing, and flush() then returns successfully. So the assertion is not that the
+    records always survive -- that is not ours to promise -- but that a run never ends
+    believing it uploaded frames that are not there.
+    """
     table = _table(zerobus_config)
     sent = _frames(run_id)
     try:
@@ -155,9 +173,13 @@ def test_records_sent_after_an_earlier_stream_was_closed_still_land(zerobus_conf
         for frame in sent:
             tx.send(frame)
         tx.flush()
-        tx.close()
+        reported_loss = _close_reporting_loss(tx)
 
         rows = _wait_for_rows(verify_config, table, run_id, len(sent))
-        assert len(rows) == len(sent), f"only {len(rows)}/{len(sent)} row(s) survived the reopened stream"
+        assert len(rows) == len(sent) or reported_loss is not None, (
+            f"only {len(rows)}/{len(sent)} row(s) survived the reopened stream, and close() did not say so"
+        )
+        if reported_loss is not None:
+            pytest.xfail(f"Zerobus dropped records on the reopened stream and reported it: {reported_loss}")
     finally:
         _query(verify_config, f"DELETE FROM {table} WHERE run_id = ?", [run_id])

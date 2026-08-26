@@ -6,6 +6,7 @@ for all of them.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
@@ -159,6 +160,24 @@ def test_forwarded_preserves_correlation_key_and_restamps_hop():
     assert fwd.data == original.data
     assert fwd.channel == 2
     assert fwd.observed_ns - original.observed_ns == 50_000_000
+
+
+def test_hop_key_is_unchanged_by_forwarding():
+    original = _can()
+    assert original.forwarded(channel=9).hop_key() == original.hop_key()
+
+
+def test_hop_key_separates_frames_that_share_a_timestamp():
+    # A LogicalClock stamps every frame in one tick with the same timestamp_ns, so the
+    # (run_id, can_id, timestamp_ns) correlation key alone would collapse them.
+    base = _can()
+    assert base.hop_key() != dataclasses.replace(base, data=b"\xff").hop_key()
+    assert base.hop_key() != dataclasses.replace(base, can_id=0x999).hop_key()
+
+
+def test_hop_key_separates_two_runs():
+    base = _can()
+    assert base.hop_key() != dataclasses.replace(base, run_id="run_002").hop_key()
 
 
 def test_forwarded_defaults_to_now():

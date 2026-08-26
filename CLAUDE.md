@@ -21,6 +21,22 @@ Keep comments minimal.
 - Do not modify existing comments unless they are incorrect or the behavior
   they describe has changed.
 
+## Type Annotations (Python)
+
+- Do not annotate a parameter, return, or variable as `object` to mean "any
+  value" -- use `typing.Any`. `object` only has the methods every Python value
+  shares, so it rejects nearly everything a caller would actually do with the
+  value; `Any` is what "unconstrained" means to a type checker.
+- Give `dict`, `list`, `tuple`, and `set` their element type(s) whenever the
+  type is knowable (`dict[str, int]`, `list[Frame]`, `tuple[str, int]`,
+  `set[str]`), not a bare `dict`/`list`/`tuple`/`set`.
+- When a container holds genuinely mixed/dynamic values (e.g. DB-API
+  parameters, a JSON-derived dict), prefer a precise value type — a real class
+  like a DB driver's `Row`, or `dict[str, Any]`/`list[Any]` — over `object`.
+- When one helper is called with more than one concrete element type (e.g. a
+  set-union helper used for both `set[int]` and `set[str]`), use a `TypeVar`
+  rather than widening to `Any`.
+
 ## Commit Messages
 
 - Use only ASCII characters. Do not use arrows (`→`, `–`, `—`), emoji, or other non-ASCII symbols.

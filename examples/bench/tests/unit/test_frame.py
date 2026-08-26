@@ -1,6 +1,7 @@
 """Offline tests for the unified frame model (bench/frame.py): the two encodings
-round-trip, the CAN/Ethernet variants stay disjoint, and forwarding preserves the
-correlation key.
+round-trip, the CAN/Ethernet variants stay disjoint, forwarding preserves the correlation
+key, and `accepts()` -- the receive filter every transport shares -- answers the same way
+for all of them.
 """
 
 from __future__ import annotations
@@ -168,3 +169,26 @@ def test_forwarded_defaults_to_now():
 
 def test_source_file_for_matches_pipeline_convention():
     assert F.source_file_for("abc") == "testbench/abc.blf"
+
+
+def test_accepts_treats_an_unset_filter_as_accepting_everything():
+    assert F.accepts(_can(), can_ids=None, message_types=None) is True
+    assert F.accepts(_eth(), can_ids=None, message_types=None) is True
+
+
+def test_accepts_matches_can_id_and_message_type():
+    frame = _can()
+    assert F.accepts(frame, can_ids={0x310}, message_types=None) is True
+    assert F.accepts(frame, can_ids={0x999}, message_types=None) is False
+    assert F.accepts(frame, can_ids=None, message_types={F.CAN}) is True
+    assert F.accepts(frame, can_ids=None, message_types={F.ETH}) is False
+
+
+def test_accepts_never_matches_a_non_can_frame_against_a_can_id_filter():
+    # An Ethernet frame's can_id is None, so a receiver filtered to a set of ids must not
+    # be handed one -- a filter meant to narrow traffic would otherwise widen it.
+    assert F.accepts(_eth(), can_ids={0x310}, message_types=None) is False
+
+
+def test_accepts_ands_the_two_filters():
+    assert F.accepts(_can(), can_ids={0x310}, message_types={F.ETH}) is False

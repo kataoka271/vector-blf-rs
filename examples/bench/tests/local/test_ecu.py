@@ -32,6 +32,37 @@ def test_handle_resolves_to_the_same_object_for_the_same_bus():
     assert ecu.handle(bus) is ecu.handle(bus)
 
 
+def test_a_segment_only_sent_on_never_opens_a_receiver():
+    # What keeps a send-only transport (Zerobus, whose Rx always raises) usable as a
+    # ReceiverEcu's upload leg: nothing calls open_rx() unless a handler is registered.
+    ecu = make_ecu("receiver")
+    bus = make_bus("a", 1)
+    handle = ecu.handle(bus)
+    handle.send_can(0x310, b"\x00")
+    handle.subscribe()
+    assert handle._rx is None
+    assert handle._tx is not None
+    ecu.close()
+
+
+def test_a_segment_only_listened_to_never_opens_a_transmitter():
+    ecu = make_ecu("receiver")
+    bus = make_bus("a", 1)
+    handle = ecu.handle(bus)
+    handle.on()(lambda _f: None)
+    handle.subscribe()
+    assert handle._tx is None
+    assert handle._rx is not None
+    ecu.close()
+
+
+def test_using_a_bus_that_was_never_registered_names_the_fix():
+    ecu = make_ecu("generator")
+    unregistered = Loopback(name="orphan")  # no channel: never passed to add_bus()
+    with pytest.raises(RuntimeError, match="no channel assigned"):
+        ecu.handle(unregistered).send_can(0x310, b"\x00")
+
+
 def test_send_can_stamps_channel_run_and_source_file():
     ecu = make_ecu("generator")
     bus = make_bus("a", 1)

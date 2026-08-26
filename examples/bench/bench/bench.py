@@ -26,6 +26,10 @@ class TestBench:
     (each wired to one or more of those buses).
     """
 
+    # The name matches pytest's default test-class pattern, so every test module that
+    # imports it draws a "cannot collect test class" warning; this opts it out.
+    __test__ = False
+
     def __init__(self, run_id: str | None = None) -> None:
         self.run_id = run_id or str(uuid.uuid4())
         self._buses: dict[str, Bus] = {}

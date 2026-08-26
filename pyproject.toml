@@ -66,6 +66,9 @@ reportMissingImports = "warning"
 
 [tool.pytest.ini_options]
 testpaths = ["databricks", "scripts", "examples/bench"]
+markers = [
+    "online: needs a real Databricks workspace; skipped unless BENCH_ONLINE=1 (see examples/bench/tests/online/conftest.py)",
+]
 
 [tool.ty.environment]
 root = ["./src", "./databricks", "./scripts", "./examples/bench"]

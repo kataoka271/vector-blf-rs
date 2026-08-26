@@ -1,14 +1,24 @@
-"""Tests for Bus's transport dispatch and TestBench's bus bookkeeping."""
+"""Tests for Bus's transport registry: a bus_type string selects a transport, and adding
+a transport is one register_transport() call rather than an edit to Bus.
+
+Which concrete channel a bus_type resolves to is exactly what a type checker cannot see
+-- `Bus.open_tx()` is annotated as returning the `ChannelTx` protocol, and ty already
+proves every registered implementation satisfies it.
+"""
 
 from __future__ import annotations
 
 import pytest
-from bench.bench import TestBench
-from bench.bus import Bus, Loopback, register_transport
+from bench.bus import CAN, LAKEBASE, LOOPBACK, ZEROBUS, Bus, Loopback, register_transport
 from transport.loopback import LoopbackRx, LoopbackTx
 
 
-def test_loopback_bus_opens_loopback_channels():
+def test_the_four_built_in_transports_are_registered():
+    for bus_type in (LOOPBACK, LAKEBASE, ZEROBUS, CAN):
+        assert Bus(bus_type, name=f"bus-{bus_type}").bus_type == bus_type
+
+
+def test_loopback_bus_type_resolves_to_the_loopback_channels():
     bus = Loopback(name="a")
     tx = bus.open_tx()
     rx = bus.open_rx(run_id="run_001")
@@ -24,25 +34,18 @@ def test_unknown_bus_type_raises_at_construction():
         Bus("smoke-signal")
 
 
-def test_add_bus_auto_assigns_incrementing_channels():
-    bench = TestBench()
-    bus1 = bench.add_bus(Loopback(name="a"))
-    bus2 = bench.add_bus(Loopback(name="b"))
-    assert (bus1.channel, bus2.channel) == (1, 2)
+def test_connect_opens_both_sides_at_once():
+    tx, rx = Loopback(name="a").connect(run_id="run_001")
+    try:
+        assert isinstance(tx, LoopbackTx)
+        assert isinstance(rx, LoopbackRx)
+    finally:
+        tx.close()
+        rx.close()
 
 
-def test_add_bus_rejects_a_duplicate_channel():
-    bench = TestBench()
-    bench.add_bus(Loopback(name="a"), channel=5)
-    with pytest.raises(ValueError, match="already assigned"):
-        bench.add_bus(Loopback(name="b"), channel=5)
-
-
-def test_add_bus_respects_an_explicit_channel_then_continues_after_it():
-    bench = TestBench()
-    bench.add_bus(Loopback(name="a"), channel=5)
-    bus2 = bench.add_bus(Loopback(name="b"))
-    assert bus2.channel == 6
+def test_a_bus_gets_a_unique_generated_name_when_unnamed():
+    assert Loopback().name != Loopback().name
 
 
 def test_register_transport_adds_a_bus_type_without_editing_bus_py():

@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 import warnings
-from typing import TYPE_CHECKING, Annotated, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 from bench.frame import Frame
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo, field_validator
@@ -89,7 +89,7 @@ with warnings.catch_warnings():
 
         @field_validator("profile", mode="before")
         @classmethod
-        def _blank_profile_means_none(cls, value: object) -> object:
+        def _blank_profile_means_none(cls, value: Any) -> Any:
             # `ZEROBUS_PROFILE=` (set but empty) reaches ConnectionConfig as "" rather
             # than None; both mean "no profile", and ZerobusStream already collapses them.
             return None if isinstance(value, str) and not value.strip() else value

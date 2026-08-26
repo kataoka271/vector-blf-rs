@@ -8,7 +8,7 @@ module level, so constructing a `CanDeviceConfig` never requires it to be instal
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bench.frame import CAN, CAN_FD, DIR_RX, Frame
 
@@ -41,7 +41,7 @@ class EthDeviceConfig:
 def _open_can_bus(config: CanDeviceConfig):
     import can
 
-    kwargs: dict = {
+    kwargs: dict[str, Any] = {
         "interface": config.interface,
         "channel": config.channel,
         "receive_own_messages": config.receive_own_messages,

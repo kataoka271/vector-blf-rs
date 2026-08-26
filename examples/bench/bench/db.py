@@ -14,6 +14,7 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import yaml
@@ -36,10 +37,10 @@ class FilterSpec:
     exclude_source_prefix: str = "testbench/"
     extra_where: str | None = None
 
-    def build_where(self) -> tuple[str, list]:
+    def build_where(self) -> tuple[str, list[Any]]:
         """Build a `WHERE`-clause predicate (without the `WHERE` keyword) and its `?`-placeholder parameters, in placeholder order."""
         clauses: list[str] = []
-        params: list = []
+        params: list[Any] = []
 
         if self.source_files:
             clauses.append("_source_file IN (" + ", ".join(["?"] * len(self.source_files)) + ")")

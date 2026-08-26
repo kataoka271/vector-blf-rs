@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 
 import pytest
-from bench.frame import make_can_frame
+from bench.frame import Frame, make_can_frame
 from transport.lakebase import LakebaseTx
 
 RUN_ID = "run_001"
@@ -40,7 +40,7 @@ class FakeWriter:
         self.gate = False
         self.fail = False
 
-    def write_batch(self, frames: list) -> None:
+    def write_batch(self, frames: list[Frame]) -> None:
         if self.fail:
             raise RuntimeError("simulated write failure")
         if self.gate:

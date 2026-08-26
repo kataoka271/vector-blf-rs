@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
 import pytest
 from bench.db import connect as sql_connect
 from bench.frame import Frame, make_can_frame, make_eth_frame
+from databricks.sql.types import Row
 from transport.zerobus import ZerobusConfig, ZerobusStream, ZerobusTx
 
 pytestmark = pytest.mark.online
@@ -68,7 +70,7 @@ def _frames(run_id: str) -> list[Frame]:
     ]
 
 
-def _query(verify_config, statement: str, params: list | None = None) -> list:
+def _query(verify_config, statement: str, params: list[Any] | None = None) -> list[Row]:
     with sql_connect(verify_config) as conn:
         with conn.cursor() as cur:
             cur.execute(statement, params or None)
@@ -95,8 +97,8 @@ def _close_reporting_loss(tx: ZerobusTx) -> RuntimeError | None:
     return None
 
 
-def _wait_for_rows(verify_config, table: str, run_id: str, expected: int) -> list:
-    rows: list = []
+def _wait_for_rows(verify_config, table: str, run_id: str, expected: int) -> list[Row]:
+    rows: list[Row] = []
     deadline = time.monotonic() + VISIBILITY_TIMEOUT_S
     while len(rows) < expected and time.monotonic() < deadline:
         rows = _query(

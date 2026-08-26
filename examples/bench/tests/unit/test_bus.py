@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from bench.bus import CAN, LAKEBASE, LOOPBACK, ZEROBUS, Bus, Loopback, register_transport
+from bench.frame import Frame
 from transport.loopback import LoopbackRx, LoopbackTx
 
 
@@ -60,7 +61,7 @@ def test_register_transport_adds_a_bus_type_without_editing_bus_py():
         def close(self) -> None: ...
 
     class _FakeRx:
-        def poll(self, timeout: float = 1.0) -> list:
+        def poll(self, timeout: float = 1.0) -> list[Frame]:
             return []
 
         def close(self) -> None: ...

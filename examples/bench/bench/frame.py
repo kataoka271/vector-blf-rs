@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import time
+from typing import Any
 
 CAN = "CAN"
 CAN_FD = "CAN_FD"
@@ -140,14 +141,14 @@ class Frame:
     def is_eth(self) -> bool:
         return self.message_type in ETH_TYPES
 
-    def to_row(self) -> dict:
+    def to_row(self) -> dict[str, Any]:
         """Return the FRAME_COLUMNS-keyed dict used as Postgres parameters and as the
         Zerobus protobuf constructor kwargs.
         """
         return {name: getattr(self, name) for name in FRAME_COLUMNS}
 
     @classmethod
-    def from_row(cls, row: dict) -> Frame:
+    def from_row(cls, row: dict[str, Any]) -> Frame:
         """Rebuild a Frame from a FRAME_COLUMNS-keyed dict (a Postgres row, a Zerobus
         poll result, ...). Extra keys such as the bus table's `id` are ignored.
         """
@@ -162,12 +163,12 @@ class Frame:
                 kwargs[name] = bytes(value)
         return cls(**kwargs)
 
-    def to_json_obj(self) -> dict:
+    def to_json_obj(self) -> dict[str, Any]:
         """Return the compact representation: abbreviated keys, unset fields omitted,
         binary fields base64-encoded. run_id/source_file are excluded (see the module
         docstring).
         """
-        obj: dict = {}
+        obj: dict[str, Any] = {}
         for name, key in _JSON_KEYS.items():
             value = getattr(self, name)
             if value is None:
@@ -178,11 +179,11 @@ class Frame:
         return obj
 
     @classmethod
-    def from_json_obj(cls, obj: dict, *, run_id: str, source_file: str) -> Frame:
+    def from_json_obj(cls, obj: dict[str, Any], *, run_id: str, source_file: str) -> Frame:
         """Inverse of to_json_obj; `run_id`/`source_file` come from the caller (a batch
         envelope, a run context, ...).
         """
-        kwargs: dict = {"run_id": run_id, "source_file": source_file}
+        kwargs: dict[str, Any] = {"run_id": run_id, "source_file": source_file}
         for key, value in obj.items():
             name = _JSON_KEYS_INVERSE.get(key)
             if name is None:
@@ -205,7 +206,7 @@ class Frame:
             observed_ns=time.time_ns() if observed_ns is None else observed_ns,
         )
 
-    def hop_key(self) -> tuple:
+    def hop_key(self) -> tuple[Any, ...]:
         """Return an identity for this frame that survives forwarding.
 
         `forwarded()` re-stamps exactly `channel` and `observed_ns`, so every other field

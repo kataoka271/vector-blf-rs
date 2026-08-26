@@ -10,6 +10,8 @@ constraint that forces the accounting to happen at close() rather than at flush(
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from bench.bus import Zerobus
 from bench.frame import FRAME_COLUMNS, make_can_frame
@@ -77,7 +79,7 @@ class FakeStream:
     """
 
     def __init__(self, *, unacked: int = 0, ingest_fails: bool = False, swallows: bool = False) -> None:
-        self.records: list = []
+        self.records: list[Any] = []
         self.flushes = 0
         self.closed = False
         self.unacked = unacked

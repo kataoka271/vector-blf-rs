@@ -13,8 +13,8 @@ own output back and forth forever.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, TypeVar
 
 from bench.clock import Clock
 from bench.frame import DIR_RX, Frame, make_can_frame, make_eth_frame
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from bench.ecu import Ecu
 
 Handler = Callable[[Frame], None]
+T = TypeVar("T")
 
 # How many recently-sent frames a handle remembers, to recognise its own echo. Bounded
 # because a long run sends unboundedly many, and no transport here keeps a frame in flight
@@ -219,22 +220,22 @@ class BusHandle:
         self._tx = self._rx = None
 
 
-def _as_set(single, plural) -> set | None:
+def _as_set(single: T | None, plural: Sequence[T] | None) -> set[T] | None:
     if single is None and plural is None:
         return None
-    values = set() if plural is None else set(plural)
+    values: set[T] = set() if plural is None else set(plural)
     if single is not None:
         values.add(single)
     return values
 
 
-def _union(sets) -> list | None:
+def _union(sets: Iterable[set[T] | None]) -> list[T] | None:
     """Return the union of the given filters, or None if any of them is unrestricted.
 
     One unrestricted handler makes the whole receiver unrestricted -- narrowing the
     channel-level filter to the other handlers' ids would starve it.
     """
-    out: set = set()
+    out: set[T] = set()
     for values in sets:
         if values is None:
             return None

@@ -98,7 +98,7 @@ class LakebaseConfig(BaseModel):
 
     @field_validator("profile", mode="before")
     @classmethod
-    def _blank_profile_means_none(cls, value: object) -> object:
+    def _blank_profile_means_none(cls, value: Any) -> Any:
         # `LAKEBASE_PROFILE=` (set but empty) reaches ConnectionConfig as "" rather than
         # None; both mean "no profile", and connect() already collapses them.
         return None if isinstance(value, str) and not value.strip() else value
@@ -232,7 +232,7 @@ def build_envelope(frames: Sequence[Frame]) -> tuple[str, bool]:
     return json.dumps(envelope, separators=(",", ":")), False
 
 
-def parse_envelope(payload: str) -> dict:
+def parse_envelope(payload: str) -> dict[str, Any]:
     """Parse a NOTIFY payload into `{run_id, source_file, ids, frames}`.
 
     `ids` are the batch's bus row ids in insertion order. `frames` is a same-length list
@@ -282,9 +282,9 @@ def insert_and_notify_sql(table: str, batch_size: int) -> str:
     )
 
 
-def insert_params(frames: Sequence[Frame], channel: str, envelope: str) -> list:
+def insert_params(frames: Sequence[Frame], channel: str, envelope: str) -> list[Any]:
     """Return the bound parameters for insert_and_notify_sql, in placeholder order."""
-    params: list = []
+    params: list[Any] = []
     for frame in frames:
         row = frame.to_row()
         params.extend(row[c] for c in FRAME_COLUMNS)

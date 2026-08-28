@@ -16,9 +16,9 @@
 # to the databricks CLI binary and its browser token cache, neither of which exists in
 # this image, so LAKEBASE_ENDPOINT needs a PAT (DATABRICKS_HOST/TOKEN) unless
 # LAKEBASE_PROFILE names a service principal too. LAKEBASE_DATABASE and
-# ZEROBUS_CATALOG/ZEROBUS_SCHEMA have no library-level default (see
-# transport/connection.py::ConnectionConfig) and must be set here -- ConnectionConfig.
-# from_environ() raises KeyError outright if one is unset.
+# ZEROBUS_CATALOG/ZEROBUS_SCHEMA/ZEROBUS_SERVICE_PRINCIPAL_ID have no library-level
+# default (see transport/connection.py::ConnectionConfig) and must be set here --
+# ConnectionConfig.from_environ() raises KeyError outright if one is unset.
 #
 # RUN_ID has no default on purpose: LakebaseRx replays a run_id's entire history on
 # every fresh consumer start (see transport/lakebase.py's catch-up query), so reusing
@@ -67,6 +67,7 @@ services:
       - ZEROBUS_PROFILE
       - ZEROBUS_CATALOG
       - ZEROBUS_SCHEMA
+      - ZEROBUS_SERVICE_PRINCIPAL_ID
       - ZEROBUS_TABLE
       - DATABRICKS_HOST
       - DATABRICKS_TOKEN

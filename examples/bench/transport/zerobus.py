@@ -21,7 +21,7 @@ import warnings
 from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 from bench.frame import Frame
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationInfo, field_validator
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -49,9 +49,8 @@ with warnings.catch_warnings():
     class ZerobusConfig(BaseModel):
         """Connection settings for one Zerobus Ingest stream into `catalog.schema.table`.
 
-        `client_id`/`client_secret` are the OAuth service-principal credentials; leaving
-        them empty defers to the ambient `databricks.sdk.core.Config` (see
-        `ZerobusStream`), so unlike the other fields "" is meaningful here and allowed.
+        `service_principal_id` names the service principal `_SdkStreamFactory` rotates a
+        fresh OAuth client id/secret for on every stream construction (see its docstring).
 
         Raises `pydantic.ValidationError` on a missing, blank, or unknown field, on a
         `catalog`/`schema`/`table` that is not a bare Unity Catalog name, or on a
@@ -67,11 +66,8 @@ with warnings.catch_warnings():
         table: _NonEmpty
         workspace_id: _NonEmpty
         region: _NonEmpty
-        client_id: str = ""
-        # repr=False so a secret passed in explicitly never reaches a log line or a
-        # traceback through the model's repr.
-        client_secret: str = Field(default="", repr=False)
         profile: _NonEmpty | None = None
+        service_principal_id: _NonEmpty
 
         @field_validator("catalog", "schema", "table")
         @classmethod
@@ -191,34 +187,40 @@ class _SdkStreamFactory:
     """The real thing: opens Zerobus Ingest streams into one `catalog.schema.table`.
 
     Credentials are OAuth service-principal client id/secret, not the bearer token the
-    Databricks SQL connector uses; resolved from `config.client_id`/`client_secret` or,
-    when unset, from the ambient `databricks.sdk.core.Config` (DATABRICKS_CLIENT_ID /
-    DATABRICKS_CLIENT_SECRET, or `config.profile`). Raises RuntimeError when no client
-    credentials are found.
+    Databricks SQL connector uses. On every construction, this rotates
+    `config.service_principal_id`'s secret -- deleting any existing ones and creating a
+    fresh one -- and uses that id/secret; nothing else (no `config.profile`-derived
+    ambient credential, no environment variable) can supply it. Raises RuntimeError when
+    the rotation does not yield a usable client id/secret.
     """
 
     def __init__(self, config: ZerobusConfig) -> None:
-        from databricks.sdk.core import Config
+        from databricks.sdk import WorkspaceClient
         from zerobus.sdk.shared import RecordType, StreamConfigurationOptions, TableProperties
         from zerobus.sdk.sync import ZerobusSdk
 
-        # auth_type is forced rather than left to unified-auth detection: Zerobus always
-        # needs M2M credentials, and detection would raise "more than one authorization
-        # method configured" if another ambient credential (e.g. a Lakebase bus's token) is present.
-        dbx_cfg = (
-            Config(profile=config.profile, auth_type="oauth-m2m") if config.profile else Config(auth_type="oauth-m2m")
-        )
-        client_id = config.client_id or dbx_cfg.client_id
-        client_secret = config.client_secret or dbx_cfg.client_secret
+        if config.profile:
+            w = WorkspaceClient(profile=config.profile, auth_type="oauth-m2m")
+        else:
+            w = WorkspaceClient(auth_type="oauth-m2m")
+        sp = w.service_principals.get(config.service_principal_id)
+        assert sp.id is not None
+        for secret in w.service_principal_secrets_proxy.list(sp.id):
+            if secret.id:
+                w.service_principal_secrets_proxy.delete(sp.id, secret.id)
+        secret = w.service_principal_secrets_proxy.create(sp.id)
+        client_id = sp.application_id
+        client_secret = secret.secret
+
         if not client_id or not client_secret:
             raise RuntimeError(
-                "Zerobus Ingest needs OAuth service-principal credentials: set"
-                " ZerobusConfig.client_id/client_secret, or DATABRICKS_CLIENT_ID /"
-                " DATABRICKS_CLIENT_SECRET in the environment."
+                "Zerobus Ingest could not rotate usable OAuth credentials for service"
+                f" principal {config.service_principal_id!r}; check that it exists and"
+                " that the identity behind ZerobusConfig.profile can manage its secrets."
             )
         self._pb = load_record_pb2()
         self.table = f"{config.catalog}.{config.schema}.{config.table}"
-        self._sdk = ZerobusSdk(config.endpoint, dbx_cfg.host)
+        self._sdk = ZerobusSdk(config.endpoint, w.config.host)
         self._client_id = client_id
         self._client_secret = client_secret
         self._table_properties = TableProperties(self.table, self._pb.TestbenchFrame.DESCRIPTOR)

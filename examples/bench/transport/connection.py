@@ -34,6 +34,7 @@ class ConnectionConfig:
     zerobus_schema: str
     zerobus_workspace_id: str
     zerobus_region: str
+    zerobus_service_principal_id: str
 
     lakebase_profile: str | None = None
     zerobus_profile: str | None = None
@@ -57,6 +58,7 @@ class ConnectionConfig:
             zerobus_schema=os.environ["ZEROBUS_SCHEMA"],
             zerobus_workspace_id=os.environ["ZEROBUS_WORKSPACE_ID"],
             zerobus_region=os.environ["ZEROBUS_REGION"],
+            zerobus_service_principal_id=os.environ["ZEROBUS_SERVICE_PRINCIPAL_ID"],
             lakebase_profile=os.environ.get("LAKEBASE_PROFILE"),
             zerobus_profile=os.environ.get("ZEROBUS_PROFILE"),
         )
@@ -89,4 +91,5 @@ class ConnectionConfig:
             schema=self.zerobus_schema,
             table=table,
             profile=self.zerobus_profile,
+            service_principal_id=self.zerobus_service_principal_id,
         )

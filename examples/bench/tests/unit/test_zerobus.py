@@ -10,6 +10,7 @@ constraint that forces the accounting to happen at close() rather than at flush(
 
 from __future__ import annotations
 
+import builtins
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ CONFIG = ZerobusConfig(
     table="testbench_frames",
     workspace_id="1234567890",
     region="us-east-2",
+    service_principal_id="1122334455",
 )
 
 
@@ -203,13 +205,38 @@ def test_a_failed_ingest_recreates_the_stream_rather_than_starting_an_empty_one(
     assert len(replacement.records) == 1
 
 
-def test_missing_client_credentials_name_the_variables_to_set(monkeypatch):
-    class _NoCredentialsConfig:
-        def __init__(self, **kwargs) -> None:
-            self.host = "https://example.cloud.databricks.com"
-            self.client_id = ""
-            self.client_secret = ""
+def test_a_rotation_that_yields_no_secret_names_the_service_principal(monkeypatch):
+    # _SdkStreamFactory has no ambient-credential fallback -- if secret rotation itself
+    # does not yield a usable client id/secret, the RuntimeError must name the service
+    # principal that failed to rotate, since that's the only thing left to check.
+    class _RotatedSecret:
+        id = "secret-1"
+        secret = ""
 
-    monkeypatch.setattr("databricks.sdk.core.Config", _NoCredentialsConfig)
-    with pytest.raises(RuntimeError, match="DATABRICKS_CLIENT_ID"):
+    class _ServicePrincipal:
+        id = CONFIG.service_principal_id
+        application_id = "an-app-id"
+
+    class _ServicePrincipals:
+        def get(self, service_principal_id: str) -> _ServicePrincipal:
+            assert service_principal_id == CONFIG.service_principal_id
+            return _ServicePrincipal()
+
+    class _SecretsProxy:
+        def list(self, service_principal_id: str) -> builtins.list[Any]:
+            return []
+
+        def create(self, service_principal_id: str) -> _RotatedSecret:
+            return _RotatedSecret()
+
+        def delete(self, service_principal_id: str, secret_id: str) -> None:
+            raise AssertionError("nothing to delete: list() returned no existing secrets")
+
+    class _FakeWorkspaceClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.service_principals = _ServicePrincipals()
+            self.service_principal_secrets_proxy = _SecretsProxy()
+
+    monkeypatch.setattr("databricks.sdk.WorkspaceClient", _FakeWorkspaceClient)
+    with pytest.raises(RuntimeError, match=CONFIG.service_principal_id):
         ZerobusStream(CONFIG)

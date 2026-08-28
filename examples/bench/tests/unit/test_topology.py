@@ -45,6 +45,7 @@ def test_quickstart_topology_builds_a_working_bench():
         lakebase_endpoint="l",
         zerobus_workspace_id="w",
         zerobus_region="r",
+        zerobus_service_principal_id="sp",
     )
     bench = get_topology("quickstart")(config=config, run_id="run_001")
     assert bench.run_id == "run_001"
@@ -77,6 +78,7 @@ def test_require_config_passes_a_real_config_through():
         lakebase_endpoint="l",
         zerobus_workspace_id="w",
         zerobus_region="r",
+        zerobus_service_principal_id="sp",
     )
     assert require_config(config, "some-topology") is config
 
@@ -93,6 +95,7 @@ def test_reference_topology_builds_without_touching_the_network():
         lakebase_endpoint="l",
         zerobus_workspace_id="w",
         zerobus_region="r",
+        zerobus_service_principal_id="sp",
     )
     bench = get_topology("reference")(config=config, run_id="run_001")
     assert bench.run_id == "run_001"

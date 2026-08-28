@@ -27,6 +27,7 @@ _ENV_VARS = (
     "ZEROBUS_PROFILE",
     "ZEROBUS_CATALOG",
     "ZEROBUS_SCHEMA",
+    "ZEROBUS_SERVICE_PRINCIPAL_ID",
 )
 
 LAKEBASE_KWARGS = {
@@ -41,6 +42,7 @@ ZEROBUS_KWARGS = {
     "table": "testbench_frames",
     "workspace_id": "1234567890",
     "region": "us-east-2",
+    "service_principal_id": "1122334455",
 }
 
 REQUIRED_YAML = (
@@ -49,6 +51,7 @@ REQUIRED_YAML = (
     "zerobus_catalog: c\n"
     "zerobus_schema: s\n"
     "zerobus_workspace_id: w\n"
+    "zerobus_service_principal_id: sp\n"
 )
 
 
@@ -66,6 +69,7 @@ def _connection_config(**overrides) -> ConnectionConfig:
             "zerobus_schema": "s",
             "zerobus_workspace_id": "w",
             "zerobus_region": "r",
+            "zerobus_service_principal_id": "sp",
             **overrides,
         }
     )
@@ -88,6 +92,7 @@ def test_from_environ_maps_each_variable_to_its_field(monkeypatch):
     assert config.zerobus_profile == "value-of-ZEROBUS_PROFILE"
     assert config.zerobus_catalog == "value-of-ZEROBUS_CATALOG"
     assert config.zerobus_schema == "value-of-ZEROBUS_SCHEMA"
+    assert config.zerobus_service_principal_id == "value-of-ZEROBUS_SERVICE_PRINCIPAL_ID"
 
 
 def test_from_environ_raises_naming_the_missing_variable(monkeypatch):
@@ -154,9 +159,11 @@ def test_zerobus_config_carries_the_connection_fields_and_a_per_bus_table():
         zerobus_profile="a-profile",
         zerobus_catalog="a_catalog",
         zerobus_schema="a_schema",
+        zerobus_service_principal_id="a-sp-id",
     ).zerobus_config(table="frames")
     assert (zerobus.workspace_id, zerobus.region, zerobus.profile) == ("1234567890", "us-east-2", "a-profile")
     assert (zerobus.catalog, zerobus.schema, zerobus.table) == ("a_catalog", "a_schema", "frames")
+    assert zerobus.service_principal_id == "a-sp-id"
 
 
 def test_deriving_a_bus_config_from_a_blank_connection_setting_fails_at_construction():
@@ -237,17 +244,10 @@ def test_zerobus_config_treats_a_blank_profile_as_none():
     assert ZerobusConfig(**ZEROBUS_KWARGS, profile="").profile is None
 
 
-def test_zerobus_config_allows_empty_client_credentials():
-    # "" is meaningful here: it defers to the ambient databricks.sdk Config.
-    config = ZerobusConfig(**ZEROBUS_KWARGS)
-    assert config.client_id == ""
-    assert config.client_secret == ""
-
-
-def test_zerobus_config_keeps_the_client_secret_out_of_its_repr():
-    config = ZerobusConfig(**ZEROBUS_KWARGS, client_id="an-id", client_secret="a-secret")
-    assert "an-id" in repr(config)
-    assert "a-secret" not in repr(config)
+@pytest.mark.parametrize("value", ["", "   "])
+def test_zerobus_config_rejects_a_blank_service_principal_id(value):
+    with pytest.raises(ValidationError, match="service_principal_id"):
+        ZerobusConfig(**{**ZEROBUS_KWARGS, "service_principal_id": value})
 
 
 def test_zerobus_config_is_frozen():

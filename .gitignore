@@ -27,6 +27,10 @@ __pycache__/
 # PAT/client secret -- never commit a filled-in copy)
 /examples/bench/.env
 
+# Rotated Zerobus service-principal secrets, cached in plaintext between rotations (see
+# _SECRET_CACHE_DIR in examples/bench/transport/zerobus.py) -- never commit these
+/examples/bench/.cache/
+
 # IDE / tooling
 /.claude
 /.cursor

@@ -13,10 +13,12 @@ installed.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
 import sys
+import time
 import warnings
 from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
@@ -49,8 +51,8 @@ with warnings.catch_warnings():
     class ZerobusConfig(BaseModel):
         """Connection settings for one Zerobus Ingest stream into `catalog.schema.table`.
 
-        `service_principal_id` names the service principal `_SdkStreamFactory` rotates a
-        fresh OAuth client id/secret for on every stream construction (see its docstring).
+        `service_principal_id` names the service principal `_SdkStreamFactory` periodically
+        rotates a fresh OAuth client id/secret for (see its docstring).
 
         Raises `pydantic.ValidationError` on a missing, blank, or unknown field, on a
         `catalog`/`schema`/`table` that is not a bare Unity Catalog name, or on a
@@ -167,6 +169,38 @@ def _make_ack_ledger():
     return _AckLedger()
 
 
+# Databricks reveals a service-principal secret's plaintext only once, at creation, so
+# rotating it on every stream construction is what forces _SdkStreamFactory to cache the
+# plaintext locally rather than just re-deriving it from the SP each time.
+_SECRET_CACHE_DIR = pathlib.Path(__file__).parent.parent / ".cache" / "blf-testbench-zerobus"
+_SECRET_ROTATION_INTERVAL_S = 30 * 24 * 60 * 60
+# A secret already in use is never proactively swapped out mid-stream, so its
+# server-side lifetime must outlast one full local rotation interval, not just match it,
+# or a stream started near the end of that interval could have its secret expire under it.
+_SECRET_LIFETIME_S = 2 * _SECRET_ROTATION_INTERVAL_S
+
+
+def _cached_secret(service_principal_id: str) -> tuple[str, str] | None:
+    """Return the cached (client_id, client_secret) for `service_principal_id`, or None
+    if there is no cache entry or it is older than _SECRET_ROTATION_INTERVAL_S.
+    """
+    path = _SECRET_CACHE_DIR / f"{service_principal_id}.json"
+    try:
+        data = json.loads(path.read_text())
+        rotated_at, client_id, client_secret = data["rotated_at"], data["client_id"], data["client_secret"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return None
+    if time.time() - rotated_at >= _SECRET_ROTATION_INTERVAL_S:
+        return None
+    return client_id, client_secret
+
+
+def _cache_secret(service_principal_id: str, client_id: str, client_secret: str) -> None:
+    _SECRET_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _SECRET_CACHE_DIR / f"{service_principal_id}.json"
+    path.write_text(json.dumps({"client_id": client_id, "client_secret": client_secret, "rotated_at": time.time()}))
+
+
 class StreamFactory(Protocol):
     """How ZerobusStream obtains streams, builds records, and learns what was acked.
 
@@ -187,11 +221,13 @@ class _SdkStreamFactory:
     """The real thing: opens Zerobus Ingest streams into one `catalog.schema.table`.
 
     Credentials are OAuth service-principal client id/secret, not the bearer token the
-    Databricks SQL connector uses. On every construction, this rotates
-    `config.service_principal_id`'s secret -- deleting any existing ones and creating a
-    fresh one -- and uses that id/secret; nothing else (no `config.profile`-derived
-    ambient credential, no environment variable) can supply it. Raises RuntimeError when
-    the rotation does not yield a usable client id/secret.
+    Databricks SQL connector uses. `config.service_principal_id`'s secret is rotated --
+    deleting any existing ones and creating a fresh one with a server-side lifetime of
+    _SECRET_LIFETIME_S -- at most once every _SECRET_ROTATION_INTERVAL_S; the plaintext is
+    cached locally under _SECRET_CACHE_DIR between rotations, since Databricks reveals it
+    only once, at creation. Nothing else (no `config.profile`-derived ambient credential,
+    no environment variable) can supply it. Raises RuntimeError when neither the cache
+    nor a fresh rotation yields a usable client id/secret.
     """
 
     def __init__(self, config: ZerobusConfig) -> None:
@@ -203,14 +239,21 @@ class _SdkStreamFactory:
             w = WorkspaceClient(profile=config.profile, auth_type="oauth-m2m")
         else:
             w = WorkspaceClient(auth_type="oauth-m2m")
-        sp = w.service_principals.get(config.service_principal_id)
-        assert sp.id is not None
-        for secret in w.service_principal_secrets_proxy.list(sp.id):
-            if secret.id:
-                w.service_principal_secrets_proxy.delete(sp.id, secret.id)
-        secret = w.service_principal_secrets_proxy.create(sp.id)
-        client_id = sp.application_id
-        client_secret = secret.secret
+
+        cached = _cached_secret(config.service_principal_id)
+        if cached is not None:
+            client_id, client_secret = cached
+        else:
+            sp = w.service_principals.get(config.service_principal_id)
+            assert sp.id is not None
+            for secret in w.service_principal_secrets_proxy.list(sp.id):
+                if secret.id:
+                    w.service_principal_secrets_proxy.delete(sp.id, secret.id)
+            secret = w.service_principal_secrets_proxy.create(sp.id, lifetime=f"{_SECRET_LIFETIME_S}s")
+            client_id = sp.application_id
+            client_secret = secret.secret
+            if client_id and client_secret:
+                _cache_secret(config.service_principal_id, client_id, client_secret)
 
         if not client_id or not client_secret:
             raise RuntimeError(

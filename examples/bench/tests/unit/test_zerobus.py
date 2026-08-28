@@ -11,12 +11,23 @@ constraint that forces the accounting to happen at close() rather than at flush(
 from __future__ import annotations
 
 import builtins
+import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from bench.bus import Zerobus
 from bench.frame import FRAME_COLUMNS, make_can_frame
-from transport.zerobus import ZerobusConfig, ZerobusRx, ZerobusStream, load_record_pb2
+from transport.zerobus import (
+    _SECRET_LIFETIME_S,
+    _SECRET_ROTATION_INTERVAL_S,
+    ZerobusConfig,
+    ZerobusRx,
+    ZerobusStream,
+    _cache_secret,
+    _SdkStreamFactory,
+    load_record_pb2,
+)
 
 RUN_ID = "run_001"
 EPOCH_NS = 1_700_000_000_000_000_000
@@ -29,6 +40,52 @@ CONFIG = ZerobusConfig(
     region="us-east-2",
     service_principal_id="1122334455",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_secret_cache(tmp_path, monkeypatch):
+    # Every test gets its own empty cache directory, so a real ~/.cache entry left by a
+    # previous run (or another test) never leaks into what a test observes.
+    monkeypatch.setattr("transport.zerobus._SECRET_CACHE_DIR", tmp_path / "secret-cache")
+
+
+class _CountingSecretsProxy:
+    """Stands in for the SDK's ServicePrincipalSecretsProxyAPI, counting calls so a test
+    can assert whether a rotation happened.
+    """
+
+    def __init__(self) -> None:
+        self.create_calls = 0
+        self.delete_calls = 0
+        self.lifetimes: builtins.list[str | None] = []
+        self._existing_secret_id: str | None = None
+
+    def list(self, service_principal_id: str) -> builtins.list[Any]:
+        return [SimpleNamespace(id=self._existing_secret_id)] if self._existing_secret_id else []
+
+    def create(self, service_principal_id: str, *, lifetime: str | None = None) -> SimpleNamespace:
+        self.create_calls += 1
+        self.lifetimes.append(lifetime)
+        self._existing_secret_id = f"secret-{self.create_calls}"
+        return SimpleNamespace(secret=f"plaintext-{self.create_calls}")
+
+    def delete(self, service_principal_id: str, secret_id: str) -> None:
+        self.delete_calls += 1
+        self._existing_secret_id = None
+
+
+def _fake_workspace_client_cls(secrets_proxy: _CountingSecretsProxy):
+    class _ServicePrincipals:
+        def get(self, service_principal_id: str) -> SimpleNamespace:
+            return SimpleNamespace(id=service_principal_id, application_id="an-app-id")
+
+    class _FakeWorkspaceClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.service_principals = _ServicePrincipals()
+            self.service_principal_secrets_proxy = secrets_proxy
+            self.config = SimpleNamespace(host="https://example.cloud.databricks.com")
+
+    return _FakeWorkspaceClient
 
 
 def _frame():
@@ -226,7 +283,7 @@ def test_a_rotation_that_yields_no_secret_names_the_service_principal(monkeypatc
         def list(self, service_principal_id: str) -> builtins.list[Any]:
             return []
 
-        def create(self, service_principal_id: str) -> _RotatedSecret:
+        def create(self, service_principal_id: str, *, lifetime: str | None = None) -> _RotatedSecret:
             return _RotatedSecret()
 
         def delete(self, service_principal_id: str, secret_id: str) -> None:
@@ -240,3 +297,42 @@ def test_a_rotation_that_yields_no_secret_names_the_service_principal(monkeypatc
     monkeypatch.setattr("databricks.sdk.WorkspaceClient", _FakeWorkspaceClient)
     with pytest.raises(RuntimeError, match=CONFIG.service_principal_id):
         ZerobusStream(CONFIG)
+
+
+def test_a_rotated_secret_is_created_with_the_configured_server_side_lifetime(monkeypatch):
+    secrets_proxy = _CountingSecretsProxy()
+    monkeypatch.setattr("databricks.sdk.WorkspaceClient", _fake_workspace_client_cls(secrets_proxy))
+
+    _SdkStreamFactory(CONFIG)
+
+    assert secrets_proxy.lifetimes == [f"{_SECRET_LIFETIME_S}s"]
+
+
+def test_a_second_factory_within_the_rotation_interval_reuses_the_cached_secret(monkeypatch):
+    secrets_proxy = _CountingSecretsProxy()
+    monkeypatch.setattr("databricks.sdk.WorkspaceClient", _fake_workspace_client_cls(secrets_proxy))
+
+    first = _SdkStreamFactory(CONFIG)
+    second = _SdkStreamFactory(CONFIG)
+
+    # One rotation serves both factories -- the second construction found a fresh enough
+    # cache entry and never called the secrets proxy at all.
+    assert secrets_proxy.create_calls == 1
+    assert (second._client_id, second._client_secret) == (first._client_id, first._client_secret)
+
+
+def test_a_factory_after_the_rotation_interval_rotates_again(monkeypatch):
+    secrets_proxy = _CountingSecretsProxy()
+    monkeypatch.setattr("databricks.sdk.WorkspaceClient", _fake_workspace_client_cls(secrets_proxy))
+
+    _SdkStreamFactory(CONFIG)
+    _cache_secret(CONFIG.service_principal_id, "stale-id", "stale-secret")
+    monkeypatch.setattr(
+        "transport.zerobus.time", SimpleNamespace(time=lambda: time.time() + _SECRET_ROTATION_INTERVAL_S)
+    )
+
+    second = _SdkStreamFactory(CONFIG)
+
+    assert secrets_proxy.create_calls == 2
+    assert secrets_proxy.delete_calls == 1
+    assert (second._client_id, second._client_secret) != ("stale-id", "stale-secret")

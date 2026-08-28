@@ -36,7 +36,7 @@ zerobus_profile: null
 # zerobus_config(table=...).
 zerobus_catalog: main
 zerobus_schema: blf
-# Required. Service principal whose secret is rotated on every stream construction --
-# see transport/zerobus.py::_SdkStreamFactory. The identity behind zerobus_profile (or
+# Required. Service principal whose secret is periodically rotated -- see
+# transport/zerobus.py::_SdkStreamFactory. The identity behind zerobus_profile (or
 # DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET) must be able to manage its secrets.
 zerobus_service_principal_id: "<service principal id>"

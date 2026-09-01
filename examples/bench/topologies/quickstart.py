@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pandas as pd
 from bench.bench import TestBench
-from bench.bus import Loopback
+from bench.bus import Bus, Loopback
 from bench.ecu import GatewayEcu, ReceiverEcu
 from bench.replay import GeneratorEcu
 from bench.topology import register_topology
@@ -49,16 +49,20 @@ def _fake_frames() -> pd.DataFrame:
     )
 
 
-def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
+def build(config: ConnectionConfig | None = None, run_id: str | None = None, **buses: Bus) -> TestBench:
     """`config` is accepted (and ignored) only to satisfy the shared BuildFn signature --
     this topology is fully offline and never touches Lakebase/Zerobus, so unlike the
     `reference`/`docker-*` topologies it does not call `require_config()` and runs fine
     with no LAKEBASE_*/ZEROBUS_* environment variables set.
-    """
-    bench = TestBench(run_id=run_id)
 
-    bus1 = bench.add_bus(Loopback())
-    bus2 = bench.add_bus(Loopback())
+    `buses` can still swap either slot for a real transport, e.g.
+    `build(bus2=Lakebase(...))` to keep the generator local but publish the gateway's
+    output to a Lakebase table.
+    """
+    bench = TestBench(run_id=run_id, buses=buses)
+
+    bus1 = bench.bus("bus1", Loopback())
+    bus2 = bench.bus("bus2", Loopback())
 
     bench.add_ecu(GeneratorEcu(ch=bus1, fetch_fn=_fake_frames))
     bench.add_ecu(GatewayEcu(ch1=bus1, ch2=bus2))

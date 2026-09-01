@@ -19,6 +19,7 @@ from bench.bus import Bus
 from bench.clock import WALL, Clock, make_clock
 from bench.frame import Frame, source_file_for
 from bench.handle import BusHandle
+from bench.log import bind_run, log
 
 DEFAULT_POLL_TIMEOUT = 0.05
 
@@ -62,6 +63,11 @@ class Ecu:
             self._buses[key] = BusHandle(bus, self)
         return self._buses[key]
 
+    @property
+    def handles(self) -> list[BusHandle]:
+        """Every bus segment this Ecu is wired to, in the order it first used them."""
+        return list(self._buses.values())
+
     def run(
         self,
         *,
@@ -81,6 +87,7 @@ class Ecu:
         """
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
+        bind_run(run_id=self.run_id, run_epoch_ns=self.clock.run_epoch_ns, clock=self.clock)
         for handle in self._buses.values():
             handle.subscribe()
         deadline = None if duration is None else time.monotonic() + duration
@@ -103,8 +110,12 @@ class Ecu:
             self.close()
 
     def close(self) -> None:
+        """Close every bus handle and log that this Ecu has stopped, so a run's output
+        shows which Ecus have finished while the others are still going.
+        """
         for handle in self._buses.values():
             handle.close()
+        log(self.name, "stopped")
 
 
 class GatewayEcu(Ecu):
@@ -129,7 +140,7 @@ class GatewayEcu(Ecu):
         @h1.on()
         def _forward_1_to_2(frame: Frame) -> None:
             h2.forward(frame)
-            print(f"[{self.name}] {ch1.name} -> {ch2.name}: {frame.data.hex()}", flush=True)
+            log(self.name, f"{ch1.name} -> {ch2.name}: {frame.data.hex()}")
 
         if bidirectional:
             # Both handlers are unconditional, so bidirectional forwarding relies on a
@@ -139,7 +150,7 @@ class GatewayEcu(Ecu):
             @h2.on()
             def _forward_2_to_1(frame: Frame) -> None:
                 h1.forward(frame)
-                print(f"[{self.name}] {ch2.name} -> {ch1.name}: {frame.data.hex()}", flush=True)
+                log(self.name, f"{ch2.name} -> {ch1.name}: {frame.data.hex()}")
 
 
 class ReceiverEcu(Ecu):
@@ -167,7 +178,7 @@ class ReceiverEcu(Ecu):
         def _capture(frame: Frame) -> None:
             self.captured.append(frame)
             label = f"can_id=0x{frame.can_id:X}" if frame.can_id is not None else f"ether_type={frame.ether_type}"
-            print(f"[{self.name}] captured {label} data={frame.data.hex()}", flush=True)
+            log(self.name, f"captured {label} data={frame.data.hex()}")
             if self._zerobus is not None:
                 self._zerobus.send(frame)
 
@@ -209,6 +220,7 @@ class ProxyEcu(Ecu):
             raise TypeError(f"{type(self).__name__}.run() has no tick loop and does not support on_tick")
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
+        bind_run(run_id=self.run_id, run_epoch_ns=self.clock.run_epoch_ns, clock=self.clock)
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.bind((self._host, self._port))
         self._sock.settimeout(poll_timeout)

@@ -32,6 +32,11 @@ class Clock(Protocol):
 
     run_epoch_ns: int
 
+    @property
+    def tick_index(self) -> int:
+        """Return the current 0-based tick index, or -1 before the first tick()."""
+        ...
+
     def observed_ns(self) -> int:
         """Return absolute wall-clock nanoseconds for the current instant."""
         ...
@@ -62,6 +67,10 @@ class WallClock:
         self.run_epoch_ns = run_epoch_ns
         self._tick_period_ns = int(1e9 / tick_hz)
         self._tick = -1
+
+    @property
+    def tick_index(self) -> int:
+        return self._tick
 
     def observed_ns(self) -> int:
         return time.time_ns()
@@ -99,6 +108,10 @@ class LogicalClock:
         self.run_epoch_ns = run_epoch_ns
         self._tick_period_ns = int(1e9 / tick_hz)
         self._tick = -1
+
+    @property
+    def tick_index(self) -> int:
+        return self._tick
 
     def observed_ns(self) -> int:
         return time.time_ns()

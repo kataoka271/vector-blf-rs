@@ -119,3 +119,57 @@ def test_replay_is_substitutable_for_a_plain_ecu_in_a_bench():
     bench.run(duration=0.3)
 
     assert [f.can_id for f in receiver.captured] == [0x310]
+
+
+def test_loop_replays_the_same_frames_until_the_run_stops():
+    bench = TestBench(run_id=RUN_ID)
+    bus = bench.add_bus(Loopback())
+    receiver = ReceiverEcu(ch=bus)
+    bench.add_ecu(GeneratorEcu(ch=bus, fetch_fn=lambda: _frames(0.0, 0.05), loop=True))
+    bench.add_ecu(receiver)
+
+    bench.run(duration=0.4)
+
+    can_ids = [f.can_id for f in receiver.captured]
+    assert can_ids[:4] == [0x310, 0x311, 0x310, 0x311]
+    # Each pass is shifted past the one before it, so no two replayed frames collide on
+    # (run_id, can_id, timestamp_ns).
+    stamps = [f.timestamp_ns for f in receiver.captured]
+    assert stamps == sorted(stamps)
+    assert len(set(stamps)) == len(stamps)
+
+
+def test_loop_count_stops_after_the_requested_number_of_passes():
+    bench = TestBench(run_id=RUN_ID)
+    bus = bench.add_bus(Loopback())
+    receiver = ReceiverEcu(ch=bus)
+    bench.add_ecu(GeneratorEcu(ch=bus, fetch_fn=lambda: _frames(0.0, 0.05), loop=3))
+    bench.add_ecu(receiver)
+
+    bench.run(duration=0.6)
+
+    assert [f.can_id for f in receiver.captured] == [0x310, 0x311] * 3
+
+
+def test_loop_rejects_a_non_positive_pass_count():
+    with pytest.raises(ValueError, match="positive pass count"):
+        GeneratorEcu(ch=Loopback(), fetch_fn=lambda: _frames(0.0), loop=0)
+
+
+def test_stop_lands_inside_a_long_inter_frame_gap():
+    # The gap is slept in slices, so stop() does not have to wait it out; a single
+    # time.sleep(gap) here would make this take the full 5s.
+    bench = TestBench(run_id=RUN_ID)
+    bus = bench.add_bus(Loopback())
+    receiver = ReceiverEcu(ch=bus)
+    bench.add_ecu(GeneratorEcu(ch=bus, fetch_fn=lambda: _frames(0.0, 5.0)))
+    bench.add_ecu(receiver)
+
+    bench.start()
+    time.sleep(0.2)
+    started = time.monotonic()
+    bench.stop(timeout=2.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0
+    assert [f.can_id for f in receiver.captured] == [0x310]

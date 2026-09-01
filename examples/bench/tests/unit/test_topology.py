@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pytest
 from bench.bench import TestBench
+from bench.bus import Bus, Loopback
 from bench.topology import (
     MissingConfig,
     discover,
@@ -18,8 +19,8 @@ from transport.connection import ConnectionConfig
 
 
 def test_register_and_get_topology():
-    def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
-        return TestBench(run_id=run_id)
+    def build(config: ConnectionConfig | None = None, run_id: str | None = None, **buses: Bus) -> TestBench:
+        return TestBench(run_id=run_id, buses=buses)
 
     register_topology("unit-test-topology", build)
     assert get_topology("unit-test-topology") is build
@@ -70,6 +71,21 @@ def test_a_credential_needing_topology_rejects_a_missing_config():
         get_topology("reference")(config=None, run_id="run_001")
 
 
+def test_bus_overrides_replace_a_topologys_transports():
+    # The point of the bus slots: the same reference wiring, run entirely in-process.
+    # No config is needed because every credential-needing default was overridden.
+    discover()
+    bench = get_topology("reference")(
+        config=None,
+        run_id="run_001",
+        bus1=Loopback(name="a"),
+        bus2=Loopback(name="b"),
+        zerobus=Loopback(name="z"),
+    )
+    assert sorted(bench._buses) == ["a", "b", "z"]
+    assert len(bench._ecus) == 5
+
+
 def test_require_config_passes_a_real_config_through():
     config = ConnectionConfig(
         lakebase_database="d",
@@ -85,8 +101,8 @@ def test_require_config_passes_a_real_config_through():
 
 def test_reference_topology_builds_without_touching_the_network():
     # Building a Bus never opens a connection (open_tx()/open_rx() do that lazily), so this
-    # covers the wiring without real Lakebase/Zerobus -- but ConnectionConfig's fields have
-    # no library-level default, so a filled-in config is passed rather than the environment.
+    # covers the wiring without real Lakebase/Zerobus -- but a bus config is still derived
+    # per slot, so a filled-in config is passed rather than the ambient environment.
     discover()
     config = ConnectionConfig(
         lakebase_database="d",

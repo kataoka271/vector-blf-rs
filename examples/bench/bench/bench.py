@@ -9,12 +9,16 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from bench.bus import Bus
+from bench.log import bind_run, log, set_run_epoch, set_run_id
 
 if TYPE_CHECKING:
     from bench.ecu import Ecu
+
+JOIN_SLICE = 0.1
 
 
 class TestBench:
@@ -26,13 +30,60 @@ class TestBench:
     # imports it draws a "cannot collect test class" warning; this opts it out.
     __test__ = False
 
-    def __init__(self, run_id: str | None = None) -> None:
+    def __init__(self, run_id: str | None = None, buses: Mapping[str, Bus] | None = None) -> None:
+        """`buses` replaces the transport a topology picked for one of its bus slots,
+        keyed by the slot name that topology passes to `bus()` -- see that method.
+        """
         self.run_id = run_id or str(uuid.uuid4())
+        # Tag this thread's log lines from construction on, so a failure while the
+        # topology is still being wired up is already attributable to the run.
+        bind_run(run_id=self.run_id)
+        set_run_id(self.run_id)
         self._buses: dict[str, Bus] = {}
         self._ecus: list[Ecu] = []
         self._next_channel = 1
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._overrides = dict(buses or {})
+        self._slots: list[str] = []
+        self._started_at: float | None = None
+        self._finished_at: float | None = None
+
+    @property
+    def buses(self) -> list[Bus]:
+        """Every registered bus, in registration order."""
+        return list(self._buses.values())
+
+    @property
+    def ecus(self) -> list[Ecu]:
+        """Every registered Ecu, in registration order."""
+        return list(self._ecus)
+
+    @property
+    def elapsed(self) -> float:
+        """Seconds the run has been going, or lasted once it has finished. 0.0 before
+        start().
+        """
+        if self._started_at is None:
+            return 0.0
+        end = time.monotonic() if self._finished_at is None else self._finished_at
+        return end - self._started_at
+
+    def bus(self, slot: str, default: Bus | Callable[[], Bus], *, channel: int | None = None) -> Bus:
+        """Register the bus this topology calls `slot`: the caller's override when one
+        was passed as `TestBench(buses=...)`, else `default`.
+
+        This is what lets a topology's transports be chosen from outside it --
+        `build(bus1=Loopback())` against a topology that would otherwise open a Lakebase
+        table -- instead of being fixed in the topology's own code. Give `default` as a
+        zero-argument callable whenever building it needs credentials, so an overridden
+        slot never constructs (nor demands a config for) the transport it replaced.
+        """
+        self._slots.append(slot)
+        override = self._overrides.get(slot)
+        bus = override if override is not None else (default if isinstance(default, Bus) else default())
+        bus.slot = slot
+        return self.add_bus(bus, channel=channel)
 
     def add_bus(self, bus: Bus, *, channel: int | None = None) -> Bus:
         """Register `bus` and assign it a BLF channel number.
@@ -40,6 +91,10 @@ class TestBench:
         `channel` picks the number explicitly; otherwise the next unused one is
         assigned. Raises ValueError if the resulting channel is already taken by
         another registered bus.
+
+        For a bench built in place (a test, a one-off script) where the caller already
+        holds the Bus it wants. A registered topology should call `bus()` instead: a bus
+        added here carries no slot name, so `TestBench(buses=...)` cannot replace it.
         """
         if channel is not None:
             bus.channel = channel
@@ -62,7 +117,18 @@ class TestBench:
         its own thread. Non-blocking -- call run() instead to block until they finish,
         or stop() to end the run early.
         """
+        # A misspelled override would otherwise run the topology unchanged, silently.
+        unknown = sorted(set(self._overrides) - set(self._slots))
+        if unknown:
+            raise ValueError(f"no such bus slot: {', '.join(unknown)}; this topology declares {self._slots}")
         run_epoch_ns = time.time_ns()
+        # Bound on this thread for the driver's own lines, and set process-wide as the
+        # fallback for threads that bind nothing (a transport's background worker).
+        bind_run(run_id=self.run_id, run_epoch_ns=run_epoch_ns)
+        set_run_id(self.run_id)
+        set_run_epoch(run_epoch_ns)
+        self._started_at = time.monotonic()
+        self._finished_at = None
         for ecu in self._ecus:
             ecu._bind(run_id=self.run_id, run_epoch_ns=run_epoch_ns)
         # No role-aware start ordering: every Ecu's channel catches up on connect
@@ -80,15 +146,43 @@ class TestBench:
             thread.start()
 
     def run(self, duration: float | None = None) -> None:
-        """Start the run and block until every Ecu stops."""
+        """Start the run and block until every Ecu stops.
+
+        Ctrl-C is turned into an ordinary stop() rather than an abort, so every Ecu still
+        runs its close() teardown and flushes whatever its transport has buffered.
+        """
         self.start(duration)
-        self._join()
+        try:
+            self.wait()
+        except KeyboardInterrupt:
+            log("bench", "interrupted -- stopping every Ecu", run_id=self.run_id)
+            self.stop()
+        finally:
+            if self._finished_at is None:
+                self._finished_at = time.monotonic()
+
+    def wait(self, timeout: float | None = None) -> None:
+        """Block until every Ecu has stopped, or `timeout` seconds have passed."""
+        # Always a timed join: a bare Thread.join() blocks the calling thread in a way
+        # that defers KeyboardInterrupt until the thread exits on its own, which for an
+        # unbounded run means Ctrl-C never reaches _stop at all.
+        deadline = None if timeout is None else time.monotonic() + timeout
+        for thread in self._threads:
+            while thread.is_alive():
+                if deadline is not None and time.monotonic() >= deadline:
+                    return
+                thread.join(JOIN_SLICE)
+        if self._finished_at is None:
+            self._finished_at = time.monotonic()
 
     def stop(self, timeout: float = 5.0) -> None:
         """Signal every Ecu to stop and wait for them to finish."""
         self._stop.set()
-        self._join(timeout=timeout)
-
-    def _join(self, timeout: float | None = None) -> None:
-        for thread in self._threads:
-            thread.join(timeout=timeout)
+        self.wait(timeout=timeout)
+        if self._finished_at is None:
+            self._finished_at = time.monotonic()
+        stragglers = [t.name for t in self._threads if t.is_alive()]
+        if stragglers:
+            # The threads are deliberately not daemons -- an Ecu killed mid-close() loses
+            # whatever its transport had buffered -- so say who is holding up the exit.
+            log("bench", f"still running after {timeout}s: {', '.join(stragglers)}", run_id=self.run_id)

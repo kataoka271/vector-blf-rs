@@ -44,6 +44,40 @@ def test_add_bus_keeps_a_channel_a_bus_already_carries():
     assert bench.add_bus(Loopback(name="b")).channel == 8
 
 
+def test_bus_slot_falls_back_to_the_topology_default():
+    bench = TestBench()
+    default = Loopback(name="default")
+    assert bench.bus("bus1", default) is default
+
+
+def test_bus_slot_takes_the_callers_override_without_building_the_default():
+    built = []
+
+    def default():
+        built.append(1)
+        return Loopback(name="default")
+
+    override = Loopback(name="override")
+    bench = TestBench(buses={"bus1": override})
+    assert bench.bus("bus1", default) is override
+    assert built == []
+
+
+def test_bus_slot_assigns_channels_like_add_bus():
+    bench = TestBench(buses={"bus2": Loopback(name="override")})
+    bus1 = bench.bus("bus1", Loopback(name="a"))
+    bus2 = bench.bus("bus2", Loopback(name="b"))
+    assert (bus1.channel, bus2.channel) == (1, 2)
+    assert bus2.name == "override"
+
+
+def test_start_rejects_an_override_for_an_unknown_slot():
+    bench = TestBench(buses={"bus9": Loopback(name="override")})
+    bench.bus("bus1", Loopback(name="a"))
+    with pytest.raises(ValueError, match="no such bus slot: bus9"):
+        bench.start(duration=0.0)
+
+
 def test_a_run_id_is_generated_when_none_is_given():
     assert TestBench().run_id != TestBench().run_id
     assert TestBench(run_id="run_001").run_id == "run_001"

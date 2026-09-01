@@ -9,6 +9,8 @@ connection details rather than bundled here:
 * `transport.loopback` -- in-process, synchronous, deterministic. Default for tests.
 * `transport.lakebase` -- managed Postgres, LISTEN/NOTIFY.
 * `transport.zerobus` -- Ingest-only sink into a Delta table. Send-only.
+* `transport.zerobus_duplex` -- both directions over one Zerobus table: Ingest out,
+  polled catch-up queries back. What one bench receives another bench's uploads with.
 * `transport.device` -- python-can (udp_multicast by default, needs no hardware).
 
 Splitting them out this way means importing, say, `transport.loopback` alone never pulls

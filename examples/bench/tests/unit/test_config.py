@@ -2,19 +2,20 @@
 `ConnectionConfig` (environment/YAML sources, and the per-bus configs it derives) and the
 two pydantic models it builds, `LakebaseConfig` and `ZerobusConfig`. No network required.
 
-Only runtime behaviour is tested. A missing or misspelled field is a `ty` error at the
-call site (both models set `extra="forbid"`, and `ConnectionConfig` is a plain dataclass),
-so tests for those would restate the annotation. What remains is what a type checker
-cannot see: which environment variable feeds which field, which of the two sources reads
-the environment, and validation of the *values* -- blank strings, and names interpolated
-into SQL or into a hostname.
+Only runtime behaviour is tested. A misspelled field is a `ty` error at the call site
+(both models set `extra="forbid"`, and `ConnectionConfig` is a plain dataclass), so tests
+for that would restate the annotation. What remains is what a type checker cannot see:
+which environment variable feeds which field, which of the two sources reads the
+environment, *when* an unset setting is reported (per bus, not per process), and
+validation of the *values* -- blank strings, and names interpolated into SQL or into a
+hostname.
 """
 
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
-from transport.connection import ConnectionConfig
+from transport.connection import ConnectionConfig, MissingSetting
 from transport.lakebase import LakebaseConfig
 from transport.zerobus import ZerobusConfig
 
@@ -95,12 +96,14 @@ def test_from_environ_maps_each_variable_to_its_field(monkeypatch):
     assert config.zerobus_service_principal_id == "value-of-ZEROBUS_SERVICE_PRINCIPAL_ID"
 
 
-def test_from_environ_raises_naming_the_missing_variable(monkeypatch):
+def test_from_environ_leaves_an_unset_variable_unset_rather_than_raising(monkeypatch):
     _clear_env(monkeypatch)
     monkeypatch.setenv("LAKEBASE_ENDPOINT", "projects/p/branches/b/endpoints/e")
-    # Every other required variable (LAKEBASE_DATABASE, ZEROBUS_*) is left unset.
-    with pytest.raises(KeyError, match="LAKEBASE_DATABASE"):
-        ConnectionConfig.from_environ()
+    # Every other variable is left unset. Whether that matters depends on which buses get
+    # built, which from_environ() cannot know -- so it reports nothing here.
+    config = ConnectionConfig.from_environ()
+    assert config.lakebase_database is None
+    assert config.zerobus_catalog is None
 
 
 def test_from_environ_leaves_the_two_profiles_unset_when_absent(monkeypatch):
@@ -136,6 +139,23 @@ def test_from_yaml_never_falls_back_to_the_environment(tmp_path, monkeypatch):
     assert ConnectionConfig.from_yaml(path).lakebase_profile is None
 
 
+def test_from_yaml_rejects_an_unknown_key(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    path = tmp_path / "connection.yaml"
+    path.write_text(REQUIRED_YAML + "zerobus_region: r\nlakebase_databse: typo\n")
+
+    with pytest.raises(TypeError, match="lakebase_databse"):
+        ConnectionConfig.from_yaml(path)
+
+
+def test_from_yaml_accepts_a_file_holding_only_the_settings_one_bus_needs(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    path = tmp_path / "connection.yaml"
+    path.write_text("lakebase_endpoint: projects/p/branches/b/endpoints/e\nlakebase_database: d\n")
+
+    assert ConnectionConfig.from_yaml(path).lakebase_config(table="bus_frames").dbname == "d"
+
+
 # -- ConnectionConfig: the per-bus configs it derives -------------------------------
 
 
@@ -164,6 +184,31 @@ def test_zerobus_config_carries_the_connection_fields_and_a_per_bus_table():
     assert (zerobus.workspace_id, zerobus.region, zerobus.profile) == ("1234567890", "us-east-2", "a-profile")
     assert (zerobus.catalog, zerobus.schema, zerobus.table) == ("a_catalog", "a_schema", "frames")
     assert zerobus.service_principal_id == "a-sp-id"
+
+
+def test_a_lakebase_only_config_derives_a_lakebase_bus_without_any_zerobus_setting(monkeypatch):
+    # The point of deferring the check to here: a topology whose buses are all Lakebase
+    # must run with ZEROBUS_* entirely unset. See topologies/docker_bridge.py.
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("LAKEBASE_ENDPOINT", "projects/p/branches/b/endpoints/e")
+    monkeypatch.setenv("LAKEBASE_DATABASE", "d")
+
+    assert ConnectionConfig.from_environ().lakebase_config(table="bus_frames").dbname == "d"
+
+
+def test_deriving_a_bus_config_names_every_setting_that_is_unset():
+    with pytest.raises(MissingSetting) as excinfo:
+        ConnectionConfig(zerobus_catalog="c").zerobus_config(table="frames")
+
+    # All of them at once, so filling them in doesn't take one run per setting.
+    assert excinfo.value.settings == [
+        "zerobus_schema",
+        "zerobus_workspace_id",
+        "zerobus_region",
+        "zerobus_service_principal_id",
+    ]
+    # The message names the environment variable too, since that is one of the two sources.
+    assert "ZEROBUS_SCHEMA" in str(excinfo.value)
 
 
 def test_deriving_a_bus_config_from_a_blank_connection_setting_fails_at_construction():

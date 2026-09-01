@@ -14,10 +14,12 @@ own output back and forth forever.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
 from bench.clock import Clock
 from bench.frame import DIR_RX, Frame, make_can_frame, make_eth_frame
+from bench.log import log
 
 if TYPE_CHECKING:
     from bench.bus import Bus
@@ -30,6 +32,30 @@ T = TypeVar("T")
 # because a long run sends unboundedly many, and no transport here keeps a frame in flight
 # longer than this many frames' worth of time.
 SENT_MEMORY = 4096
+
+
+@dataclass(frozen=True)
+class BusStats:
+    """How much traffic one handle has put on / taken off its segment.
+
+    Counted in the handle rather than in each transport, so every transport is measured
+    the same way and the numbers match what the Ecu actually saw: `rx_frames` excludes
+    this handle's own suppressed echo, exactly like `drain()`'s return value.
+    """
+
+    tx_frames: int = 0
+    tx_bytes: int = 0
+    rx_frames: int = 0
+    rx_bytes: int = 0
+
+    def since(self, earlier: BusStats) -> BusStats:
+        """Return the traffic counted after `earlier` was taken."""
+        return BusStats(
+            tx_frames=self.tx_frames - earlier.tx_frames,
+            tx_bytes=self.tx_bytes - earlier.tx_bytes,
+            rx_frames=self.rx_frames - earlier.rx_frames,
+            rx_bytes=self.rx_bytes - earlier.rx_bytes,
+        )
 
 
 class _Subscription:
@@ -57,6 +83,29 @@ class BusHandle:
         self._subscriptions: list[_Subscription] = []
         # Insertion-ordered, so the oldest key is the one evicted past SENT_MEMORY.
         self._sent: dict[tuple, None] = {}
+        # Plain ints rather than a BusStats instance: these are touched once per frame,
+        # and `stats` builds the immutable snapshot only when someone asks for one.
+        self._tx_frames = self._tx_bytes = self._rx_frames = self._rx_bytes = 0
+
+    @property
+    def stats(self) -> BusStats:
+        """This handle's traffic counters, as an immutable snapshot."""
+        return BusStats(
+            tx_frames=self._tx_frames,
+            tx_bytes=self._tx_bytes,
+            rx_frames=self._rx_frames,
+            rx_bytes=self._rx_bytes,
+        )
+
+    @property
+    def sends(self) -> bool:
+        """Whether this handle has a transmit side -- opened, or already used."""
+        return self._tx is not None or self._tx_frames > 0
+
+    @property
+    def receives(self) -> bool:
+        """Whether this handle has any registered handler, i.e. a receive side."""
+        return bool(self._subscriptions)
 
     @property
     def channel(self) -> int:
@@ -101,6 +150,8 @@ class BusHandle:
             self._tx = self.bus.open_tx()
         self._remember_sent(frame)
         self._tx.send(frame)
+        self._tx_frames += 1
+        self._tx_bytes += len(frame.data)
 
     def forward(self, frame: Frame) -> None:
         """Re-stamp `frame` onto this segment and transmit it.
@@ -187,6 +238,8 @@ class BusHandle:
             if self._is_own_echo(frame):
                 continue
             dispatched += 1
+            self._rx_frames += 1
+            self._rx_bytes += len(frame.data)
             for sub in self._subscriptions:
                 if sub.matches(frame):
                     sub.handler(frame)
@@ -216,7 +269,7 @@ class BusHandle:
                 try:
                     side.close()
                 except Exception as exc:  # noqa: BLE001 -- teardown must not mask a run's real failure
-                    print(f"[bench] closing bus {self.bus.name}: {exc!r}", flush=True)
+                    log("bench", f"closing bus {self.bus.name}: {exc!r}")
         self._tx = self._rx = None
 
 

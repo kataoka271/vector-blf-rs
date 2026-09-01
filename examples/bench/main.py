@@ -5,10 +5,16 @@ docstring) -- this script never hardcodes one. `--topology reference` (the defau
 the full Lakebase/Zerobus demo (see topologies/reference.py); `--topology quickstart`
 needs no cloud credentials at all (see topologies/quickstart.py).
 
+Every run ends by printing its traffic diagram (see bench/traffic.py): a Mermaid
+flowchart of the topology with each leg labelled by the traffic it actually carried.
+`--live-port` additionally serves that diagram, redrawn every second, while the run is
+still going (see bench/live.py).
+
 Run with:
     uv run --group testing python examples/bench/main.py
     uv run --group testing python examples/bench/main.py --topology quickstart --duration 2
     uv run --group testing python examples/bench/main.py --connection-config conn.yaml
+    uv run --group testing python examples/bench/main.py --topology quickstart --live-port 8765
     uv run --group testing python examples/bench/main.py --list-topologies
 """
 
@@ -16,8 +22,11 @@ from __future__ import annotations
 
 import argparse
 
+from bench import traffic
+from bench.live import LiveTraffic
+from bench.log import log
 from bench.topology import MissingConfig, discover, get_topology, list_topologies
-from transport.connection import ConnectionConfig
+from transport.connection import ConnectionConfig, MissingSetting
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -40,7 +49,18 @@ def main(argv: list[str] | None = None) -> None:
             "YAML file of Lakebase/Zerobus connection settings (see "
             "transport/connection.py::ConnectionConfig.from_yaml). Falls back to "
             "LAKEBASE_*/ZEROBUS_* environment variables (see ConnectionConfig.from_environ) "
-            "when omitted; a fully offline topology (e.g. quickstart) needs neither."
+            "when omitted. Only the settings the chosen topology's buses actually need have "
+            "to be there; a fully offline topology (e.g. quickstart) needs none."
+        ),
+    )
+    parser.add_argument(
+        "--live-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help=(
+            "Serve the traffic diagram on http://127.0.0.1:PORT/ while the run is going, "
+            "redrawn every second. Omitted, the diagram is only printed once the run ends."
         ),
     )
     parser.add_argument("--list-topologies", action="store_true", help="Print registered topology names and exit.")
@@ -53,23 +73,31 @@ def main(argv: list[str] | None = None) -> None:
 
     build = get_topology(args.topology)
 
-    config: ConnectionConfig | None = None
-    unresolved: str | None = None
     if args.connection_config:
         config = ConnectionConfig.from_yaml(args.connection_config)
     else:
-        try:
-            config = ConnectionConfig.from_environ()
-        except KeyError as exc:
-            # Not an error yet: a fully offline topology (e.g. quickstart) ignores `config`
-            # entirely, so this only matters if the topology asks for one via require_config() below.
-            unresolved = f"set LAKEBASE_*/ZEROBUS_* environment variables (missing {exc}) or pass --connection-config"
+        config = ConnectionConfig.from_environ()
 
+    # Neither source insists on being complete: which settings a run needs is decided by
+    # the buses the topology builds, so an incomplete one surfaces here as MissingSetting.
     try:
         bench = build(config=config, run_id=args.run_id)
-    except MissingConfig:
-        parser.error(f"--topology {args.topology} needs a connection config: {unresolved}")
-    bench.run(duration=args.duration)
+    except (MissingConfig, MissingSetting) as exc:
+        parser.error(f"--topology {args.topology}: {exc}")
+
+    log("bench", f"starting topology={args.topology} duration={args.duration}s")
+
+    live = None
+    if args.live_port is not None:
+        live = LiveTraffic(bench, port=args.live_port)
+        live.start()
+        log("bench", f"live traffic diagram: {live.url}")
+    try:
+        bench.run(duration=args.duration)
+    finally:
+        if live is not None:
+            live.stop()
+        print(traffic.format_summary(traffic.snapshot(bench), title=f"{args.topology} / {bench.run_id}"), flush=True)
 
 
 if __name__ == "__main__":

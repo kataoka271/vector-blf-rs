@@ -25,21 +25,34 @@ LAKEBASE_*/ZEROBUS_* environment variables by default, or `--connection-config
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from bench.bench import TestBench
-from bench.bus import Lakebase, Zerobus
+from bench.bus import Bus, Lakebase, Zerobus
 from bench.ecu import GatewayEcu, ProxyEcu, ReceiverEcu
 from bench.replay import GeneratorEcu, ReplayEcu
 from bench.topology import register_topology, require_config
 from transport.connection import ConnectionConfig
 
 
-def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
-    config = require_config(config, "reference")
-    bench = TestBench(run_id=run_id)
+def build(config: ConnectionConfig | None = None, run_id: str | None = None, **buses: Bus) -> TestBench:
+    """Lakebase for both bus segments and Zerobus for the capture upload, unless a
+    caller replaces a slot: `build(bus1=Loopback(), bus2=Loopback(), zerobus=Loopback())`
+    runs the same five ECUs entirely in-process and needs no `config` at all.
+    """
+    bench = TestBench(run_id=run_id, buses=buses)
 
-    bus1 = bench.add_bus(Lakebase(config.lakebase_config(table="bench_reference_bus1")))
-    bus2 = bench.add_bus(Lakebase(config.lakebase_config(table="bench_reference_bus2")))
-    zerobus = bench.add_bus(Zerobus(config.zerobus_config(table="blf_testbench_frames")))
+    # require_config() is deferred into the defaults so an overridden slot neither builds
+    # its Lakebase/Zerobus config nor insists a caller have credentials for it.
+    def lakebase(table: str) -> Callable[[], Bus]:
+        return lambda: Lakebase(require_config(config, "reference").lakebase_config(table=table))
+
+    def zerobus_default() -> Bus:
+        return Zerobus(require_config(config, "reference").zerobus_config(table="blf_testbench_frames"))
+
+    bus1 = bench.bus("bus1", lakebase("bench_reference_bus1"))
+    bus2 = bench.bus("bus2", lakebase("bench_reference_bus2"))
+    zerobus = bench.bus("zerobus", zerobus_default)
 
     generator = GeneratorEcu(ch=bus1)
     gateway = GatewayEcu(ch1=bus1, ch2=bus2)

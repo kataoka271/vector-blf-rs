@@ -6,12 +6,13 @@
 #   uv run python examples/bench/test.py --connection-config examples/bench/connection.yaml
 #   uv run python examples/bench/main.py --connection-config examples/bench/connection.yaml
 #
-# Every key below except lakebase_profile/zerobus_profile is required -- from_yaml()
-# does not merge in LAKEBASE_*/ZEROBUS_* environment variables for a key it omits, it
-# just passes the parsed YAML straight to ConnectionConfig(**data), so omitting a
-# required one is a TypeError naming it (use ConnectionConfig.from_environ() instead if
-# you want the environment-variable source). Never commit a copy of this file with real
-# values filled in.
+# Keep only the keys the topology you run actually needs: a Lakebase-only topology needs
+# no zerobus_* key at all, and omitting one is reported (as MissingSetting, naming it)
+# only if a bus that needs it is built. from_yaml() does not merge in
+# LAKEBASE_*/ZEROBUS_* environment variables for a key you omit -- it passes the parsed
+# YAML straight to ConnectionConfig(**data), so a *misspelled* key is a TypeError naming
+# it (use ConnectionConfig.from_environ() instead if you want the environment-variable
+# source). Never commit a copy of this file with real values filled in.
 
 # Lakebase (managed Postgres) -----------------------------------------------------
 lakebase_endpoint: projects/<project>/branches/<branch>/endpoints/<endpoint>
@@ -20,7 +21,7 @@ lakebase_endpoint: projects/<project>/branches/<branch>/endpoints/<endpoint>
 # service-principal (OAuth M2M) profile works inside the Docker demo -- see
 # docker-compose.yml.
 lakebase_profile: null
-# Required. The Postgres table itself is named separately, per bus, via
+# Needed by every Lakebase bus. The Postgres table itself is named separately, per bus, via
 # lakebase_config(table=...).
 lakebase_database: databricks_postgres
 
@@ -32,11 +33,11 @@ zerobus_region: us-east-2
 # Zerobus always needs service-principal (OAuth M2M) credentials, see
 # transport/zerobus.py::ZerobusStream.
 zerobus_profile: null
-# Required. The Delta table itself is named separately, per bus, via
+# Needed by every Zerobus stream. The Delta table itself is named separately, per bus, via
 # zerobus_config(table=...).
 zerobus_catalog: main
 zerobus_schema: blf
-# Required. Service principal whose secret is periodically rotated -- see
+# Needed by every Zerobus stream. Service principal whose secret is periodically rotated -- see
 # transport/zerobus.py::_SdkStreamFactory. The identity behind zerobus_profile (or
 # DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET) must be able to manage its secrets.
 zerobus_service_principal_id: "<service principal id>"

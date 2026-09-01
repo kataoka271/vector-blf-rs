@@ -23,6 +23,7 @@ import warnings
 from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 from bench.frame import Frame
+from bench.log import log
 from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationInfo, field_validator
 
 if TYPE_CHECKING:
@@ -164,7 +165,7 @@ def _make_ack_ledger():
             self.acked += 1
 
         def on_error(self, offset: int, error_message: str) -> None:
-            print(f"[bench] zerobus: record at offset {offset} rejected: {error_message}", flush=True)
+            log("bench", f"zerobus: record at offset {offset} rejected: {error_message}")
 
     return _AckLedger()
 
@@ -326,7 +327,7 @@ class ZerobusStream:
         try:
             return op()
         except Exception as exc:
-            print(f"[bench] zerobus {self._table}: {exc!r}; recreating stream and retrying once", flush=True)
+            log("bench", f"zerobus {self._table}: {exc!r}; recreating stream and retrying once")
             self._recover()
             return op()
 
@@ -360,10 +361,7 @@ class ZerobusStream:
         missing = self._missing(self._flush_and_close(self._stream))
         if not missing:
             return
-        print(
-            f"[bench] zerobus {self._table}: {missing} record(s) unaccounted for; recreating stream to resend",
-            flush=True,
-        )
+        log("bench", f"zerobus {self._table}: {missing} record(s) unaccounted for; recreating stream to resend")
         remaining = self._missing(self._flush_and_close(self._recover()))
         if remaining:
             raise RuntimeError(f"zerobus {self._table}: {remaining} record(s) were never acknowledged and are lost")
@@ -386,7 +384,7 @@ class ZerobusStream:
         try:
             stream.flush()
         except Exception as exc:
-            print(f"[bench] zerobus: flush before close failed ({exc!r}); closing to count what was lost", flush=True)
+            log("bench", f"zerobus: flush before close failed ({exc!r}); closing to count what was lost")
         try:
             stream.close()
         except Exception:

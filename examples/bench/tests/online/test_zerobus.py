@@ -26,6 +26,8 @@ from bench.frame import Frame, make_can_frame, make_eth_frame
 from databricks.sql.types import Row
 from transport.zerobus import ZerobusConfig, ZerobusStream, ZerobusTx
 
+from tests.online.conftest import derive_or_skip
+
 pytestmark = pytest.mark.online
 
 EPOCH_NS = 1_700_000_000_000_000_000
@@ -34,7 +36,8 @@ VISIBILITY_TIMEOUT_S = 120.0
 
 @pytest.fixture(scope="module")
 def zerobus_config(connection_config) -> ZerobusConfig:
-    return connection_config.zerobus_config(table=os.environ.get("ZEROBUS_TABLE", "blf_testbench_frames"))
+    table = os.environ.get("ZEROBUS_TABLE", "blf_testbench_frames")
+    return derive_or_skip(lambda: connection_config.zerobus_config(table=table))
 
 
 def _frames(run_id: str) -> list[Frame]:

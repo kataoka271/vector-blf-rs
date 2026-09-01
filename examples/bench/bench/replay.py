@@ -9,6 +9,7 @@ data-driven, not event-driven.
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from collections.abc import Callable
 
@@ -22,6 +23,17 @@ from bench.ecu import DEFAULT_POLL_TIMEOUT, Ecu
 FetchFn = Callable[[], pd.DataFrame]
 
 
+def _pass_count(loop: bool | int) -> int | None:
+    """Normalize a `loop` argument to a pass count; None means replay forever."""
+    if loop is True:
+        return None
+    if loop is False:
+        return 1
+    if not isinstance(loop, int) or loop < 1:
+        raise ValueError(f"loop must be True, False, or a positive pass count; got {loop!r}")
+    return loop
+
+
 class ReplayableEcu(Ecu):
     """Fetches replay frames once, then sends them onto `ch` paced by their recorded
     relative timing.
@@ -29,6 +41,12 @@ class ReplayableEcu(Ecu):
     `fetch_fn` is injectable (defaulting to a real Databricks fetch via
     `bench.db.fetch_replay_frames`) so tests can drive this Ecu with a hand-built
     DataFrame instead of a live warehouse connection.
+
+    `loop` controls how many times the fetched frames are replayed: `False` plays them
+    once, `True` replays them over and over until the run's `duration` elapses or
+    `should_stop()` fires, and a positive int stops after that many passes. So a short
+    recording can drive a bench of any length. The rows are fetched once, not re-queried
+    per pass.
     """
 
     def __init__(
@@ -37,6 +55,7 @@ class ReplayableEcu(Ecu):
         *,
         config: ReplayConfig | None = None,
         fetch_fn: FetchFn | None = None,
+        loop: bool | int = False,
         name: str,
         clock: str = WALL,
         tick_hz: float = 1.0,
@@ -45,6 +64,7 @@ class ReplayableEcu(Ecu):
         self._ch = self.handle(ch)
         self._config = config or ReplayConfig()
         self._fetch_fn = fetch_fn or (lambda: fetch_replay_frames(self._config))
+        self._passes = _pass_count(loop)
 
     def run(
         self,
@@ -63,19 +83,37 @@ class ReplayableEcu(Ecu):
             frames = to_frames(df, run_id=self.run_id, source_file=self.source_file, channel=self._ch.channel)
             deadline = None if duration is None else time.monotonic() + duration
             prev_ns: int | None = None
-            for frame in frames:
-                if should_stop():
+            # Each looped pass shifts timestamp_ns past the one before it, so a replayed
+            # frame stays uniquely identifiable by (run_id, can_id, timestamp_ns) rather
+            # than colliding with itself one pass earlier.
+            # One cycle is the recording's span plus its final gap, so the wrap-around
+            # keeps the recorded pacing instead of firing two frames at the same instant.
+            cycle_ns = 0
+            if frames:
+                last_gap_ns = frames[-1].timestamp_ns - frames[-2].timestamp_ns if len(frames) > 1 else 0
+                cycle_ns = max(1, frames[-1].timestamp_ns + last_gap_ns)
+            offset_ns = 0
+            passes_done = 0
+            while frames:
+                for frame in frames:
+                    if should_stop():
+                        return
+                    if deadline is not None and time.monotonic() >= deadline:
+                        return
+                    timestamp_ns = frame.timestamp_ns + offset_ns
+                    if prev_ns is not None:
+                        gap_s = (timestamp_ns - prev_ns) / 1e9
+                        if gap_s > 0:
+                            time.sleep(gap_s)
+                    prev_ns = timestamp_ns
+                    # Re-stamp observed_ns to the actual instant this frame goes out --
+                    # to_frames() left it at 0 as a placeholder (see its docstring).
+                    shifted = dataclasses.replace(frame, timestamp_ns=timestamp_ns)
+                    self._ch.send(shifted.forwarded(channel=shifted.channel))
+                passes_done += 1
+                if self._passes is not None and passes_done >= self._passes:
                     break
-                if deadline is not None and time.monotonic() >= deadline:
-                    break
-                if prev_ns is not None:
-                    gap_s = (frame.timestamp_ns - prev_ns) / 1e9
-                    if gap_s > 0:
-                        time.sleep(gap_s)
-                prev_ns = frame.timestamp_ns
-                # Re-stamp observed_ns to the actual instant this frame goes out --
-                # to_frames() left it at 0 as a placeholder (see its docstring).
-                self._ch.send(frame.forwarded(channel=frame.channel))
+                offset_ns += cycle_ns
         finally:
             self.close()
 
@@ -92,11 +130,12 @@ class GeneratorEcu(ReplayableEcu):
         *,
         config: ReplayConfig | None = None,
         fetch_fn: FetchFn | None = None,
+        loop: bool | int = False,
         name: str = "generator",
         clock: str = WALL,
         tick_hz: float = 1.0,
     ) -> None:
-        super().__init__(ch, config=config, fetch_fn=fetch_fn, name=name, clock=clock, tick_hz=tick_hz)
+        super().__init__(ch, config=config, fetch_fn=fetch_fn, loop=loop, name=name, clock=clock, tick_hz=tick_hz)
 
 
 class ReplayEcu(ReplayableEcu):
@@ -112,10 +151,11 @@ class ReplayEcu(ReplayableEcu):
         *,
         config: ReplayConfig | None = None,
         fetch_fn: FetchFn | None = None,
+        loop: bool | int = False,
         name: str = "replay",
         clock: str = WALL,
         tick_hz: float = 1.0,
     ) -> None:
         if config is None:
             config = ReplayConfig(filter=FilterSpec(exclude_source_prefix=""))
-        super().__init__(ch, config=config, fetch_fn=fetch_fn, name=name, clock=clock, tick_hz=tick_hz)
+        super().__init__(ch, config=config, fetch_fn=fetch_fn, loop=loop, name=name, clock=clock, tick_hz=tick_hz)

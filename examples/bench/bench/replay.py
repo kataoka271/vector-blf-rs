@@ -22,6 +22,27 @@ from bench.ecu import DEFAULT_POLL_TIMEOUT, Ecu
 
 FetchFn = Callable[[], pd.DataFrame]
 
+SLEEP_SLICE = 0.05
+
+
+def _sleep_between_frames(gap_s: float, should_stop: Callable[[], bool]) -> bool:
+    """Wait out a recorded inter-frame gap, in slices so a stop lands mid-gap.
+
+    Returns False if the run was stopped during the wait. Sleeping the whole gap in one
+    call would make a recording with second-scale gaps take that long to react to stop().
+
+    `duration` deliberately does not cut a gap short: it is checked once per frame, so a
+    frame whose gap crosses the deadline is still sent, as it was before slicing.
+    """
+    end = time.monotonic() + gap_s
+    while True:
+        if should_stop():
+            return False
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(remaining, SLEEP_SLICE))
+
 
 def _pass_count(loop: bool | int) -> int | None:
     """Normalize a `loop` argument to a pass count; None means replay forever."""
@@ -103,8 +124,8 @@ class ReplayableEcu(Ecu):
                     timestamp_ns = frame.timestamp_ns + offset_ns
                     if prev_ns is not None:
                         gap_s = (timestamp_ns - prev_ns) / 1e9
-                        if gap_s > 0:
-                            time.sleep(gap_s)
+                        if gap_s > 0 and not _sleep_between_frames(gap_s, should_stop):
+                            return
                     prev_ns = timestamp_ns
                     # Re-stamp observed_ns to the actual instant this frame goes out --
                     # to_frames() left it at 0 as a placeholder (see its docstring).

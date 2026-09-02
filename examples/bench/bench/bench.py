@@ -16,6 +16,8 @@ from bench.bus import Bus
 if TYPE_CHECKING:
     from bench.ecu import Ecu
 
+JOIN_SLICE = 0.1
+
 
 class TestBench:
     """Orchestrates one run: a set of buses (each a transport config) and a set of Ecus
@@ -80,15 +82,35 @@ class TestBench:
             thread.start()
 
     def run(self, duration: float | None = None) -> None:
-        """Start the run and block until every Ecu stops."""
+        """Start the run and block until every Ecu stops.
+
+        Ctrl-C is turned into an ordinary stop() rather than an abort, so every Ecu still
+        runs its close() teardown and flushes whatever its transport has buffered.
+        """
         self.start(duration)
-        self._join()
+        try:
+            self._join()
+        except KeyboardInterrupt:
+            print("[bench] interrupted -- stopping every Ecu", flush=True)
+            self.stop()
 
     def stop(self, timeout: float = 5.0) -> None:
         """Signal every Ecu to stop and wait for them to finish."""
         self._stop.set()
         self._join(timeout=timeout)
+        stragglers = [t.name for t in self._threads if t.is_alive()]
+        if stragglers:
+            # The threads are deliberately not daemons -- an Ecu killed mid-close() loses
+            # whatever its transport had buffered -- so say who is holding up the exit.
+            print(f"[bench] still running after {timeout}s: {', '.join(stragglers)}", flush=True)
 
     def _join(self, timeout: float | None = None) -> None:
+        # Always a timed join: a bare Thread.join() blocks the main thread in a way that
+        # defers KeyboardInterrupt until the thread exits on its own, which for an
+        # unbounded run means Ctrl-C never reaches _stop at all.
+        deadline = None if timeout is None else time.monotonic() + timeout
         for thread in self._threads:
-            thread.join(timeout=timeout)
+            while thread.is_alive():
+                if deadline is not None and time.monotonic() >= deadline:
+                    return
+                thread.join(JOIN_SLICE)

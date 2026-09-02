@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from bench.bus import Bus
@@ -28,13 +29,33 @@ class TestBench:
     # imports it draws a "cannot collect test class" warning; this opts it out.
     __test__ = False
 
-    def __init__(self, run_id: str | None = None) -> None:
+    def __init__(self, run_id: str | None = None, buses: Mapping[str, Bus] | None = None) -> None:
+        """`buses` replaces the transport a topology picked for one of its bus slots,
+        keyed by the slot name that topology passes to `bus()` -- see that method.
+        """
         self.run_id = run_id or str(uuid.uuid4())
         self._buses: dict[str, Bus] = {}
         self._ecus: list[Ecu] = []
         self._next_channel = 1
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._overrides = dict(buses or {})
+        self._slots: list[str] = []
+
+    def bus(self, slot: str, default: Bus | Callable[[], Bus], *, channel: int | None = None) -> Bus:
+        """Register the bus this topology calls `slot`: the caller's override when one
+        was passed as `TestBench(buses=...)`, else `default`.
+
+        This is what lets a topology's transports be chosen from outside it --
+        `build(bus1=Loopback())` against a topology that would otherwise open a Lakebase
+        table -- instead of being fixed in the topology's own code. Give `default` as a
+        zero-argument callable whenever building it needs credentials, so an overridden
+        slot never constructs (nor demands a config for) the transport it replaced.
+        """
+        self._slots.append(slot)
+        override = self._overrides.get(slot)
+        bus = override if override is not None else (default if isinstance(default, Bus) else default())
+        return self.add_bus(bus, channel=channel)
 
     def add_bus(self, bus: Bus, *, channel: int | None = None) -> Bus:
         """Register `bus` and assign it a BLF channel number.
@@ -42,6 +63,10 @@ class TestBench:
         `channel` picks the number explicitly; otherwise the next unused one is
         assigned. Raises ValueError if the resulting channel is already taken by
         another registered bus.
+
+        For a bench built in place (a test, a one-off script) where the caller already
+        holds the Bus it wants. A registered topology should call `bus()` instead: a bus
+        added here carries no slot name, so `TestBench(buses=...)` cannot replace it.
         """
         if channel is not None:
             bus.channel = channel
@@ -64,6 +89,10 @@ class TestBench:
         its own thread. Non-blocking -- call run() instead to block until they finish,
         or stop() to end the run early.
         """
+        # A misspelled override would otherwise run the topology unchanged, silently.
+        unknown = sorted(set(self._overrides) - set(self._slots))
+        if unknown:
+            raise ValueError(f"no such bus slot: {', '.join(unknown)}; this topology declares {self._slots}")
         run_epoch_ns = time.time_ns()
         for ecu in self._ecus:
             ecu._bind(run_id=self.run_id, run_epoch_ns=run_epoch_ns)

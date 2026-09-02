@@ -21,7 +21,7 @@ import os
 
 import pandas as pd
 from bench.bench import TestBench
-from bench.bus import Lakebase, Zerobus
+from bench.bus import Bus, Lakebase, Zerobus
 from bench.ecu import ReceiverEcu
 from bench.replay import GeneratorEcu
 from bench.topology import register_topology, require_config
@@ -55,28 +55,35 @@ def _demo_frames(count: int = 10, gap_ns: int = 500_000_000) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_producer(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
+def build_producer(config: ConnectionConfig | None = None, run_id: str | None = None, **buses: Bus) -> TestBench:
     """The producer container: one GeneratorEcu writing synthetic frames onto the
     shared Lakebase bus. Needs LAKEBASE_* credentials; no Zerobus config needed.
     """
-    config = require_config(config, "docker-producer")
-    bench = TestBench(run_id=run_id)
-    bus = bench.add_bus(Lakebase(config.lakebase_config(table=BUS_TABLE), name=BUS_TABLE))
+    bench = TestBench(run_id=run_id, buses=buses)
+    bus = bench.bus(
+        "bus",
+        lambda: Lakebase(require_config(config, "docker-producer").lakebase_config(table=BUS_TABLE), name=BUS_TABLE),
+    )
     # _demo_frames rather than a real Databricks fetch, so this demo needs only
     # Lakebase/Zerobus credentials, not a populated blf_gold_signals/blf_silver_can.
     bench.add_ecu(GeneratorEcu(ch=bus, fetch_fn=_demo_frames))
     return bench
 
 
-def build_consumer(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
+def build_consumer(config: ConnectionConfig | None = None, run_id: str | None = None, **buses: Bus) -> TestBench:
     """The consumer container: one ReceiverEcu reading the shared Lakebase bus and
     forwarding everything to Zerobus. Needs both LAKEBASE_* and ZEROBUS_*
     credentials.
     """
-    config = require_config(config, "docker-consumer")
-    bench = TestBench(run_id=run_id)
-    bus = bench.add_bus(Lakebase(config.lakebase_config(table=BUS_TABLE), name=BUS_TABLE))
-    zerobus = bench.add_bus(Zerobus(config.zerobus_config(table=ZEROBUS_TABLE)))
+    bench = TestBench(run_id=run_id, buses=buses)
+    bus = bench.bus(
+        "bus",
+        lambda: Lakebase(require_config(config, "docker-consumer").lakebase_config(table=BUS_TABLE), name=BUS_TABLE),
+    )
+    zerobus = bench.bus(
+        "zerobus",
+        lambda: Zerobus(require_config(config, "docker-consumer").zerobus_config(table=ZEROBUS_TABLE)),
+    )
     bench.add_ecu(ReceiverEcu(ch=bus, zerobus=zerobus))
     return bench
 

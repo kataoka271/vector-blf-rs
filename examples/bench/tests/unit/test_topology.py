@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pytest
 from bench.bench import TestBench
+from bench.bus import Bus, Loopback
 from bench.topology import (
     MissingConfig,
     discover,
@@ -18,8 +19,8 @@ from transport.connection import ConnectionConfig
 
 
 def test_register_and_get_topology():
-    def build(config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench:
-        return TestBench(run_id=run_id)
+    def build(config: ConnectionConfig | None = None, run_id: str | None = None, **buses: Bus) -> TestBench:
+        return TestBench(run_id=run_id, buses=buses)
 
     register_topology("unit-test-topology", build)
     assert get_topology("unit-test-topology") is build
@@ -68,6 +69,21 @@ def test_a_credential_needing_topology_rejects_a_missing_config():
     discover()
     with pytest.raises(MissingConfig, match="reference"):
         get_topology("reference")(config=None, run_id="run_001")
+
+
+def test_bus_overrides_replace_a_topologys_transports():
+    # The point of the bus slots: the same reference wiring, run entirely in-process.
+    # No config is needed because every credential-needing default was overridden.
+    discover()
+    bench = get_topology("reference")(
+        config=None,
+        run_id="run_001",
+        bus1=Loopback(name="a"),
+        bus2=Loopback(name="b"),
+        zerobus=Loopback(name="z"),
+    )
+    assert sorted(bench._buses) == ["a", "b", "z"]
+    assert len(bench._ecus) == 5
 
 
 def test_require_config_passes_a_real_config_through():

@@ -7,6 +7,16 @@ topology means writing `examples/bench/topologies/<name>.py` with a
 under `topologies/` so each one's registration call actually runs; call it once (e.g.
 from `main.py`) before `get_topology()`/`list_topologies()`.
 
+A topology names each of its bus slots via `TestBench.bus("<slot>", <default>)` and takes
+`**buses` through to `TestBench(buses=...)`, so which transport a slot actually gets is
+the caller's choice, not the topology's:
+
+    build = get_topology("reference")
+    bench = build(run_id="run_001", bus1=Loopback(), bus2=Loopback())
+
+An unoverridden slot falls back to the topology's own default, and an unknown slot name
+raises at `TestBench.start()`.
+
 `config` is optional in `BuildFn` so a caller holding only a `BuildFn` can still call one
 when `main.py` resolves nothing from the environment (a fully offline run leaving
 LAKEBASE_*/ZEROBUS_* unset). A topology that needs real credentials states that at
@@ -24,10 +34,13 @@ from typing import Protocol
 from transport.connection import ConnectionConfig
 
 from bench.bench import TestBench
+from bench.bus import Bus
 
 
 class BuildFn(Protocol):
-    def __call__(self, config: ConnectionConfig | None = None, run_id: str | None = None) -> TestBench: ...
+    def __call__(
+        self, config: ConnectionConfig | None = None, run_id: str | None = None, **buses: Bus
+    ) -> TestBench: ...
 
 
 class MissingConfig(Exception):
@@ -58,7 +71,7 @@ _TOPOLOGIES: dict[str, BuildFn] = {}
 
 
 def register_topology(name: str, build: BuildFn) -> None:
-    """Register `build` (a `(config=None, run_id=None) -> TestBench` factory, see
+    """Register `build` (a `(config=None, run_id=None, **buses) -> TestBench` factory, see
     `BuildFn`) under `name`. Re-registering an existing name replaces it.
     """
     _TOPOLOGIES[name] = build

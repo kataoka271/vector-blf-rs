@@ -62,6 +62,11 @@ class Ecu:
             self._buses[key] = BusHandle(bus, self)
         return self._buses[key]
 
+    @property
+    def handles(self) -> list[BusHandle]:
+        """Every bus segment this Ecu is wired to, in the order it first used them."""
+        return list(self._buses.values())
+
     def run(
         self,
         *,

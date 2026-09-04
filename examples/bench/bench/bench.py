@@ -41,6 +41,28 @@ class TestBench:
         self._threads: list[threading.Thread] = []
         self._overrides = dict(buses or {})
         self._slots: list[str] = []
+        self._started_at: float | None = None
+        self._finished_at: float | None = None
+
+    @property
+    def buses(self) -> list[Bus]:
+        """Every registered bus, in registration order."""
+        return list(self._buses.values())
+
+    @property
+    def ecus(self) -> list[Ecu]:
+        """Every registered Ecu, in registration order."""
+        return list(self._ecus)
+
+    @property
+    def elapsed(self) -> float:
+        """Seconds the run has been going, or lasted once it has finished. 0.0 before
+        start().
+        """
+        if self._started_at is None:
+            return 0.0
+        end = time.monotonic() if self._finished_at is None else self._finished_at
+        return end - self._started_at
 
     def bus(self, slot: str, default: Bus | Callable[[], Bus], *, channel: int | None = None) -> Bus:
         """Register the bus this topology calls `slot`: the caller's override when one
@@ -55,6 +77,7 @@ class TestBench:
         self._slots.append(slot)
         override = self._overrides.get(slot)
         bus = override if override is not None else (default if isinstance(default, Bus) else default())
+        bus.slot = slot
         return self.add_bus(bus, channel=channel)
 
     def add_bus(self, bus: Bus, *, channel: int | None = None) -> Bus:
@@ -94,6 +117,8 @@ class TestBench:
         if unknown:
             raise ValueError(f"no such bus slot: {', '.join(unknown)}; this topology declares {self._slots}")
         run_epoch_ns = time.time_ns()
+        self._started_at = time.monotonic()
+        self._finished_at = None
         for ecu in self._ecus:
             ecu._bind(run_id=self.run_id, run_epoch_ns=run_epoch_ns)
         # No role-aware start ordering: every Ecu's channel catches up on connect
@@ -122,11 +147,15 @@ class TestBench:
         except KeyboardInterrupt:
             print("[bench] interrupted -- stopping every Ecu", flush=True)
             self.stop()
+        finally:
+            if self._finished_at is None:
+                self._finished_at = time.monotonic()
 
     def stop(self, timeout: float = 5.0) -> None:
         """Signal every Ecu to stop and wait for them to finish."""
         self._stop.set()
         self._join(timeout=timeout)
+        self._finished_at = time.monotonic()
         stragglers = [t.name for t in self._threads if t.is_alive()]
         if stragglers:
             # The threads are deliberately not daemons -- an Ecu killed mid-close() loses

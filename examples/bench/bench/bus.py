@@ -82,6 +82,15 @@ class Bus:
         self.bus_type = bus_type
         self.config = config
         self.channel: int | None = None
+        # Set by TestBench.bus(); the name is the transport's key (loopback segments,
+        # Lakebase tables) and stays unique, while the slot is what the topology calls
+        # this segment and is what a reader recognises.
+        self.slot: str | None = None
+
+    @property
+    def label(self) -> str:
+        """A human-facing name for this segment: its topology slot when it has one."""
+        return self.slot or self.name
 
     def open_tx(self) -> ChannelTx:
         return _transport(self.bus_type).open_tx(self)

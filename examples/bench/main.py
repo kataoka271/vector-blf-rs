@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 
 from bench.topology import MissingConfig, discover, get_topology, list_topologies
-from transport.connection import ConnectionConfig
+from transport.connection import ConnectionConfig, MissingSetting
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -40,7 +40,8 @@ def main(argv: list[str] | None = None) -> None:
             "YAML file of Lakebase/Zerobus connection settings (see "
             "transport/connection.py::ConnectionConfig.from_yaml). Falls back to "
             "LAKEBASE_*/ZEROBUS_* environment variables (see ConnectionConfig.from_environ) "
-            "when omitted; a fully offline topology (e.g. quickstart) needs neither."
+            "when omitted. Only the settings the chosen topology's buses actually need have "
+            "to be there; a fully offline topology (e.g. quickstart) needs none."
         ),
     )
     parser.add_argument("--list-topologies", action="store_true", help="Print registered topology names and exit.")
@@ -53,22 +54,17 @@ def main(argv: list[str] | None = None) -> None:
 
     build = get_topology(args.topology)
 
-    config: ConnectionConfig | None = None
-    unresolved: str | None = None
     if args.connection_config:
         config = ConnectionConfig.from_yaml(args.connection_config)
     else:
-        try:
-            config = ConnectionConfig.from_environ()
-        except KeyError as exc:
-            # Not an error yet: a fully offline topology (e.g. quickstart) ignores `config`
-            # entirely, so this only matters if the topology asks for one via require_config() below.
-            unresolved = f"set LAKEBASE_*/ZEROBUS_* environment variables (missing {exc}) or pass --connection-config"
+        config = ConnectionConfig.from_environ()
 
+    # Neither source insists on being complete: which settings a run needs is decided by
+    # the buses the topology builds, so an incomplete one surfaces here as MissingSetting.
     try:
         bench = build(config=config, run_id=args.run_id)
-    except MissingConfig:
-        parser.error(f"--topology {args.topology} needs a connection config: {unresolved}")
+    except (MissingConfig, MissingSetting) as exc:
+        parser.error(f"--topology {args.topology}: {exc}")
     bench.run(duration=args.duration)
 
 

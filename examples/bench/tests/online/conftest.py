@@ -10,7 +10,9 @@ also marked `online`, so `-m "not online"` excludes them explicitly.
 
 Connection settings come from `ConnectionConfig.from_environ()`, the same
 LAKEBASE_*/ZEROBUS_* variables `main.py` reads. `examples/bench/.env` is loaded first for
-any variable not already set in the environment, matching docker-compose.yml.
+any variable not already set in the environment, matching docker-compose.yml. A tier
+whose settings are unset skips on its own (see `derive_or_skip`), so setting only
+LAKEBASE_* still runs the whole Lakebase tier.
 
 Everything these tests create is cleaned up: the Lakebase tier writes to a table named
 per run and drops it, and the Zerobus tier deletes its own rows by run_id. The Zerobus
@@ -23,10 +25,14 @@ from __future__ import annotations
 import os
 import pathlib
 import uuid
+from collections.abc import Callable
+from typing import TypeVar
 
 import pytest
 from databricks.sdk.core import Config
-from transport.connection import ConnectionConfig
+from transport.connection import ConnectionConfig, MissingSetting
+
+T = TypeVar("T")
 
 BENCH_DIR = pathlib.Path(__file__).resolve().parents[2]
 ENV_FILE = BENCH_DIR / ".env"
@@ -62,10 +68,19 @@ def online_enabled() -> None:
 
 @pytest.fixture(scope="session")
 def connection_config(online_enabled) -> ConnectionConfig:
+    return ConnectionConfig.from_environ()
+
+
+def derive_or_skip(derive: Callable[[], T]) -> T:
+    """Return `derive()`, or skip when the settings that bus config needs are unset.
+
+    Per bus rather than per session: the Lakebase tier still runs with ZEROBUS_* unset,
+    and vice versa -- see transport/connection.py.
+    """
     try:
-        return ConnectionConfig.from_environ()
-    except KeyError as exc:
-        pytest.skip(f"missing connection setting {exc} (set it in the environment or {ENV_FILE})")
+        return derive()
+    except MissingSetting as exc:
+        pytest.skip(f"{exc}, or in {ENV_FILE}")
 
 
 @pytest.fixture(scope="session")

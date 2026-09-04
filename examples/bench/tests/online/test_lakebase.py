@@ -21,6 +21,8 @@ import pytest
 from bench.frame import Frame, make_can_frame, make_eth_frame
 from transport.lakebase import LakebaseConfig, LakebaseRx, LakebaseTx, connect, sql
 
+from tests.online.conftest import derive_or_skip
+
 pytestmark = pytest.mark.online
 
 EPOCH_NS = 1_700_000_000_000_000_000
@@ -29,7 +31,7 @@ POLL_TIMEOUT_S = 30.0
 
 @pytest.fixture(scope="module")
 def bus_config(connection_config) -> Iterator[LakebaseConfig]:
-    config = connection_config.lakebase_config(table=f"bench_online_{uuid.uuid4().hex[:12]}")
+    config = derive_or_skip(lambda: connection_config.lakebase_config(table=f"bench_online_{uuid.uuid4().hex[:12]}"))
     yield config
     conn = connect(config.profile, config.endpoint_name, config.dbname)
     try:
@@ -71,14 +73,10 @@ def _receive(rx: LakebaseRx, count: int, timeout: float = POLL_TIMEOUT_S) -> lis
     return frames
 
 
-def test_connect_authenticates_and_opens_a_usable_session(connection_config):
+def test_connect_authenticates_and_opens_a_usable_session(bus_config):
     # The whole credential path in one call: resolve the endpoint host, resolve the
     # current user to a Postgres role, mint a database credential, connect over TLS.
-    conn = connect(
-        connection_config.lakebase_profile,
-        connection_config.lakebase_endpoint,
-        connection_config.lakebase_database,
-    )
+    conn = connect(bus_config.profile, bus_config.endpoint_name, bus_config.dbname)
     try:
         assert conn.execute(sql("SELECT 1")).fetchone() == (1,)
     finally:

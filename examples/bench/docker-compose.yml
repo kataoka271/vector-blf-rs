@@ -17,8 +17,9 @@
 # this image, so LAKEBASE_ENDPOINT needs a PAT (DATABRICKS_HOST/TOKEN) unless
 # LAKEBASE_PROFILE names a service principal too. LAKEBASE_DATABASE and
 # ZEROBUS_CATALOG/ZEROBUS_SCHEMA/ZEROBUS_SERVICE_PRINCIPAL_ID have no library-level
-# default (see transport/connection.py::ConnectionConfig) and must be set here --
-# ConnectionConfig.from_environ() raises KeyError outright if one is unset.
+# default (see transport/connection.py::ConnectionConfig) and must be set here. The
+# producer builds only a Lakebase bus, so ZEROBUS_* is genuinely unused there and only
+# the consumer fails (with MissingSetting, naming them) when they are unset.
 #
 # RUN_ID has no default on purpose: LakebaseRx replays a run_id's entire history on
 # every fresh consumer start (see transport/lakebase.py's catch-up query), so reusing

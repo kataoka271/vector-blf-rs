@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from bench.bus import Bus
+from bench.log import log, set_run_id
 
 if TYPE_CHECKING:
     from bench.ecu import Ecu
@@ -34,6 +35,9 @@ class TestBench:
         keyed by the slot name that topology passes to `bus()` -- see that method.
         """
         self.run_id = run_id or str(uuid.uuid4())
+        # Tag this process's log lines from construction on, so a failure while the
+        # topology is still being wired up is already attributable to the run.
+        set_run_id(self.run_id)
         self._buses: dict[str, Bus] = {}
         self._ecus: list[Ecu] = []
         self._next_channel = 1
@@ -116,6 +120,7 @@ class TestBench:
         unknown = sorted(set(self._overrides) - set(self._slots))
         if unknown:
             raise ValueError(f"no such bus slot: {', '.join(unknown)}; this topology declares {self._slots}")
+        set_run_id(self.run_id)
         run_epoch_ns = time.time_ns()
         self._started_at = time.monotonic()
         self._finished_at = None
@@ -145,7 +150,7 @@ class TestBench:
         try:
             self._join()
         except KeyboardInterrupt:
-            print("[bench] interrupted -- stopping every Ecu", flush=True)
+            log("bench", "interrupted -- stopping every Ecu")
             self.stop()
         finally:
             if self._finished_at is None:
@@ -160,7 +165,7 @@ class TestBench:
         if stragglers:
             # The threads are deliberately not daemons -- an Ecu killed mid-close() loses
             # whatever its transport had buffered -- so say who is holding up the exit.
-            print(f"[bench] still running after {timeout}s: {', '.join(stragglers)}", flush=True)
+            log("bench", f"still running after {timeout}s: {', '.join(stragglers)}")
 
     def _join(self, timeout: float | None = None) -> None:
         # Always a timed join: a bare Thread.join() blocks the main thread in a way that

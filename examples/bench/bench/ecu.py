@@ -19,6 +19,7 @@ from bench.bus import Bus
 from bench.clock import WALL, Clock, make_clock
 from bench.frame import Frame, source_file_for
 from bench.handle import BusHandle
+from bench.log import log
 
 DEFAULT_POLL_TIMEOUT = 0.05
 
@@ -134,7 +135,7 @@ class GatewayEcu(Ecu):
         @h1.on()
         def _forward_1_to_2(frame: Frame) -> None:
             h2.forward(frame)
-            print(f"[{self.name}] {ch1.name} -> {ch2.name}: {frame.data.hex()}", flush=True)
+            log(self.name, f"{ch1.name} -> {ch2.name}: {frame.data.hex()}")
 
         if bidirectional:
             # Both handlers are unconditional, so bidirectional forwarding relies on a
@@ -144,7 +145,7 @@ class GatewayEcu(Ecu):
             @h2.on()
             def _forward_2_to_1(frame: Frame) -> None:
                 h1.forward(frame)
-                print(f"[{self.name}] {ch2.name} -> {ch1.name}: {frame.data.hex()}", flush=True)
+                log(self.name, f"{ch2.name} -> {ch1.name}: {frame.data.hex()}")
 
 
 class ReceiverEcu(Ecu):
@@ -172,7 +173,7 @@ class ReceiverEcu(Ecu):
         def _capture(frame: Frame) -> None:
             self.captured.append(frame)
             label = f"can_id=0x{frame.can_id:X}" if frame.can_id is not None else f"ether_type={frame.ether_type}"
-            print(f"[{self.name}] captured {label} data={frame.data.hex()}", flush=True)
+            log(self.name, f"captured {label} data={frame.data.hex()}")
             if self._zerobus is not None:
                 self._zerobus.send(frame)
 

@@ -28,6 +28,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 from bench.frame import FRAME_COLUMNS, Frame, accepts
+from bench.log import log
 from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 if TYPE_CHECKING:
@@ -381,7 +382,7 @@ class _LakebaseBatchWriter:
         except Exception as exc:
             # One reconnect covers the connection drops a long run inevitably sees: an
             # idle timeout, or Lakebase scaling its compute to zero and back.
-            print(f"[bench] lakebase tx {self.table}: {exc!r}; reconnecting and retrying once", flush=True)
+            log("bench", f"lakebase tx {self.table}: {exc!r}; reconnecting and retrying once")
             self._conn = connect(self._config.profile, self._config.endpoint_name, self._config.dbname)
             self._conn.execute(stmt, params)
 
@@ -464,7 +465,7 @@ class LakebaseTx:
                     self._error = exc
                     self._in_flight = False
                     self._cv.notify_all()
-                print(f"[bench] lakebase tx {self._table}: giving up after retry ({exc!r})", flush=True)
+                log("bench", f"lakebase tx {self._table}: giving up after retry ({exc!r})")
                 return
             with self._cv:
                 self._in_flight = False
@@ -552,7 +553,7 @@ class LakebaseRx:
             except Exception as exc:
                 if self._stop.is_set():
                     return
-                print(f"[bench] lakebase rx {self._table}: {exc!r}; reconnecting", flush=True)
+                log("bench", f"lakebase rx {self._table}: {exc!r}; reconnecting")
                 # Whatever went wrong may have been the fetch connection; drop it too so
                 # the next notification opens a fresh one.
                 self._close_fetch_conn()

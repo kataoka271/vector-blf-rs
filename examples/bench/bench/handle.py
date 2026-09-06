@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from bench.clock import Clock
 from bench.frame import DIR_RX, Frame, make_can_frame, make_eth_frame
+from bench.log import log
 
 if TYPE_CHECKING:
     from bench.bus import Bus
@@ -268,7 +269,7 @@ class BusHandle:
                 try:
                     side.close()
                 except Exception as exc:  # noqa: BLE001 -- teardown must not mask a run's real failure
-                    print(f"[bench] closing bus {self.bus.name}: {exc!r}", flush=True)
+                    log("bench", f"closing bus {self.bus.name}: {exc!r}")
         self._tx = self._rx = None
 
 

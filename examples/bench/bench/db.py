@@ -21,6 +21,7 @@ import yaml
 from databricks.sdk.core import Config
 
 from bench.frame import CAN, CAN_FD, DIR_RX, Frame
+from bench.log import log
 from databricks import sql
 
 
@@ -154,12 +155,12 @@ def fetch_replay_frames(cfg: ReplayConfig, dbx_cfg: Config | None = None) -> pd.
         f" AND s.timestamp_ns = g.timestamp_ns"
         f" ORDER BY s.timestamp_ns"
     )
-    print(f"[fetch_replay_frames] stmt={stmt!r} params={params!r}", flush=True)
+    log("fetch_replay_frames", f"stmt={stmt!r} params={params!r}")
     with connect(dbx_cfg) as conn:
         with conn.cursor() as cur:
             cur.execute(stmt, params or None)
             df = cur.fetchall_arrow().to_pandas()
-    print(f"[fetch_replay_frames] -> {len(df)} frame(s)", flush=True)
+    log("fetch_replay_frames", f"-> {len(df)} frame(s)")
     return df
 
 

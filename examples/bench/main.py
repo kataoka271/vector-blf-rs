@@ -24,6 +24,7 @@ import argparse
 
 from bench import traffic
 from bench.live import LiveTraffic
+from bench.log import log
 from bench.topology import MissingConfig, discover, get_topology, list_topologies
 from transport.connection import ConnectionConfig, MissingSetting
 
@@ -84,11 +85,13 @@ def main(argv: list[str] | None = None) -> None:
     except (MissingConfig, MissingSetting) as exc:
         parser.error(f"--topology {args.topology}: {exc}")
 
+    log("bench", f"starting topology={args.topology} duration={args.duration}s")
+
     live = None
     if args.live_port is not None:
         live = LiveTraffic(bench, port=args.live_port)
         live.start()
-        print(f"[bench] live traffic diagram: {live.url}", flush=True)
+        log("bench", f"live traffic diagram: {live.url}")
     try:
         bench.run(duration=args.duration)
     finally:

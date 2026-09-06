@@ -12,6 +12,7 @@ import pandas as pd
 from bench.bench import TestBench
 from bench.bus import Loopback
 from bench.ecu import Ecu, GatewayEcu, ReceiverEcu
+from bench.log import SEPARATOR
 from bench.replay import GeneratorEcu
 
 RUN_ID = "run_001"
@@ -136,7 +137,7 @@ def test_every_ecu_is_bound_to_one_shared_run_epoch():
     ecus = [bench.add_ecu(Ecu(f"ecu{i}")) for i in range(3)]
 
     bench.start(duration=0.05)
-    bench._join()
+    bench.wait()
 
     epochs = {ecu.clock.run_epoch_ns for ecu in ecus if ecu.clock is not None}
     assert len(epochs) == 1
@@ -181,3 +182,27 @@ def test_ecus_run_concurrently_rather_than_one_after_another():
 
     assert sorted(met) == ["ecu0", "ecu1"]
     assert {thread.name for thread in bench._threads} == {"ecu0", "ecu1"}
+
+
+def test_two_benches_run_at_once_each_tagging_its_own_run_id(capsys):
+    # A run's log context is thread-local, so starting a second bench while the first is
+    # still going does not retag the first one's lines -- which a process-wide run id
+    # would, every line then naming whichever bench started last.
+    benches = []
+    for run_id in ("run_a", "run_b"):
+        bench = TestBench(run_id=run_id)
+        bus = bench.add_bus(Loopback(name=f"seg_{run_id}"))
+        bench.add_ecu(ReceiverEcu(ch=bus, name=f"receiver_{run_id}"))
+        benches.append(bench)
+
+    for bench in benches:
+        bench.start(duration=0.2)
+    for bench in benches:
+        bench.wait()
+
+    lines = [line.split(SEPARATOR) for line in capsys.readouterr().out.splitlines()]
+    stopped = [fields for fields in lines if fields[-1] == "stopped"]
+    assert {(fields[-3], fields[-2]) for fields in stopped} == {
+        ("run_a", "receiver_run_a"),
+        ("run_b", "receiver_run_b"),
+    }

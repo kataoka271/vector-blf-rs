@@ -19,7 +19,7 @@ from bench.bus import Bus
 from bench.clock import WALL, Clock, make_clock
 from bench.frame import Frame, source_file_for
 from bench.handle import BusHandle
-from bench.log import bind_clock, log
+from bench.log import bind_run, log
 
 DEFAULT_POLL_TIMEOUT = 0.05
 
@@ -87,7 +87,7 @@ class Ecu:
         """
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
-        bind_clock(self.clock)
+        bind_run(run_id=self.run_id, run_epoch_ns=self.clock.run_epoch_ns, clock=self.clock)
         for handle in self._buses.values():
             handle.subscribe()
         deadline = None if duration is None else time.monotonic() + duration
@@ -220,7 +220,7 @@ class ProxyEcu(Ecu):
             raise TypeError(f"{type(self).__name__}.run() has no tick loop and does not support on_tick")
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
-        bind_clock(self.clock)
+        bind_run(run_id=self.run_id, run_epoch_ns=self.clock.run_epoch_ns, clock=self.clock)
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.bind((self._host, self._port))
         self._sock.settimeout(poll_timeout)

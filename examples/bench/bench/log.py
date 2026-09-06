@@ -1,21 +1,25 @@
 """Run-tagged stdout logging.
 
 Every bench line goes through log(), so a run's output stays attributable when several
-runs (or several containers writing to one stream) are interleaved. The run id is
-process-wide rather than passed down: transports and helpers log from call sites that
-never see the TestBench, and one process only ever drives one run.
+runs (or several containers writing to one stream) are interleaved.
 
-Each line is prefixed with the wall clock, the time since the run's epoch, the run id,
-and -- on a thread running an Ecu whose clock has ticked -- that Ecu's tick index, all
+Each line carries the wall clock, the time since the run's epoch, the run id, and -- on
+a thread running an Ecu whose clock has ticked -- that Ecu's tick index, all
 `|`-separated:
 
     12:34:56.789 | +3.214s | run_001 | t=3 | gateway | bus_a -> bus_b: 0100
 
-The epoch is process-wide for the same reason the run id is, while the tick belongs to
-one Ecu's clock and so is thread-local: TestBench gives every Ecu its own thread, and
-each run loop binds its clock via `bind_clock()`. Both fields are dropped when unset --
-a line logged before start(), or from a thread with no Ecu on it, keeps the shorter
-prefix rather than reporting a time it does not have.
+The run a line belongs to is thread-local (`bind_run()`), not passed down: transports and
+helpers log from call sites that never see the TestBench, while every Ecu gets its own
+thread and binds its run there. That is what lets two TestBenches run at once in one
+process and still tag their lines apart.
+
+A thread that binds nothing falls back to the process-wide `set_run_id()`/
+`set_run_epoch()` values -- lines logged before start(), and a transport's own background
+threads (the Lakebase tx/rx workers), which are not covered by the thread that spawned
+them. With two benches running concurrently that fallback names whichever started last,
+so a caller that has to be exact passes `log(..., run_id=...)` explicitly. Unset fields
+are dropped rather than printed empty.
 """
 
 from __future__ import annotations
@@ -29,45 +33,60 @@ if TYPE_CHECKING:
 
 SEPARATOR = " | "
 
+_local = threading.local()
 _run_id = "-"
 _run_epoch_ns: int | None = None
-_local = threading.local()
 
 
 def set_run_id(run_id: str) -> None:
-    """Set the run id every later log() line is tagged with. TestBench.start() calls it."""
+    """Set the run id lines from an unbound thread are tagged with."""
     global _run_id
     _run_id = run_id or "-"
 
 
 def get_run_id() -> str:
-    return _run_id
+    """Return the run id this thread's log lines carry."""
+    return getattr(_local, "run_id", None) or _run_id
 
 
 def set_run_epoch(run_epoch_ns: int | None) -> None:
-    """Set the epoch later log() lines report their elapsed time against, or None to
-    stop reporting one. TestBench.start() calls it with the same epoch it binds into
-    every Ecu, so a log line's `+Ns` and a frame's `timestamp_ns` share an origin.
+    """Set the epoch lines from an unbound thread report their elapsed time against, or
+    None to stop reporting one.
     """
     global _run_epoch_ns
     _run_epoch_ns = run_epoch_ns
 
 
-def bind_clock(clock: Clock | None) -> None:
-    """Bind `clock` as the source of the tick index on this thread's log lines.
+def bind_run(
+    *,
+    run_id: str | None = None,
+    run_epoch_ns: int | None = None,
+    clock: Clock | None = None,
+) -> None:
+    """Bind this thread's log context: the run its lines belong to, the epoch their
+    elapsed time is measured from, and the clock their tick index is read off.
 
-    Each Ecu run loop calls this on entry; it is thread-local because a bench's Ecus run
-    concurrently on their own threads, each with its own clock and tick count.
+    Each Ecu run loop calls this on entry with its own run and clock; TestBench calls it
+    for the thread driving the run. Every argument is optional so a caller can bind only
+    what it knows.
     """
-    _local.clock = clock
+    if run_id is not None:
+        _local.run_id = run_id
+    if run_epoch_ns is not None:
+        _local.run_epoch_ns = run_epoch_ns
+    if clock is not None:
+        _local.clock = clock
 
 
-def _fields() -> list[str]:
+def _fields(run_id: str | None) -> list[str]:
     now_ns = time.time_ns()
     fields = [f"{time.strftime('%H:%M:%S', time.localtime(now_ns / 1e9))}.{now_ns // 1_000_000 % 1000:03d}"]
-    if _run_epoch_ns is not None:
-        fields.append(f"{(now_ns - _run_epoch_ns) / 1e9:+.3f}s")
-    fields.append(_run_id)
+    epoch_ns = getattr(_local, "run_epoch_ns", None)
+    if epoch_ns is None:
+        epoch_ns = _run_epoch_ns
+    if epoch_ns is not None:
+        fields.append(f"{(now_ns - epoch_ns) / 1e9:+.3f}s")
+    fields.append(run_id or get_run_id())
     clock = getattr(_local, "clock", None)
     # -1 is a bound clock that has not ticked yet: a reactive Ecu (gateway, receiver)
     # never ticks at all, and an empty t= field on all of its lines is just noise.
@@ -76,8 +95,10 @@ def _fields() -> list[str]:
     return fields
 
 
-def log(tag: str, message: str) -> None:
-    """Print one `|`-separated line ending in `tag` and `message`, unbuffered. See the
-    module docstring for what the leading fields carry.
+def log(tag: str, message: str, *, run_id: str | None = None) -> None:
+    """Print one `|`-separated line ending in `tag` and `message`, unbuffered.
+
+    `run_id` overrides the thread's own, for a caller logging on behalf of a run it is
+    not itself bound to -- one thread driving two concurrent TestBenches.
     """
-    print(SEPARATOR.join([*_fields(), tag, message]), flush=True)
+    print(SEPARATOR.join([*_fields(run_id), tag, message]), flush=True)

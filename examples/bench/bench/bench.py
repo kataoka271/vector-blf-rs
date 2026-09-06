@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from bench.bus import Bus
-from bench.log import log, set_run_epoch, set_run_id
+from bench.log import bind_run, log, set_run_epoch, set_run_id
 
 if TYPE_CHECKING:
     from bench.ecu import Ecu
@@ -35,8 +35,9 @@ class TestBench:
         keyed by the slot name that topology passes to `bus()` -- see that method.
         """
         self.run_id = run_id or str(uuid.uuid4())
-        # Tag this process's log lines from construction on, so a failure while the
+        # Tag this thread's log lines from construction on, so a failure while the
         # topology is still being wired up is already attributable to the run.
+        bind_run(run_id=self.run_id)
         set_run_id(self.run_id)
         self._buses: dict[str, Bus] = {}
         self._ecus: list[Ecu] = []
@@ -120,8 +121,11 @@ class TestBench:
         unknown = sorted(set(self._overrides) - set(self._slots))
         if unknown:
             raise ValueError(f"no such bus slot: {', '.join(unknown)}; this topology declares {self._slots}")
-        set_run_id(self.run_id)
         run_epoch_ns = time.time_ns()
+        # Bound on this thread for the driver's own lines, and set process-wide as the
+        # fallback for threads that bind nothing (a transport's background worker).
+        bind_run(run_id=self.run_id, run_epoch_ns=run_epoch_ns)
+        set_run_id(self.run_id)
         set_run_epoch(run_epoch_ns)
         self._started_at = time.monotonic()
         self._finished_at = None
@@ -149,28 +153,18 @@ class TestBench:
         """
         self.start(duration)
         try:
-            self._join()
+            self.wait()
         except KeyboardInterrupt:
-            log("bench", "interrupted -- stopping every Ecu")
+            log("bench", "interrupted -- stopping every Ecu", run_id=self.run_id)
             self.stop()
         finally:
             if self._finished_at is None:
                 self._finished_at = time.monotonic()
 
-    def stop(self, timeout: float = 5.0) -> None:
-        """Signal every Ecu to stop and wait for them to finish."""
-        self._stop.set()
-        self._join(timeout=timeout)
-        self._finished_at = time.monotonic()
-        stragglers = [t.name for t in self._threads if t.is_alive()]
-        if stragglers:
-            # The threads are deliberately not daemons -- an Ecu killed mid-close() loses
-            # whatever its transport had buffered -- so say who is holding up the exit.
-            log("bench", f"still running after {timeout}s: {', '.join(stragglers)}")
-
-    def _join(self, timeout: float | None = None) -> None:
-        # Always a timed join: a bare Thread.join() blocks the main thread in a way that
-        # defers KeyboardInterrupt until the thread exits on its own, which for an
+    def wait(self, timeout: float | None = None) -> None:
+        """Block until every Ecu has stopped, or `timeout` seconds have passed."""
+        # Always a timed join: a bare Thread.join() blocks the calling thread in a way
+        # that defers KeyboardInterrupt until the thread exits on its own, which for an
         # unbounded run means Ctrl-C never reaches _stop at all.
         deadline = None if timeout is None else time.monotonic() + timeout
         for thread in self._threads:
@@ -178,3 +172,17 @@ class TestBench:
                 if deadline is not None and time.monotonic() >= deadline:
                     return
                 thread.join(JOIN_SLICE)
+        if self._finished_at is None:
+            self._finished_at = time.monotonic()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Signal every Ecu to stop and wait for them to finish."""
+        self._stop.set()
+        self.wait(timeout=timeout)
+        if self._finished_at is None:
+            self._finished_at = time.monotonic()
+        stragglers = [t.name for t in self._threads if t.is_alive()]
+        if stragglers:
+            # The threads are deliberately not daemons -- an Ecu killed mid-close() loses
+            # whatever its transport had buffered -- so say who is holding up the exit.
+            log("bench", f"still running after {timeout}s: {', '.join(stragglers)}", run_id=self.run_id)

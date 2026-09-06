@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from bench.bus import Bus
-from bench.log import log, set_run_id
+from bench.log import log, set_run_epoch, set_run_id
 
 if TYPE_CHECKING:
     from bench.ecu import Ecu
@@ -122,6 +122,7 @@ class TestBench:
             raise ValueError(f"no such bus slot: {', '.join(unknown)}; this topology declares {self._slots}")
         set_run_id(self.run_id)
         run_epoch_ns = time.time_ns()
+        set_run_epoch(run_epoch_ns)
         self._started_at = time.monotonic()
         self._finished_at = None
         for ecu in self._ecus:

@@ -19,6 +19,7 @@ from bench.bus import Bus
 from bench.clock import WALL
 from bench.db import FilterSpec, ReplayConfig, fetch_replay_frames, to_frames
 from bench.ecu import DEFAULT_POLL_TIMEOUT, Ecu
+from bench.log import bind_clock
 
 FetchFn = Callable[[], pd.DataFrame]
 
@@ -99,6 +100,7 @@ class ReplayableEcu(Ecu):
             raise TypeError(f"{type(self).__name__}.run() has no tick loop and does not support on_tick")
         if self.clock is None:
             raise RuntimeError(f"Ecu {self.name!r} was never bound to a run; add it via TestBench.add_ecu() first")
+        bind_clock(self.clock)
         try:
             df = self._fetch_fn()
             frames = to_frames(df, run_id=self.run_id, source_file=self.source_file, channel=self._ch.channel)

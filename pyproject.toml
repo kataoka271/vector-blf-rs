@@ -58,11 +58,17 @@ testing = [
     "pyyaml>=6.0",
 ]
 
+[tool.uv.workspace]
+members = ["examples/bench"]
+
 [tool.ruff]
 line-length = 120
 
 [tool.pyright]
+venvPath = "."
+venv = ".venv"
 reportMissingImports = "warning"
+executionEnvironments = [{ root = "examples/bench" }, { root = "." }]
 
 [tool.pytest.ini_options]
 testpaths = ["databricks", "scripts", "examples/bench"]

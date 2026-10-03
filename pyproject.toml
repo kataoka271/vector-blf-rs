@@ -58,6 +58,9 @@ testing = [
     "pyyaml>=6.0",
 ]
 
+[tool.uv.workspace]
+members = ["examples/bench"]
+
 [tool.ruff]
 line-length = 120
 

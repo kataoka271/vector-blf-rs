@@ -1,0 +1,21 @@
+[project]
+name = "blf-bench"
+version = "0.1.0"
+description = "TestBench example: simulated ECUs on CAN buses with Zerobus/Lakebase transports"
+requires-python = ">=3.10"
+dependencies = [
+    "databricks-sdk>=0.117.0",
+    "databricks-sql-connector>=4.2.6",
+    "databricks-zerobus-ingest-sdk>=1.4.0",
+    "grpcio-tools>=1.60.0",
+    "pandas>=2.0.0,<3.0.0",
+    "protobuf>=4.25.0,<7.0",
+    "psycopg[binary]>=3.1.0,<4.0",
+    "pyarrow>=14.0.0",
+    "pydantic>=2.0",
+    "python-can>=4.5.0",
+    "pyyaml>=6.0",
+]
+
+[tool.uv]
+package = false

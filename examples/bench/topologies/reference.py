@@ -1,4 +1,4 @@
-"""The reference topology (see examples/testing/README.md for prerequisites):
+"""The reference topology (prerequisites below):
 
     Generator --(bus1, Lakebase)--> Gateway --(bus2, Lakebase)--> Receiver --> Zerobus
                                         ^                            ^

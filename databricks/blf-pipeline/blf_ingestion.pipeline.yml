@@ -19,6 +19,7 @@ resources:
         blf.someip_signals_table: ${var.someip_signals_table}
         blf.enum_signals_table:   ${var.enum_signals_table}
         blf.video_path:           ${var.video_path}
+        blf.testbench_frames_table: ${var.testbench_frames_table}
 
       libraries:
         # DLT pipeline definition (path relative to this file)

@@ -44,6 +44,7 @@ Setup
        blf.enum_signals_path   /Volumes/mycat/myschema/enum_values.csv        (optional)
        blf.container_long_header false                (optional, default: false)
        blf.video_path           /Volumes/mycat/myschema/video                  (optional)
+       blf.testbench_frames_table mycat.myschema.blf_testbench_frames          (optional)
 
    Signal definitions can also be loaded from Unity Catalog tables instead of CSV files.
    When a table parameter is set it takes precedence over the corresponding path parameter.
@@ -96,6 +97,19 @@ Setup
    to play back without transcoding in an HTML5 <video> element. If
    blf.video_path is not set, blf_video_files will be empty.
 
+   Test bench frames (optional): if blf.testbench_frames_table is set, the raw CAN and
+   Ethernet frames examples/bench/ uploads over Databricks Zerobus Ingest are read from
+   that table as a second streaming source and unioned into blf_bronze, so the whole
+   decode chain below bronze applies to test-bench results exactly as it does to recorded
+   files. Each row's message_type ("CAN"/"CAN_FD"/"ETH"/"ETH_EX") routes it to the same
+   silver table a recorded frame of that kind reaches. Those rows carry a synthetic
+   _source_file of "testbench/<run_id>.blf" -- the pipelines treat _source_file as an
+   opaque per-log grouping key, so a test run partitions like any other file -- and a
+   channel identifying which simulated bus segment the frame was observed on. See
+   examples/bench/transport/record.proto for the table's columns and examples/bench/ for
+   the producers. If blf.testbench_frames_table is not set, blf_bronze has the Auto Loader
+   source only.
+
 The pipeline is continuous-streaming: Auto Loader tracks which files have
 been processed, so only new *.blf files are ingested on each run.
 """
@@ -131,6 +145,7 @@ SIGNALS_TABLE = spark.conf.get("blf.signals_table", "")
 SOMEIP_SIGNALS_TABLE = spark.conf.get("blf.someip_signals_table", "")
 ENUM_SIGNALS_TABLE = spark.conf.get("blf.enum_signals_table", "")
 VIDEO_PATH = spark.conf.get("blf.video_path", "")
+TESTBENCH_FRAMES_TABLE = spark.conf.get("blf.testbench_frames_table", "")
 
 # ── bronze output schema (flat rows emitted by _parse_blf_batch) ──────────────
 
@@ -529,6 +544,93 @@ def _parse_blf_batch(iterator):
 
 # ── bronze layer ──────────────────────────────────────────────────────────────
 
+# Bronze columns a test-bench CAN frame has nothing to say about, with the cast each one
+# needs so the union matches _BRONZE_OUTPUT_SCHEMA exactly.
+_TESTBENCH_NULL_COLUMNS = {
+    "_file_mtime": "timestamp",
+    "_file_size_bytes": "long",
+    "brs": "boolean",
+    "esi": "boolean",
+    "mf4_group": "string",
+    "mf4_name": "string",
+    "mf4_value": "double",
+    "mf4_unit": "string",
+    "transport": "string",
+    "doip_src_addr": "int",
+    "doip_target_addr": "int",
+    "uds_type": "string",
+    "service_id": "int",
+    "service_name": "string",
+    "nrc": "int",
+    "nrc_name": "string",
+}
+
+
+def _testbench_bronze_rows():
+    """Read raw frames uploaded by the test bench (examples/bench/) and shape them into
+    bronze rows.
+
+    The source table is written by Databricks Zerobus Ingest, one row per frame observed
+    on a simulated bus segment — see examples/bench/transport/record.proto for its
+    schema. Handles both that schema and the CAN-only one that predates it: a source table
+    without the Ethernet columns still ingests, with those columns read as null.
+
+    Four mappings are load-bearing:
+
+    * `message_type` decides routing. "CAN"/"CAN_FD" reaches blf_silver_can, "ETH"/"ETH_EX"
+      reaches blf_silver_eth; the MF4 and diag silver tables filter all of these out on
+      their own.
+    * `channel` is the bus segment number, so one run's two sides of a forwarding ECU stay
+      distinguishable within the same _source_file.
+    * `dir` must not be null: blf_silver_can's _DIR_LABEL ends in .otherwise("TxRq"), so a
+      null would silently read as a TxRq frame rather than as unknown.
+    * `timestamp_ns` stays log-relative (the test bench measures it from the start of its
+      run) while `event_time` is absolute, matching what _parse_blf_batch does with a BLF
+      file's start_time_ns. Writing epoch nanoseconds into timestamp_ns instead would put
+      blf_silver_can.timestamp_s at ~1.7e9 and break every time-window computation
+      downstream.
+    """
+    source = spark.readStream.table(TESTBENCH_FRAMES_TABLE)
+    available = set(source.columns)
+
+    def optional(name: str, sql_type: str):
+        # Producers predating the Ethernet variant of TestbenchFrame write a table without
+        # these columns; reading them as null keeps such a table ingestible rather than
+        # failing the whole pipeline on a missing column.
+        return (F.col(name) if name in available else F.lit(None)).cast(sql_type).alias(name)
+
+    # A pre-Ethernet producer leaves message_type unset, so fall back to deriving it from
+    # is_fd exactly as this function used to — those rows must keep landing in
+    # blf_silver_can. The fallback can never itself be null (a null is_fd takes the
+    # .otherwise branch), which matters because blf_bronze.message_type is NOT NULL.
+    derived_message_type = F.when(F.col("is_fd"), F.lit("CAN_FD")).otherwise(F.lit("CAN"))
+    message_type = (
+        F.coalesce(F.col("message_type"), derived_message_type) if "message_type" in available else derived_message_type
+    )
+
+    return source.select(
+        F.col("source_file").alias("_source_file"),
+        F.current_timestamp().alias("_ingested_at"),
+        F.col("timestamp_ns").cast("long").alias("timestamp_ns"),
+        F.timestamp_seconds(F.col("observed_ns") / F.lit(1e9)).alias("event_time"),
+        message_type.alias("message_type"),
+        F.col("channel").cast("int").alias("channel"),
+        F.col("can_id").cast("long").alias("can_id"),
+        F.col("is_ext_id").cast("boolean").alias("is_ext_id"),
+        F.col("dir").cast("byte").alias("dir"),
+        F.col("rtr").cast("boolean").alias("rtr"),
+        F.col("dlc").cast("byte").alias("dlc"),
+        F.col("data").cast("binary").alias("data"),
+        F.col("is_fd").cast("boolean").alias("fdf"),
+        optional("src_addr", "binary"),
+        optional("dst_addr", "binary"),
+        optional("ether_type", "int"),
+        optional("vlan_tpid", "int"),
+        optional("vlan_cos", "int"),
+        optional("vlan_id", "int"),
+        *[F.lit(None).cast(sql_type).alias(name) for name, sql_type in _TESTBENCH_NULL_COLUMNS.items()],
+    )
+
 
 @dlt.table(
     name="blf_bronze",
@@ -541,8 +643,13 @@ def _parse_blf_batch(iterator):
     cluster_by=["message_type", "channel", "timestamp_ns"],
 )
 def blf_bronze():
-    """Stream new BLF files via Auto Loader; expand each file into rows."""
-    return (
+    """Stream new BLF files via Auto Loader; expand each file into rows.
+
+    When blf.testbench_frames_table is set, test-bench frames are unioned in as a second
+    streaming source. unionByName rather than union: the schema is 35 columns, most of
+    them literal nulls on the test-bench side, so matching by position would be fragile.
+    """
+    files = (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "binaryFile")
         .option("pathGlobFilter", "*.{blf,mf4,mdf}")
@@ -562,6 +669,9 @@ def blf_bronze():
         # mapInPandas yields rows as they are parsed — no full-file buffering.
         .mapInPandas(_parse_blf_batch, schema=_BRONZE_OUTPUT_SCHEMA)
     )
+    if not TESTBENCH_FRAMES_TABLE:
+        return files
+    return files.unionByName(_testbench_bronze_rows())
 
 
 # ── silver layer — CAN ────────────────────────────────────────────────────────

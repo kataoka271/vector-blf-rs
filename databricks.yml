@@ -99,6 +99,16 @@ variables:
       When set, decoded CAN and SOME/IP signals carry a signal_str column with the category name.
     default: ""
 
+  testbench_frames_table:
+    description: >
+      Unity Catalog table (catalog.schema.table) holding the raw CAN and Ethernet frames
+      the test bench uploads over Zerobus Ingest (optional).
+      See examples/bench/transport/record.proto for its columns.
+      When set, blf_ingestion unions this table into blf_bronze as a second streaming
+      source, so test-bench results flow through the same decode chain as recorded files.
+      Set via: databricks bundle deploy --var="testbench_frames_table=main.blf_dev.blf_testbench_frames"
+    default: ""
+
   signals_table:
     description: >
       Unity Catalog table (catalog.schema.table) with CAN signal definitions (optional).

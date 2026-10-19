@@ -606,6 +606,42 @@ impl CanSignalDb {
             .collect()
     }
 
+    /// Build the payload of ``message_id`` from physical signal values.
+    ///
+    /// ``values`` maps signal names to physical values; every name must be a
+    /// regular-frame signal of ``message_id``.  Bits that no supplied signal covers
+    /// are zero, so this produces a whole frame rather than a patch.
+    ///
+    /// ``length`` fixes the payload size; when omitted the payload is just long
+    /// enough for every signal defined on ``message_id`` -- not merely the supplied
+    /// ones -- so a message's length does not vary with which signals a caller sets.
+    ///
+    /// Values outside the range a signal's width can hold saturate at the nearest
+    /// representable value rather than wrapping.
+    ///
+    /// This is the exact inverse of ``decode``, which is what lets a simulated ECU
+    /// author a frame that the ingestion pipeline decodes back to the same values.
+    ///
+    /// Raises ``ValueError`` when ``message_id`` has no signals, a name is not one of
+    /// them, a signal's scale is zero, or ``length`` is too short.
+    #[pyo3(signature = (message_id, values, length=None))]
+    fn encode<'py>(
+        &self,
+        py: Python<'py>,
+        message_id: u32,
+        values: HashMap<String, f64>,
+        length: Option<usize>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let pairs: Vec<(&str, f64)> = values.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let data = self
+            .inner
+            .encode(message_id, &pairs, length)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        // PyBytes rather than Vec<u8>, which PyO3 would hand back as a list of ints:
+        // callers pass this straight into a frame payload, which is bytes everywhere else.
+        Ok(PyBytes::new_bound(py, &data))
+    }
+
     /// Returns ``True`` if ``message_id`` is configured as a CAN-FD container frame
     /// (i.e. the signal CSV has at least one row with a ``pdu_id`` for this CAN ID).
     fn is_container(&self, message_id: u32) -> bool {

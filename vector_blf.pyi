@@ -144,6 +144,30 @@ class CanSignalDb:
         """
         ...
 
+    def encode(
+        self, message_id: int, values: Dict[str, float], length: Optional[int] = None
+    ) -> bytes:
+        """Build the payload of message_id from physical signal values.
+
+        values maps signal names to physical values; every name must be a
+        regular-frame signal of message_id. Bits no supplied signal covers are zero,
+        so this produces a whole frame rather than a patch.
+
+        length fixes the payload size; when omitted the payload is just long enough
+        for every signal defined on message_id -- not merely the supplied ones -- so a
+        message's length does not vary with which signals a caller sets.
+
+        Values outside the range a signal's width can hold saturate at the nearest
+        representable value rather than wrapping.
+
+        The exact inverse of decode(): a frame built here decodes back to the same
+        values, including through the ingestion pipeline, which uses this same code.
+
+        Raises ValueError when message_id has no signals, a name is not one of them,
+        a signal's scale is zero, or length is too short for a signal being written.
+        """
+        ...
+
     def decode_container(
         self,
         message_id: int,

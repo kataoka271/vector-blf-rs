@@ -47,6 +47,92 @@ impl Signal {
             ByteOrder::Motorola => extract_motorola(data, self.start_bit, self.bit_length),
         }
     }
+
+    /// Write the physical value `value` into `data`, leaving every other bit untouched.
+    ///
+    /// Returns `false` without modifying `data` if the signal extends outside `data`.
+    /// Values outside the range this signal's width can hold saturate at the nearest
+    /// representable value rather than wrapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Signal` when `scale` is zero, which makes the physical-to-raw mapping
+    /// non-invertible, or when `bit_length` is outside `1..=64`.
+    pub fn encode(&self, data: &mut [u8], value: f64) -> ParseResult<bool> {
+        Ok(self.encode_raw(data, self.to_raw(value)?))
+    }
+
+    /// Write the already-scaled raw integer `raw` into `data`, leaving every other bit
+    /// untouched. Bits above `bit_length` are ignored.
+    ///
+    /// Returns `false` without modifying `data` if the signal extends outside `data`.
+    pub fn encode_raw(&self, data: &mut [u8], raw: u64) -> bool {
+        if self.byte_span() > data.len() {
+            return false;
+        }
+        match self.byte_order {
+            ByteOrder::Intel => insert_intel(data, self.start_bit, self.bit_length, raw),
+            ByteOrder::Motorola => insert_motorola(data, self.start_bit, self.bit_length, raw),
+        }
+    }
+
+    /// Convert a physical value to the raw integer stored in the frame, saturating at
+    /// the limits of this signal's width and signedness.
+    ///
+    /// A signed signal's value is returned in two's complement, masked to `bit_length`,
+    /// which is the form `decode_raw` returns and `sign_extend` interprets. NaN maps to
+    /// zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Signal` when `scale` is zero or `bit_length` is outside `1..=64`.
+    pub fn to_raw(&self, value: f64) -> ParseResult<u64> {
+        if self.scale == 0.0 {
+            return Err(ParseError::Signal(
+                "cannot encode a signal whose scale is 0 (no inverse exists)".into(),
+            ));
+        }
+        if self.bit_length == 0 || self.bit_length > 64 {
+            return Err(ParseError::Signal(format!(
+                "cannot encode a signal of {} bits",
+                self.bit_length
+            )));
+        }
+        let scaled = (value - self.offset) / self.scale;
+        if scaled.is_nan() {
+            return Ok(0);
+        }
+        let mask = if self.bit_length == 64 {
+            u64::MAX
+        } else {
+            (1u64 << self.bit_length) - 1
+        };
+        if self.is_signed {
+            let max = (mask >> 1) as i64;
+            let min = -max - 1;
+            // Rounding before clamping, and clamping in f64, keeps a value far outside
+            // the range (or an infinity) from wrapping through an out-of-range `as i64`.
+            let clamped = scaled.round().clamp(min as f64, max as f64) as i64;
+            Ok(clamped as u64 & mask)
+        } else {
+            let clamped = scaled.round().clamp(0.0, mask as f64) as u64;
+            Ok(clamped & mask)
+        }
+    }
+
+    /// Number of bytes a frame must have for this signal to fit.
+    pub fn byte_span(&self) -> usize {
+        if self.bit_length == 0 {
+            return 0;
+        }
+        match self.byte_order {
+            ByteOrder::Intel => ((self.start_bit + self.bit_length - 1) / 8 + 1) as usize,
+            ByteOrder::Motorola => motorola_bit_positions(self.start_bit, self.bit_length)
+                .map(|pos| (pos / 8 + 1) as usize)
+                .max()
+                .unwrap_or(0),
+        }
+    }
 }
 
 /// Intel (little-endian): start_bit is LSB; bits increase toward MSB.
@@ -64,28 +150,66 @@ fn extract_intel(data: &[u8], start_bit: u32, bit_length: u32) -> Option<u64> {
     Some(raw)
 }
 
-/// Motorola (big-endian, DBC MSB convention): start_bit is the MSB.
-/// Within-byte bit numbering: 0 = LSB, 7 = MSB.
-/// At byte boundaries, traversal jumps to the MSB of the next byte (+15).
-fn extract_motorola(data: &[u8], start_bit: u32, bit_length: u32) -> Option<u64> {
-    let mut raw = 0u64;
+/// Bit positions a Motorola signal occupies, MSB first.
+///
+/// Within-byte bit numbering: 0 = LSB, 7 = MSB. Traversal walks down within a byte and,
+/// at a byte boundary, jumps to the MSB of the next byte (+15). Shared by extraction and
+/// insertion so the two can never disagree about the layout.
+fn motorola_bit_positions(start_bit: u32, bit_length: u32) -> impl Iterator<Item = u32> {
     let mut pos = start_bit;
-    for i in 0..bit_length {
-        let byte_idx = (pos / 8) as usize;
-        let bit_idx = pos % 8;
-        if byte_idx >= data.len() {
-            return None;
-        }
-        let bit_val = (data[byte_idx] >> bit_idx) as u64 & 1;
-        // MSB goes into the highest output bit
-        raw |= bit_val << (bit_length - 1 - i);
+    (0..bit_length).map(move |_| {
+        let current = pos;
         pos = if pos.is_multiple_of(8) {
             pos + 15
         } else {
             pos - 1
         };
+        current
+    })
+}
+
+/// Motorola (big-endian, DBC MSB convention): start_bit is the MSB.
+fn extract_motorola(data: &[u8], start_bit: u32, bit_length: u32) -> Option<u64> {
+    let mut raw = 0u64;
+    for (i, pos) in motorola_bit_positions(start_bit, bit_length).enumerate() {
+        let byte_idx = (pos / 8) as usize;
+        if byte_idx >= data.len() {
+            return None;
+        }
+        let bit_val = (data[byte_idx] >> (pos % 8)) as u64 & 1;
+        // MSB goes into the highest output bit
+        raw |= bit_val << (bit_length - 1 - i as u32);
     }
     Some(raw)
+}
+
+/// Inverse of `extract_intel`: write `raw`'s low `bit_length` bits into `data`.
+fn insert_intel(data: &mut [u8], start_bit: u32, bit_length: u32, raw: u64) -> bool {
+    for i in 0..bit_length {
+        let pos = start_bit + i;
+        let byte_idx = (pos / 8) as usize;
+        if byte_idx >= data.len() {
+            return false;
+        }
+        let mask = 1u8 << (pos % 8);
+        let bit = ((raw >> i) & 1) as u8;
+        data[byte_idx] = (data[byte_idx] & !mask) | (bit << (pos % 8));
+    }
+    true
+}
+
+/// Inverse of `extract_motorola`: write `raw`'s low `bit_length` bits into `data`.
+fn insert_motorola(data: &mut [u8], start_bit: u32, bit_length: u32, raw: u64) -> bool {
+    for (i, pos) in motorola_bit_positions(start_bit, bit_length).enumerate() {
+        let byte_idx = (pos / 8) as usize;
+        if byte_idx >= data.len() {
+            return false;
+        }
+        let mask = 1u8 << (pos % 8);
+        let bit = ((raw >> (bit_length - 1 - i as u32)) & 1) as u8;
+        data[byte_idx] = (data[byte_idx] & !mask) | (bit << (pos % 8));
+    }
+    true
 }
 
 fn sign_extend(value: u64, bit_length: u32) -> i64 {
@@ -406,6 +530,62 @@ impl CanSignalDb {
                 Some((def.name.as_str(), v, cat))
             })
             .collect()
+    }
+
+    /// Build the payload of `message_id` from physical signal values.
+    ///
+    /// `values` pairs signal names with physical values; every name must be a
+    /// regular-frame signal of `message_id`. Bits no supplied signal covers are zero, so
+    /// this always produces a whole frame rather than a patch — call `Signal::encode`
+    /// directly to update one signal within an existing payload.
+    ///
+    /// `length` fixes the payload size; when `None` the payload is just long enough for
+    /// every signal defined on `message_id` (not merely the supplied ones), so a frame's
+    /// length does not change with which signals a caller happens to set.
+    ///
+    /// This is the inverse of `extract` and shares its bit layout, which is what lets a
+    /// Virtual ECU author a frame that the ingestion pipeline decodes back to the same
+    /// values.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Signal` when `message_id` has no regular-frame signals, when a name
+    /// in `values` is not one of them, when a signal's `scale` is zero, or when `length`
+    /// is too short to hold a signal being written.
+    pub fn encode(
+        &self,
+        message_id: u32,
+        values: &[(&str, f64)],
+        length: Option<usize>,
+    ) -> ParseResult<Vec<u8>> {
+        let defs = self.signals(message_id);
+        if defs.is_empty() {
+            return Err(ParseError::Signal(format!(
+                "no signals defined for message id 0x{message_id:X}"
+            )));
+        }
+        let span = defs
+            .iter()
+            .map(|def| def.signal.byte_span())
+            .max()
+            .unwrap_or(0);
+        let mut data = vec![0u8; length.unwrap_or(span)];
+        for (name, value) in values {
+            let def = defs.iter().find(|d| d.name == *name).ok_or_else(|| {
+                ParseError::Signal(format!(
+                    "signal {name:?} is not defined for message id 0x{message_id:X}"
+                ))
+            })?;
+            if !def.signal.encode(&mut data, *value)? {
+                return Err(ParseError::Signal(format!(
+                    "signal {:?} needs {} payload bytes but the frame is {}",
+                    name,
+                    def.signal.byte_span(),
+                    data.len()
+                )));
+            }
+        }
+        Ok(data)
     }
 
     /// Demultiplex a container frame and decode all signals from the contained I-PDUs.
@@ -1209,6 +1389,187 @@ mod tests {
         };
         // raw=100 → 100*0.5 - 40 = 10.0
         assert_eq!(s.decode(&[100]), Some(10.0));
+    }
+
+    // ── encoding (inverse of the extraction above) ───────────────────────────
+
+    /// Every layout the decoder handles must survive encode -> decode unchanged.
+    #[test]
+    fn encode_round_trips_through_decode_for_every_layout() {
+        let cases = [
+            (sig(0, 8, ByteOrder::Intel, false), 0xAB),
+            (sig(4, 12, ByteOrder::Intel, false), 0x0AF),
+            (sig(0, 1, ByteOrder::Intel, false), 1),
+            (sig(7, 8, ByteOrder::Motorola, false), 0xAB),
+            (sig(15, 16, ByteOrder::Motorola, false), 0x1234),
+            (sig(3, 10, ByteOrder::Motorola, false), 0x2A5),
+        ];
+        for (s, raw) in cases {
+            let mut data = vec![0u8; s.byte_span()];
+            assert!(s.encode_raw(&mut data, raw), "{s:?} did not fit");
+            assert_eq!(s.decode_raw(&data), Some(raw), "{s:?} round trip");
+        }
+    }
+
+    #[test]
+    fn encode_applies_the_inverse_of_scale_and_offset() {
+        let s = Signal {
+            start_bit: 0,
+            bit_length: 8,
+            byte_order: ByteOrder::Intel,
+            is_signed: false,
+            scale: 0.5,
+            offset: -40.0,
+        };
+        let mut data = [0u8; 1];
+        assert!(s.encode(&mut data, 10.0).unwrap());
+        assert_eq!(data, [100]);
+        assert_eq!(s.decode(&data), Some(10.0));
+    }
+
+    #[test]
+    fn encode_round_trips_a_negative_signed_value() {
+        let s = sig(0, 12, ByteOrder::Intel, true);
+        let mut data = [0u8; 2];
+        assert!(s.encode(&mut data, -3.0).unwrap());
+        assert_eq!(s.decode(&data), Some(-3.0));
+    }
+
+    #[test]
+    fn out_of_range_values_saturate_rather_than_wrap() {
+        // Wrapping would turn an overshooting sensor reading into a plausible-looking
+        // small value, which is far worse than pinning it at the limit.
+        let unsigned = sig(0, 8, ByteOrder::Intel, false);
+        let mut data = [0u8; 1];
+        unsigned.encode(&mut data, 300.0).unwrap();
+        assert_eq!(data, [255]);
+        unsigned.encode(&mut data, -5.0).unwrap();
+        assert_eq!(data, [0]);
+
+        let signed = sig(0, 8, ByteOrder::Intel, true);
+        signed.encode(&mut data, 500.0).unwrap();
+        assert_eq!(signed.decode(&data), Some(127.0));
+        signed.encode(&mut data, -500.0).unwrap();
+        assert_eq!(signed.decode(&data), Some(-128.0));
+    }
+
+    #[test]
+    fn infinite_and_nan_values_do_not_wrap() {
+        let s = sig(0, 8, ByteOrder::Intel, false);
+        assert_eq!(s.to_raw(f64::INFINITY).unwrap(), 255);
+        assert_eq!(s.to_raw(f64::NEG_INFINITY).unwrap(), 0);
+        assert_eq!(s.to_raw(f64::NAN).unwrap(), 0);
+    }
+
+    #[test]
+    fn encode_leaves_neighbouring_bits_alone() {
+        let s = sig(4, 4, ByteOrder::Intel, false);
+        let mut data = [0b1010_0000u8];
+        assert!(s.encode_raw(&mut data, 0b0011));
+        assert_eq!(data, [0b0011_0000]);
+    }
+
+    #[test]
+    fn encode_reports_a_payload_that_is_too_short() {
+        let s = sig(0, 16, ByteOrder::Intel, false);
+        let mut data = [0u8; 1];
+        assert!(!s.encode_raw(&mut data, 0xFFFF));
+        assert_eq!(data, [0], "a rejected write must not partially modify data");
+    }
+
+    #[test]
+    fn byte_span_matches_what_decoding_requires() {
+        for s in [
+            sig(0, 8, ByteOrder::Intel, false),
+            sig(4, 12, ByteOrder::Intel, false),
+            sig(7, 8, ByteOrder::Motorola, false),
+            sig(15, 16, ByteOrder::Motorola, false),
+            sig(3, 10, ByteOrder::Motorola, false),
+        ] {
+            let span = s.byte_span();
+            assert!(
+                s.decode_raw(&vec![0u8; span]).is_some(),
+                "{s:?} span {span}"
+            );
+            assert!(
+                s.decode_raw(&vec![0u8; span - 1]).is_none(),
+                "{s:?} span {span}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_scale_signal_cannot_be_encoded() {
+        let s = Signal {
+            start_bit: 0,
+            bit_length: 8,
+            byte_order: ByteOrder::Intel,
+            is_signed: false,
+            scale: 0.0,
+            offset: 0.0,
+        };
+        assert!(s.encode(&mut [0u8; 1], 1.0).is_err());
+    }
+
+    fn encode_db() -> CanSignalDb {
+        let csv = "\
+message_id,signal_name,start_byte,start_bit,bit_length,byte_order,is_signed,scale,offset
+0x100,EngineSpeed,0,0,16,Intel,false,0.25,0.0
+0x100,Throttle,2,0,8,Intel,false,0.4,0.0
+0x200,BrakeForce,0,7,12,Motorola,true,0.1,-100.0
+";
+        CanSignalDb::from_csv(csv.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn db_encode_is_the_inverse_of_db_extract() {
+        let db = encode_db();
+        let data = db
+            .encode(0x100, &[("EngineSpeed", 1000.0), ("Throttle", 20.0)], None)
+            .unwrap();
+        let decoded = db.extract(0x100, &data, None);
+        assert_eq!(decoded.len(), 2);
+        for (name, value, _) in decoded {
+            let expected = if name == "EngineSpeed" { 1000.0 } else { 20.0 };
+            assert!((value - expected).abs() < 1e-9, "{name} = {value}");
+        }
+    }
+
+    #[test]
+    fn db_encode_round_trips_a_motorola_signed_signal() {
+        let db = encode_db();
+        let data = db.encode(0x200, &[("BrakeForce", -12.3)], None).unwrap();
+        let (_, value, _) = db.extract(0x200, &data, None)[0];
+        assert!((value - -12.3).abs() < 1e-9, "got {value}");
+    }
+
+    #[test]
+    fn db_encode_length_covers_every_signal_not_just_the_supplied_ones() {
+        // Otherwise a frame's length would change with which signals a caller set, and
+        // the pipeline would see the same message id at two different DLCs.
+        let db = encode_db();
+        let all = db.encode(0x100, &[("EngineSpeed", 1.0), ("Throttle", 1.0)], None);
+        let one = db.encode(0x100, &[("EngineSpeed", 1.0)], None);
+        assert_eq!(all.unwrap().len(), one.unwrap().len());
+    }
+
+    #[test]
+    fn db_encode_honours_an_explicit_length() {
+        let db = encode_db();
+        assert_eq!(db.encode(0x100, &[], Some(8)).unwrap().len(), 8);
+    }
+
+    #[test]
+    fn db_encode_rejects_an_unknown_signal_or_message() {
+        let db = encode_db();
+        assert!(db.encode(0x100, &[("Nope", 1.0)], None).is_err());
+        assert!(db.encode(0x999, &[], None).is_err());
+    }
+
+    #[test]
+    fn db_encode_rejects_a_length_too_short_for_the_signal() {
+        let db = encode_db();
+        assert!(db.encode(0x100, &[("EngineSpeed", 1.0)], Some(1)).is_err());
     }
 
     #[test]

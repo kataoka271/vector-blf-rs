@@ -29,6 +29,11 @@ pub enum ParseError {
     #[error("CSV line {line}: {message}")]
     Csv { line: usize, message: String },
 
+    /// A signal definition cannot express the requested operation, e.g. encoding a value
+    /// into a signal whose scale is zero, or naming a signal a message does not have.
+    #[error("Signal error: {0}")]
+    Signal(String),
+
     #[error("Invalid MF4 magic (expected 'MDF     ')")]
     InvalidMf4Magic,
 

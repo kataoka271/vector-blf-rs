@@ -110,12 +110,18 @@ def _dummy_live_metrics(since: str | None) -> pd.DataFrame:
 
 def _dummy_query(stmt: str, params=None) -> pd.DataFrame:
     print(f"[_dummy_query] stmt={stmt!r} params={params!r}", flush=True)
-    if "GROUP BY run_id" in stmt:
+    # Keyed off last_seen, not "GROUP BY _source_file": the per-file time-range query
+    # below groups the same way, and matching that here would hijack it.
+    if "MAX(event_time) AS last_seen" in stmt:
         return pd.DataFrame(
-            {"run_id": _DUMMY_LIVE_RUN_IDS, "last_seen": [pd.Timestamp.now(tz="UTC")] * len(_DUMMY_LIVE_RUN_IDS)}
+            {
+                "_source_file": [f"testbench/{run_id}.blf" for run_id in _DUMMY_LIVE_RUN_IDS],
+                "last_seen": [pd.Timestamp.now(tz="UTC")] * len(_DUMMY_LIVE_RUN_IDS),
+            }
         )
-    if "gauge.value" in stmt:
-        since = params[2] if params and len(params) > 2 else None
+    if "event_time AS time" in stmt:
+        # params is [_source_file] or [_source_file, since] -- see db.fetch_live_metrics.
+        since = params[1] if params and len(params) > 1 else None
         return _dummy_live_metrics(since)
     if "_video_path" in stmt:
         # No video Volume in local dev. If BLF_DEV_SAMPLE_VIDEO points at a local file,

@@ -1731,8 +1731,8 @@ app.clientside_callback(
 
 
 # ---------------------------------------------------------------------------
-# Live Testbench -- polls examples/testing's Zerobus-uploaded metrics table for a
-# selected run_id while the panel is open (see dcc.Interval("live-poll-interval")).
+# Live Testbench -- polls blf_gold_signals for a selected test-bench run_id while the
+# panel is open (see dcc.Interval("live-poll-interval")).
 # ---------------------------------------------------------------------------
 
 _LIVE_MAX_POINTS = 3000  # rolling window cap across all signals combined, oldest points dropped first

@@ -38,20 +38,18 @@ DEV_SAMPLE_VIDEO = os.environ.get("BLF_DEV_SAMPLE_VIDEO", "")
 BLF_RAW_PATH = os.environ.get("BLF_RAW_PATH", "")
 BLF_VIDEO_UPLOAD_PATH = os.environ.get("BLF_VIDEO_UPLOAD_PATH", "")
 
-# Live Testbench monitor: polls the OTLP metrics table examples/testing/uploader.py
-# writes to via Zerobus Ingest. Must match that run's config.yaml zerobus.table_prefix
-# -- the "_otel_metrics" suffix itself comes from the OTLP ingestion contract, see
-# https://docs.databricks.com/aws/en/ingestion/opentelemetry/configure.
-BENCHTEST_TABLE_PREFIX = os.environ.get("BLF_BENCHTEST_TABLE_PREFIX", "")
-# Shown in local dev even without a configured prefix (like the rest of the app's dummy
-# data paths), so the panel is exercisable without a real deployment.
-LIVE_MONITOR_ENABLED = bool(BENCHTEST_TABLE_PREFIX) or _LOCAL_DEV
-_LIVE_METRICS_TABLE = (
-    f"`{CATALOG}`.`{SCHEMA}`.`{BENCHTEST_TABLE_PREFIX or 'blf_benchtest'}_otel_metrics`"
-    if LIVE_MONITOR_ENABLED
-    else None
-)
-# Poll cadence; matches config.yaml's zerobus.export_interval_ms default (5000).
+# Live Testbench monitor: polls blf_gold_signals for rows a test-bench run produced.
+# Those rows are identified by their synthetic _source_file, "testbench/<run_id>.blf",
+# which examples/bench writes (see bench/frame.source_file_for).
+#
+# Reading the gold table rather than a side channel means the panel shows exactly the
+# decoded values an analysis will later see. The cost is latency: a frame is visible here
+# only once the blf_ingestion pipeline has processed it, so "live" means seconds to a
+# minute behind the bus, not real time.
+LIVE_SOURCE_FILE_PREFIX = os.environ.get("BLF_TESTBENCH_SOURCE_PREFIX", "testbench/")
+LIVE_MONITOR_ENABLED = True
+# Poll cadence. The pipeline's own latency dominates, so polling faster than this mostly
+# re-reads the same rows.
 LIVE_POLL_MS = int(os.environ.get("BLF_LIVE_POLL_MS", "5000"))
 
 # Databricks SDK config (None in local dev)

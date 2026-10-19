@@ -797,8 +797,8 @@ def _genie_panel() -> dbc.Offcanvas:
 
 
 # ---------------------------------------------------------------------------
-# Live Testbench offcanvas -- polls examples/testing's Zerobus-uploaded metrics
-# table for a selected run_id while open (see live-poll-interval in callbacks.py).
+# Live Testbench offcanvas -- polls blf_gold_signals for a selected test-bench
+# run_id while open (see live-poll-interval in callbacks.py).
 # ---------------------------------------------------------------------------
 
 
@@ -836,8 +836,9 @@ def _live_panel() -> dbc.Offcanvas:
         style={"width": "640px", "backgroundColor": _PANEL, "color": _TEXT},
         children=[
             html.Div(
-                "Polls examples/testing's Zerobus-uploaded metrics table for the selected "
-                "run_id while this panel is open.",
+                "Polls blf_gold_signals for the selected test-bench run while this panel "
+                "is open. Samples appear once blf_ingestion has decoded them, so this "
+                "trails the bus by the pipeline's latency.",
                 className="text-muted mb-2",
                 style={"fontSize": "11px"},
             ),

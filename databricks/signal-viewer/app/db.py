@@ -17,11 +17,11 @@ from .config import (
     _CATALOG_BY_FILE_TABLE,
     _CATALOG_TABLE,
     _GOLD_TABLE,
-    _LIVE_METRICS_TABLE,
     _LOCAL_DEV,
     _SOURCE_FILES_TABLE,
     _TIME_RANGE_TABLE,
     _VIDEO_FILES_TABLE,
+    LIVE_SOURCE_FILE_PREFIX,
     USE_USER_TOKEN,
     _parse_key,
     _to_utc_naive,
@@ -650,29 +650,33 @@ def _fetch_video_for_file(filename: str) -> dict | None:
         return None
 
 
-# The uploader (examples/testing/uploader.py) records every decoded signal as a Gauge
-# named "signal_value"; filtering on it excludes any other instrument that might land
-# in the same table rather than assuming the table holds nothing else.
-_LIVE_METRIC_NAME = "signal_value"
+def _live_source_file(run_id: str) -> str:
+    """Return the synthetic _source_file a test-bench run's rows carry."""
+    return f"{LIVE_SOURCE_FILE_PREFIX}{run_id}.blf"
 
 
 def _fetch_live_run_ids(user_token: str | None = None) -> list[str] | None:
-    """Fetch run_id values seen in the live testbench metrics table, most-recently-active first.
+    """Fetch test-bench run ids present in blf_gold_signals, most-recently-active first.
 
-    Returns None when the table isn't configured (see config.LIVE_MONITOR_ENABLED) or the
-    query fails -- both are reported the same way to the caller, which shows an empty list.
+    Returns None when the query fails, which the caller shows as an empty list.
     """
-    if _LIVE_METRICS_TABLE is None:
-        return None
     try:
+        # LIKE on _source_file rather than a separate registry: the gold table is the one
+        # place that is true for every producer, and _source_file is a clustering key.
         stmt = (
-            f"SELECT CAST(gauge.attributes:run_id AS STRING) AS run_id, MAX(time) AS last_seen"
-            f" FROM {_LIVE_METRICS_TABLE} WHERE name = ?"
-            f" GROUP BY run_id ORDER BY last_seen DESC LIMIT 50"
+            f"SELECT _source_file, MAX(event_time) AS last_seen FROM {_GOLD_TABLE}"
+            f" WHERE _source_file LIKE ?"
+            f" GROUP BY _source_file ORDER BY last_seen DESC LIMIT 50"
         )
-        df = _query(stmt, [_LIVE_METRIC_NAME], user_token=user_token)
-        print(f"[_fetch_live_run_ids] fetched {len(df)} run_id(s)", flush=True)
-        return df["run_id"].dropna().tolist()
+        df = _query(stmt, [f"{LIVE_SOURCE_FILE_PREFIX}%"], user_token=user_token)
+        prefix, suffix = LIVE_SOURCE_FILE_PREFIX, ".blf"
+        run_ids = [
+            str(path)[len(prefix) : -len(suffix)]
+            for path in df["_source_file"].dropna().tolist()
+            if str(path).startswith(prefix) and str(path).endswith(suffix)
+        ]
+        print(f"[_fetch_live_run_ids] fetched {len(run_ids)} run_id(s)", flush=True)
+        return run_ids
     except Exception as exc:
         print(f"[_fetch_live_run_ids] ERROR: {exc}\n{traceback.format_exc()}", flush=True)
         return None
@@ -681,29 +685,26 @@ def _fetch_live_run_ids(user_token: str | None = None) -> list[str] | None:
 def fetch_live_metrics(
     run_id: str, since: str | None, limit: int = 5000, user_token: str | None = None
 ) -> pd.DataFrame | None:
-    """Fetch signal_value gauge samples for `run_id`, newer than `since` (ISO timestamp) if given.
+    """Fetch decoded samples for test-bench run `run_id`, newer than `since` (ISO timestamp).
 
     Returns columns (time, signal_source, channel, signal_name, signal_value), ordered by
-    time, or None when the table isn't configured or the query fails.
+    time, or None when the query fails. Rows appear only once blf_ingestion has decoded
+    them, so this trails the bus by the pipeline's latency.
     """
-    if _LIVE_METRICS_TABLE is None:
-        return None
     try:
-        where = "name = ? AND CAST(gauge.attributes:run_id AS STRING) = ?"
-        params: list = [_LIVE_METRIC_NAME, run_id]
+        where = "_source_file = ?"
+        params: list = [_live_source_file(run_id)]
         if since:
             # Cast explicitly rather than relying on implicit string->timestamp
             # comparison, which some Databricks SQL configurations reject.
-            where += " AND time > CAST(? AS TIMESTAMP)"
+            where += " AND event_time > CAST(? AS TIMESTAMP)"
             params.append(since)
         stmt = (
-            f"SELECT time,"
-            f" CAST(gauge.attributes:signal_source AS STRING) AS signal_source,"
-            f" CAST(gauge.attributes:channel AS STRING) AS channel,"
-            f" CAST(gauge.attributes:signal_name AS STRING) AS signal_name,"
-            f" CAST(gauge.value AS DOUBLE) AS signal_value"
-            f" FROM {_LIVE_METRICS_TABLE} WHERE {where}"
-            f" ORDER BY time LIMIT {int(limit)}"
+            f"SELECT event_time AS time, signal_source,"
+            f" CAST(channel AS STRING) AS channel, signal_name,"
+            f" CAST(signal_value AS DOUBLE) AS signal_value"
+            f" FROM {_GOLD_TABLE} WHERE {where}"
+            f" ORDER BY event_time LIMIT {int(limit)}"
         )
         df = _query(stmt, params, user_token=user_token)
         print(f"[fetch_live_metrics] run_id={run_id!r} -> {len(df)} row(s)", flush=True)

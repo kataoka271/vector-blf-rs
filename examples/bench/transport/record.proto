@@ -1,11 +1,15 @@
 // Zerobus Ingest record schema for examples/bench -- the single definition every
-// producer (ReceiverEcu's upload leg) uses. Field-for-field copy of
-// examples/testing/vecu_sdk/record.proto, kept as its own copy so examples/bench has no
-// runtime dependency on examples/testing (see the plan's "copy, don't import" decision).
+// producer (ReceiverEcu's upload leg) uses.
 //
-// The fields must line up 1:1 with the columns of the target Delta table -- see
-// examples/testing/README.md's "アップロード先テーブルと proto スキーマ" section for the
-// CREATE TABLE statement (same schema; examples/bench does not duplicate that doc).
+// The fields must line up 1:1 with the columns of the target Delta table, which
+// blf_ingestion reads via blf.testbench_frames_table. Columns are listed in field-number
+// order so the two stay trivially comparable:
+//
+//   CREATE TABLE IF NOT EXISTS <catalog>.<schema>.blf_testbench_frames (
+//     run_id STRING, source_file STRING, timestamp_ns BIGINT, observed_ns BIGINT,
+//     channel INT, can_id BIGINT, is_ext_id BOOLEAN, dir INT, rtr BOOLEAN, dlc INT,
+//     data BINARY, is_fd BOOLEAN, message_type STRING, src_addr BINARY,
+//     dst_addr BINARY, ether_type INT, vlan_tpid INT, vlan_cos INT, vlan_id INT)
 //
 // The generated record_pb2 module is a build artifact and is not checked in. Generate it
 // with:
